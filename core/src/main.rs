@@ -1,6 +1,7 @@
 mod api;
 mod clipboard;
 mod crypto;
+mod hook_manager;
 mod ws;
 
 use log::{error, info};
@@ -15,6 +16,9 @@ use tray_icon::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     info!("Starting YiboFlow Desktop Core Daemon (v1.3)...");
+
+    // Start Global Keyboard Hook Daemon
+    hook_manager::start_global_hook();
 
     // Start UI Event Loop in main thread (required by Tao/windows)
     let event_loop = EventLoopBuilder::new().build();
