@@ -71,7 +71,8 @@ impl MasterKey {
         );
 
         let mut key_bytes = [0u8; 32];
-        argon2.hash_password_into(password.as_bytes(), salt.as_bytes(), &mut key_bytes)?;
+        argon2.hash_password_into(password.as_bytes(), salt.as_str().as_bytes(), &mut key_bytes)
+            .map_err(|e| CryptoError::Argon2(e.to_string()))?;
 
         Ok(Self {
             key: *Key::<Aes256Gcm>::from_slice(&key_bytes),

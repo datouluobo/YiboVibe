@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "core",
+    "spikes/crypto_benchmark",
+    "spikes/keyboard_hook",
+    "spikes/tauri_tray",
+]
+resolver = "2"

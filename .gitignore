@@ -1,0 +1,7 @@
+/target/
+/spikes/**/target/
+/core/target/
+/desktop/target/
+node_modules/
+.DS_Store
+*.log
