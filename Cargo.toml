@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core",
+    "desktop/src-tauri",
     "spikes/crypto_benchmark",
     "spikes/keyboard_hook",
     "spikes/tauri_tray",
