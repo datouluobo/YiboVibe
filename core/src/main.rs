@@ -104,7 +104,9 @@ async fn run_mock_api_test() {
                         }
 
                         // --- NEW: Start Clipboard Listener ---
-                        let cb_monitor = clipboard::ClipboardMonitor::new();
+                        let arc_mk = std::sync::Arc::new(mk);
+                        let cb_monitor =
+                            clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
                         cb_monitor.start_polling();
 
                         // Just waiting around so the Write/Read daemons don't die instantly.
