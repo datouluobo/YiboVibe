@@ -1,12 +1,13 @@
 mod api;
 mod crypto;
+mod ws;
 
-use log::{info, error};
+use log::{error, info};
 use std::time::Duration;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::{
-    menu::{Menu, MenuItem, MenuEvent},
     Icon, TrayIconBuilder,
+    menu::{Menu, MenuEvent, MenuItem},
 };
 
 #[tokio::main]
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *control_flow = ControlFlow::Exit;
             } else if event.id == config_i.id() {
                 info!("Testing API connectivity asynchronously...");
-                
+
                 let rt = tokio::runtime::Handle::current();
                 rt.spawn(async {
                     run_mock_api_test().await;
@@ -56,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_mock_api_test() {
     let mut client = api::ApiClient::new("http://localhost:8080".to_string());
-    
+
     // Simulate Login Flow
     let login_payload = api::LoginRequest {
         username: "admin".to_string(),
@@ -71,20 +72,47 @@ async fn run_mock_api_test() {
             if res.code == 200 && res.data.is_some() {
                 let d = res.data.unwrap();
                 info!("Logged in! Received Token: {}...", &d.access_token[0..10]);
-                info!("Received Argon2id Salt from config: {}", d.kdf_salt);
 
-                // Use the salt to derive MK locally
                 let mk = crypto::MasterKey::derive("my_strong_password", &d.kdf_salt).unwrap();
                 info!("Locally derived MasterKey from password & salt is ready.");
 
                 // Test querying online devices
                 let online_res = client.get_online_devices().await.unwrap();
-                info!("Online devices count: {}", online_res.code);
+                info!("Online devices count: {:?}", online_res.data);
 
+                // --- NEW: Test WebSocket Connection ---
+                // We use the tokio-tungstenite module we built here!
+                match ws::WsClient::connect("http://localhost:8080", &d.access_token).await {
+                    Ok(ws_client) => {
+                        info!("WS client created! Attempting to send a handshake payload...");
+
+                        // Let's create a ping message using the WsMessage struct
+                        let msg = ws::WsMessage {
+                            sender_uid: 0,          // overwritten by server (secure)
+                            sender_device_id: 0,    // overwritten by server (secure)
+                            target_devices: vec![], // broadcast to all
+                            r#type: "handshake_test".to_string(),
+                            payload: serde_json::json!({
+                                "status": "Desktop Core Initialized",
+                                "enc_support": true
+                            }),
+                        };
+
+                        if let Err(e) = ws_client.send_message(msg).await {
+                            error!("Failed to send WS message: {}", e);
+                        }
+
+                        // Just waiting around so the Write/Read daemons don't die instantly.
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to upgrade to WebSocket: {}", e);
+                    }
+                }
             } else {
                 error!("Login failed via API: {}", res.msg);
             }
-        },
+        }
         Err(e) => {
             error!("Could not connect to NAS: {}", e);
         }

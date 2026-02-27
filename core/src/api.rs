@@ -48,31 +48,39 @@ impl ApiClient {
         }
     }
 
-    pub async fn register(&self, pr: RegisterRequest) -> Result<GeneralResponse<serde_json::Value>, reqwest::Error> {
+    pub async fn register(
+        &self,
+        pr: RegisterRequest,
+    ) -> Result<GeneralResponse<serde_json::Value>, reqwest::Error> {
         let url = format!("{}/api/v1/user/register", self.base_url);
         let res = self.client.post(&url).json(&pr).send().await?;
         let result: GeneralResponse<serde_json::Value> = res.json().await?;
         Ok(result)
     }
 
-    pub async fn login(&mut self, pr: LoginRequest) -> Result<GeneralResponse<AuthResponseData>, reqwest::Error> {
+    pub async fn login(
+        &mut self,
+        pr: LoginRequest,
+    ) -> Result<GeneralResponse<AuthResponseData>, reqwest::Error> {
         let url = format!("{}/api/v1/user/login", self.base_url);
         let res = self.client.post(&url).json(&pr).send().await?;
         let result: GeneralResponse<AuthResponseData> = res.json().await?;
-        
+
         if result.code == 200 {
             if let Some(ref data) = result.data {
                 self.access_token = Some(data.access_token.clone());
             }
         }
-        
+
         Ok(result)
     }
 
-    pub async fn get_online_devices(&self) -> Result<GeneralResponse<serde_json::Value>, reqwest::Error> {
+    pub async fn get_online_devices(
+        &self,
+    ) -> Result<GeneralResponse<serde_json::Value>, reqwest::Error> {
         let url = format!("{}/api/v1/sync/online", self.base_url);
         let mut req = self.client.get(&url);
-        
+
         if let Some(ref tk) = self.access_token {
             req = req.header("Authorization", format!("Bearer {}", tk));
         }
