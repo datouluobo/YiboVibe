@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/datouluobo/YiboFlow/server/internal/api/handler"
 	"github.com/datouluobo/YiboFlow/server/internal/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
@@ -21,17 +20,17 @@ func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader(authorizationHeader)
 		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, handler.GeneralResponse{
-				Code: 401,
-				Msg:  "Authorization header is missing",
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code": 401,
+				"msg":  "Authorization header is missing",
 			})
 			return
 		}
 
 		if !strings.HasPrefix(authHeader, bearerPrefix) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, handler.GeneralResponse{
-				Code: 401,
-				Msg:  "Authorization header format must be Bearer {token}",
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code": 401,
+				"msg":  "Authorization header format must be Bearer {token}",
 			})
 			return
 		}
@@ -40,9 +39,9 @@ func JWTAuth() gin.HandlerFunc {
 
 		claims, err := utils.ParseAccessToken(tokenString)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, handler.GeneralResponse{
-				Code: 401,
-				Msg:  "Invalid or expired access token: " + err.Error(),
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code": 401,
+				"msg":  "Invalid or expired access token: " + err.Error(),
 			})
 			return
 		}

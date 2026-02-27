@@ -10,6 +10,7 @@ import (
 	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
 	"github.com/datouluobo/YiboFlow/server/internal/model"
 	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
+	"github.com/datouluobo/YiboFlow/server/internal/ws"
 )
 
 func main() {
@@ -29,6 +30,10 @@ func main() {
 		&model.User{},
 		&model.Device{},
 	)
+
+	// Start the WebSocket Central Hub
+	hub := ws.NewHub()
+	go hub.Run()
 
 	r := gin.Default()
 
@@ -66,6 +71,9 @@ func main() {
 					},
 				})
 			})
+
+			// Establish a WebSocket Connection
+			protectedGrp.GET("/ws", handler.WsEndpoint(hub))
 		}
 	}
 
