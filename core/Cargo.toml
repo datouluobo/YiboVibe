@@ -4,3 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Async Runtime & Networking
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cryptography (From Spike 1)
+argon2 = "0.5.3"
+aes-gcm = "0.10.3"
+rand = "0.8.5"
+base64 = "0.22.1"
+
+# OS System Tray Integration (From Spike 3)
+tray-icon = "0.14"
+tao = "0.30"
+
+# Error Handling & Utils
+thiserror = "1.0"
+lazy_static = "1.4.0"
+log = "0.4"
+env_logger = "0.11"
