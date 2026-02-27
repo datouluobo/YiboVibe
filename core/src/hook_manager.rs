@@ -74,7 +74,7 @@ pub fn start_global_hook() {
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // Only process WM_KEYDOWN for actual key presses, ignore keyup and sys messages unless needed
     if ncode >= 0 && wparam.0 as u32 == WM_KEYDOWN {
-        let kb_struct = *(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let kb_struct = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let key_code = kb_struct.vkCode;
 
         // Determine if it's the start of a command, e.g., '/' (Forward Slash)
@@ -124,7 +124,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
     }
 
     // Pass the control to next hook chain
-    CallNextHookEx(None, ncode, wparam, lparam)
+    unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
 }
 
 /// Uses SendInput to simulate deleting the shorthand command and inserting the real text
