@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/datouluobo/YiboFlow/server/internal/api/handler"
+	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
 	"github.com/datouluobo/YiboFlow/server/internal/model"
 	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
 )
@@ -45,6 +46,26 @@ func main() {
 		{
 			userGrp.POST("/register", handler.Register)
 			userGrp.POST("/login", handler.Login)
+		}
+
+		// Protected endpoints example
+		protectedGrp := api.Group("/sync")
+		protectedGrp.Use(middleware.JWTAuth())
+		{
+			// Try hitting this to verify your Bearer Token works!
+			protectedGrp.GET("/me", func(c *gin.Context) {
+				uid, _ := c.Get(middleware.CtxUIDKey)
+				deviceID, _ := c.Get(middleware.CtxDeviceIDKey)
+
+				c.JSON(http.StatusOK, handler.GeneralResponse{
+					Code: 200,
+					Msg:  "You have successfully reached a protected endpoint",
+					Data: gin.H{
+						"uid":       uid,
+						"device_id": deviceID,
+					},
+				})
+			})
 		}
 	}
 
