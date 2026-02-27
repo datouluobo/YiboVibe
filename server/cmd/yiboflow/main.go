@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/datouluobo/YiboFlow/server/internal/api/handler"
 	"github.com/datouluobo/YiboFlow/server/internal/model"
 	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
 )
@@ -39,6 +40,12 @@ func main() {
 				"version": "v1.3",
 			})
 		})
+
+		userGrp := api.Group("/user")
+		{
+			userGrp.POST("/register", handler.Register)
+			userGrp.POST("/login", handler.Login)
+		}
 	}
 
 	// Read port from env or default to 8080
