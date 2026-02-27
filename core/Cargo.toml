@@ -23,6 +23,7 @@ base64 = "0.22.1"
 # OS System Tray Integration (From Spike 3)
 tray-icon = "0.14"
 tao = "0.30"
+arboard = "3.4"
 
 # Error Handling & Utils
 thiserror = "1.0"

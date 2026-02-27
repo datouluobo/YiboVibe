@@ -1,4 +1,5 @@
 mod api;
+mod clipboard;
 mod crypto;
 mod ws;
 
@@ -102,8 +103,12 @@ async fn run_mock_api_test() {
                             error!("Failed to send WS message: {}", e);
                         }
 
+                        // --- NEW: Start Clipboard Listener ---
+                        let cb_monitor = clipboard::ClipboardMonitor::new();
+                        cb_monitor.start_polling();
+
                         // Just waiting around so the Write/Read daemons don't die instantly.
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        tokio::time::sleep(Duration::from_secs(60)).await;
                     }
                     Err(e) => {
                         error!("Failed to upgrade to WebSocket: {}", e);
