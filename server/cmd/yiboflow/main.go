@@ -74,6 +74,9 @@ func main() {
 
 			// Establish a WebSocket Connection
 			protectedGrp.GET("/ws", handler.WsEndpoint(hub))
+
+			// Query online devices
+			protectedGrp.GET("/online", handler.GetOnlineDevices)
 		}
 	}
 
