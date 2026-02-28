@@ -19,6 +19,11 @@ func InitDatabase() error {
 		dsn = "host=localhost user=yibo_admin password=secret_password dbname=yiboflow port=5432 sslmode=disable TimeZone=Asia/Shanghai"
 	}
 
+	if dsn == "mock" {
+		log.Println("Running in DB MOCK mode. Bypassing PostgreSQL.")
+		return nil
+	}
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 	})

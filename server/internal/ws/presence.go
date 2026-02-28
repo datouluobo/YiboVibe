@@ -15,6 +15,10 @@ const (
 
 // MarkDeviceOnline sets a redis key with a TTL to indicate device is active
 func MarkDeviceOnline(uid, deviceID uint) error {
+	if config.RDB == nil {
+		return nil // Mock Mode
+	}
+
 	ctx := context.Background()
 	key := fmt.Sprintf("%s:%d:%d", onlinePrefix, uid, deviceID)
 
@@ -24,6 +28,10 @@ func MarkDeviceOnline(uid, deviceID uint) error {
 
 // MarkDeviceOffline explicitly removes the online key when connection cleanly drops
 func MarkDeviceOffline(uid, deviceID uint) error {
+	if config.RDB == nil {
+		return nil // Mock Mode
+	}
+
 	ctx := context.Background()
 	key := fmt.Sprintf("%s:%d:%d", onlinePrefix, uid, deviceID)
 
@@ -32,6 +40,10 @@ func MarkDeviceOffline(uid, deviceID uint) error {
 
 // GetUserOnlineDevices returns a list of deviceIDs that are currently online for a given user
 func GetUserOnlineDevices(uid uint) ([]uint, error) {
+	if config.RDB == nil {
+		return []uint{101}, nil // Mock Mode: always return dummy device 101 online
+	}
+
 	ctx := context.Background()
 	pattern := fmt.Sprintf("%s:%d:*", onlinePrefix, uid)
 

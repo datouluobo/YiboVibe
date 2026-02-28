@@ -25,11 +25,13 @@ func main() {
 		log.Fatalf("Failed to initialize redis: %v", err)
 	}
 
-	// Auto-migrate standard schema
-	config.AutoMigrate(
-		&model.User{},
-		&model.Device{},
-	)
+	// Auto-migrate standard schema if not mocked
+	if config.DB != nil {
+		config.AutoMigrate(
+			&model.User{},
+			&model.Device{},
+		)
+	}
 
 	// Start the WebSocket Central Hub
 	hub := ws.NewHub()
@@ -55,7 +57,9 @@ func main() {
 
 		// Protected endpoints example
 		protectedGrp := api.Group("/sync")
-		protectedGrp.Use(middleware.JWTAuth())
+		if config.DB != nil {
+			protectedGrp.Use(middleware.JWTAuth())
+		}
 		{
 			// Try hitting this to verify your Bearer Token works!
 			protectedGrp.GET("/me", func(c *gin.Context) {

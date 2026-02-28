@@ -17,6 +17,11 @@ func InitRedis() error {
 		redisUrl = "redis://:secret_redis_pass@localhost:6379/0"
 	}
 
+	if redisUrl == "mock" {
+		log.Println("Running in REDIS MOCK mode. Bypassing Redis.")
+		return nil
+	}
+
 	opts, err := redis.ParseURL(redisUrl)
 	if err != nil {
 		log.Printf("Failed to parse Redis URL: %v\n", err)
