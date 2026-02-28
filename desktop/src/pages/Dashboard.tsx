@@ -235,7 +235,11 @@ export default function Dashboard() {
                                                     <span style={{ color: log.status === 'sent' ? '#00e676' : '#2979ff', fontWeight: 'bold', marginRight: '10px', textTransform: 'uppercase', fontSize: '0.85em' }}>
                                                         {log.status === 'sent' ? 'Encrypted & Sent' : 'Received & Decrypted'}
                                                     </span>
-                                                    <span style={{ color: '#eee', fontFamily: 'monospace' }}>{log.preview}</span>
+                                                    {log.preview.startsWith('data:image/') ? (
+                                                        <img src={log.preview} alt="Clipboard Image" style={{ maxHeight: '60px', borderRadius: '4px', verticalAlign: 'middle' }} />
+                                                    ) : (
+                                                        <span style={{ color: '#eee', fontFamily: 'monospace' }}>{log.preview}</span>
+                                                    )}
                                                 </div>
                                                 <div style={{ color: '#666', fontSize: '0.85em' }}>
                                                     {log.timestamp.toLocaleTimeString()}

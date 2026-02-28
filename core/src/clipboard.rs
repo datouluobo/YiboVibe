@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use image::DynamicImage;
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct ClipboardEvent {
@@ -58,6 +59,23 @@ impl ClipboardMonitor {
         }
         
         hasher.finish()
+    }
+
+    fn generate_thumbnail_base64(image_data: &arboard::ImageData<'_>) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let width = image_data.width as u32;
+        let height = image_data.height as u32;
+
+        if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, image_data.bytes.to_vec()) {
+            let dyn_img = DynamicImage::ImageRgba8(img_buffer);
+            let thumb = dyn_img.thumbnail(200, 200);
+            let mut buf = std::io::Cursor::new(Vec::new());
+            if thumb.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                let encoded = STANDARD.encode(buf.into_inner());
+                return format!("data:image/png;base64,{}", encoded);
+            }
+        }
+        format!("[Image {}x{}]", width, height)
     }
 
     /// Spawns an asynchronous background task that polls the system clipboard
@@ -296,7 +314,7 @@ impl ClipboardMonitor {
             if let Some(chan) = ui_tx {
                 let _ = chan.send(ClipboardEvent {
                     status: "sent".to_string(),
-                    preview: format!("[Image {}x{}]", image.width, image.height),
+                    preview: Self::generate_thumbnail_base64(&image),
                 }).await;
             }
         }
@@ -454,11 +472,11 @@ impl ClipboardMonitor {
                                 *last = hash;
                             }
 
-                            if let Err(e) = clipboard.set_image(arboard_img) {
+                            if let Err(e) = clipboard.set_image(arboard_img.clone()) {
                                 error!("Failed to set arboard image clipboard: {}", e);
                             } else {
                                 if let Some(chan) = ui_tx.as_ref() {
-                                    let preview = format!("[Image {}x{}]", img_data.w, img_data.h);
+                                    let preview = Self::generate_thumbnail_base64(&arboard_img);
                                     let _ = chan.send(ClipboardEvent {
                                         status: "received".to_string(),
                                         preview,

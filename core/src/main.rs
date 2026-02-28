@@ -89,7 +89,7 @@ async fn run_mock_api_test() {
                 // --- NEW: Test WebSocket Connection ---
                 // We use the tokio-tungstenite module we built here!
                 match ws::WsClient::connect("http://localhost:8080", &d.access_token).await {
-                    Ok(ws_client) => {
+                    Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Attempting to send a handshake payload...");
 
                         // Let's create a ping message using the WsMessage struct
@@ -111,8 +111,9 @@ async fn run_mock_api_test() {
                         // --- NEW: Start Clipboard Listener ---
                         let arc_mk = std::sync::Arc::new(mk);
                         let cb_monitor =
-                            clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+                            clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), None);
                         cb_monitor.start_polling();
+                        cb_monitor.start_receiving(ws_rx);
 
                         // Just waiting around so the Write/Read daemons don't die instantly.
                         tokio::time::sleep(Duration::from_secs(60)).await;

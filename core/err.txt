@@ -1,0 +1,110 @@
+warning: unused import: `Response`
+ --> core\src\api.rs:1:23
+  |
+1 | use reqwest::{Client, Response};
+  |                       ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PasswordHasher`
+ --> core\src\crypto.rs:7:21
+  |
+7 | ...d_hash::{PasswordHasher, SaltStr...
+  |             ^^^^^^^^^^^^^^
+
+warning: unused import: `std::ptr::null_mut`
+ --> core\src\hook_manager.rs:4:5
+  |
+4 | use std::ptr::null_mut;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HINSTANCE`
+  --> core\src\hook_manager.rs:10:34
+   |
+10 | ...undation::{HINSTANCE, LPARAM, L...
+   |               ^^^^^^^^^
+
+warning: unused imports: `INPUT_0` and `KEYBDINPUT`
+  --> core\src\hook_manager.rs:15:12
+   |
+15 | ...T, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, K...
+   |       ^^^^^^^                  ^^^^^^^^^^
+
+warning: unused import: `WM_SYSKEYDOWN`
+  --> core\src\hook_manager.rs:21:72
+   |
+21 | ...KEYDOWN, WM_SYSKEYDOWN,
+   |             ^^^^^^^^^^^^^
+
+warning: `yiboflow-core` (lib) generated 6 warnings (run `cargo fix --lib -p yiboflow-core` to apply 6 suggestions)
+    Checking yiboflow-core v0.1.0 (F:\Download\GitHub\YiboFlow\core)
+warning: unused import: `PasswordHasher`
+ --> core\src\crypto.rs:7:21
+  |
+7 |     password_hash::{PasswordHasher, SaltString, rand_core::RngCore},
+  |                     ^^^^^^^^^^^^^^
+
+warning: unused import: `HINSTANCE`
+  --> core\src\hook_manager.rs:10:34
+   |
+10 | use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+   |                                  ^^^^^^^^^
+
+warning: unused imports: `INPUT_0` and `KEYBDINPUT`
+  --> core\src\hook_manager.rs:15:12
+   |
+15 |     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
+   |            ^^^^^^^                  ^^^^^^^^^^
+
+warning: unused import: `WM_SYSKEYDOWN`
+  --> core\src\hook_manager.rs:21:72
+   |
+21 |     TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+   |                                                                        ^^^^^^^^^^^^^
+
+error[E0599]: no method named `send_message` found for tuple `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)` in the current scope
+   --> core\src\main.rs:107:51
+    |
+107 |                         if let Err(e) = ws_client.send_message(msg).await {
+    |                                                   ^^^^^^^^^^^^ method not found in `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)`
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+107 |                         if let Err(e) = ws_client.0.send_message(msg).await {
+    |                                                   ++
+
+error[E0609]: no field `tx` on type `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)`
+   --> core\src\main.rs:114:80
+    |
+114 | ...                   clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+    |                                                                          ^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+114 |                             clipboard::ClipboardMonitor::new(arc_mk, ws_client.0.tx.clone());
+    |                                                                                ++
+
+error[E0061]: this function takes 5 arguments but 2 arguments were supplied
+   --> core\src\main.rs:114:29
+    |
+114 | ...                   clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------------------
+    |                                                       ||
+    |                                                       |argument #1 of type `std::string::String` is missing
+    |                                                       two arguments of type `tokio::sync::mpsc::Sender<WsMessage>` and `std::option::Option<tokio::sync::mpsc::Sender<ClipboardEvent>>` are missing
+    |
+note: associated function defined here
+   --> core\src\clipboard.rs:31:12
+    |
+ 31 | ...fn new(server_url: String, token: String, master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>) -...
+    |       ^^^ ------------------                                             ------------------------------  -------------------------------------------
+help: provide the arguments
+    |
+114 -                             clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+114 +                             clipboard::ClipboardMonitor::new(/* std::string::String */, ws_client.tx.clone(), arc_mk, /* tokio::sync::mpsc::Sender<WsMessage> */, /* std::option::Option<tokio::sync::mpsc::Sender<ClipboardEvent>> */);
+    |
+
+Some errors have detailed explanations: E0061, E0599, E0609.
+For more information about an error, try `rustc --explain E0061`.
+warning: `yiboflow-core` (bin "yiboflow-core") generated 6 warnings (2 duplicates)
+error: could not compile `yiboflow-core` (bin "yiboflow-core") due to 3 previous errors; 6 warnings emitted
