@@ -71,7 +71,10 @@ impl ClipboardMonitor {
                     };
 
                     if should_dispatch {
-                        Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
+                        let (_, is_sync_enabled) = crate::config::get_settings();
+                        if is_sync_enabled {
+                            Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
+                        }
                     }
                 }
             }
@@ -146,6 +149,11 @@ impl ClipboardMonitor {
             info!("Clipboard receiving daemon started.");
             while let Some(msg) = rx.recv().await {
                 if msg.r#type == "clipboard_update" {
+                    let (_, is_sync_enabled) = crate::config::get_settings();
+                    if !is_sync_enabled {
+                        continue;
+                    }
+
                     // Extract wrapped key and encrypted data
                     let wrapped_dk_val = &msg.payload["wrapped_key"];
                     let enc_data_val = &msg.payload["encrypted_data"];

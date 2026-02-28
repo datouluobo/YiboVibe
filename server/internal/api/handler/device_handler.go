@@ -10,8 +10,12 @@ import (
 
 // GetOnlineDevices handler returns a list of device IDs belonging to the user that are currently online.
 func GetOnlineDevices(c *gin.Context) {
-	uidAny, _ := c.Get(middleware.CtxUIDKey)
-	uid := uidAny.(uint)
+	var uid uint
+	if uidAny, exists := c.Get(middleware.CtxUIDKey); exists {
+		uid = uidAny.(uint)
+	} else {
+		uid = 1 // Mock User
+	}
 
 	onlineDevices, err := ws.GetUserOnlineDevices(uid)
 	if err != nil {

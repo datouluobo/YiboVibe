@@ -23,9 +23,21 @@ export default function Dashboard() {
     }
     const [clipboardLogs, setClipboardLogs] = useState<ClipboardLog[]>([]);
 
+    // Settings State
+    interface SettingsPayload {
+        is_snippets_enabled: boolean;
+        is_sync_enabled: boolean;
+    }
+    const [settings, setSettings] = useState<SettingsPayload>({
+        is_snippets_enabled: true,
+        is_sync_enabled: true,
+    });
+
     useEffect(() => {
         if (activeTab === "snippets") {
             loadSnippets();
+        } else if (activeTab === "settings") {
+            loadSettings();
         }
     }, [activeTab]);
 
@@ -55,6 +67,30 @@ export default function Dashboard() {
             unlistenPromise.then(unlistenFn => unlistenFn());
         };
     }, []);
+
+    const loadSettings = async () => {
+        try {
+            const data: SettingsPayload = await invoke("get_settings");
+            setSettings(data);
+        } catch (error) {
+            console.error("Failed to load settings", error);
+        }
+    };
+
+    const handleToggleSetting = async (key: keyof SettingsPayload) => {
+        const newSettings = { ...settings, [key]: !settings[key] };
+        setSettings(newSettings);
+        try {
+            await invoke("update_settings", {
+                isSnippetsEnabled: newSettings.is_snippets_enabled,
+                isSyncEnabled: newSettings.is_sync_enabled
+            });
+        } catch (error) {
+            console.error("Failed to save settings", error);
+            // Revert state if api fails
+            setSettings(settings);
+        }
+    };
 
     const loadSnippets = async () => {
         try {
@@ -278,8 +314,38 @@ export default function Dashboard() {
                             <h2>Settings</h2>
                             <p>System configuration & preferences.</p>
                         </header>
-                        <div className="glass-panel" style={{ padding: '30px', color: '#888' }}>
-                            Settings module not yet implemented.
+                        <div className="glass-panel" style={{ padding: '30px', color: '#eee', display: 'flex', flexDirection: 'column', gap: '25px' }}>
+                            <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                <div className="setting-info">
+                                    <h4 style={{ margin: '0 0 5px 0', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <Keyboard size={18} className="text-primary" /> Magic Snippets Engine
+                                    </h4>
+                                    <p style={{ margin: 0, color: '#888', fontSize: '0.9rem' }}>Enable global keyboard hooks for automatic text expansion.</p>
+                                </div>
+                                <label className="flex items-center cursor-pointer">
+                                    <div className="relative">
+                                        <input type="checkbox" className="sr-only" checked={settings.is_snippets_enabled} onChange={() => handleToggleSetting('is_snippets_enabled')} />
+                                        <div className={`block w-14 h-8 rounded-full ${settings.is_snippets_enabled ? 'bg-primary' : 'bg-gray-600'}`} style={{ transition: 'background-color 0.3s' }}></div>
+                                        <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition ${settings.is_snippets_enabled ? 'transform translate-x-6' : ''}`}></div>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div className="setting-info">
+                                    <h4 style={{ margin: '0 0 5px 0', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <Copy size={18} className="text-success" /> E2EE Clipboard Sync
+                                    </h4>
+                                    <p style={{ margin: 0, color: '#888', fontSize: '0.9rem' }}>Securely synchronize clipboard across your connected devices.</p>
+                                </div>
+                                <label className="flex items-center cursor-pointer">
+                                    <div className="relative">
+                                        <input type="checkbox" className="sr-only" checked={settings.is_sync_enabled} onChange={() => handleToggleSetting('is_sync_enabled')} />
+                                        <div className={`block w-14 h-8 rounded-full ${settings.is_sync_enabled ? 'bg-success' : 'bg-gray-600'}`} style={{ transition: 'background-color 0.3s' }}></div>
+                                        <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition ${settings.is_sync_enabled ? 'transform translate-x-6' : ''}`}></div>
+                                    </div>
+                                </label>
+                            </div>
                         </div>
                     </motion.div>
                 )}

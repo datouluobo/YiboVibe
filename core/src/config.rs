@@ -13,7 +13,13 @@ lazy_static! {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub snippets: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub is_snippets_enabled: bool,
+    #[serde(default = "default_true")]
+    pub is_sync_enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -43,7 +49,11 @@ impl AppConfig {
         default_snippets.insert("/demo".to_string(), "【YiboFlow Mock Magic Snippet Inject!】".to_string());
         default_snippets.insert("/em".to_string(), "master@yiboflow.local".to_string());
 
-        let cfg = Self { snippets: default_snippets };
+        let cfg = Self { 
+            snippets: default_snippets,
+            is_snippets_enabled: true,
+            is_sync_enabled: true,
+        };
         cfg.save();
         cfg
     }
@@ -80,4 +90,18 @@ pub fn remove_snippet(trigger: String) -> Result<(), String> {
 pub fn get_snippets() -> HashMap<String, String> {
     let cfg = GLOBAL_CONFIG.read().unwrap();
     cfg.snippets.clone()
+}
+
+pub fn get_settings() -> (bool, bool) {
+    let cfg = GLOBAL_CONFIG.read().unwrap();
+    (cfg.is_snippets_enabled, cfg.is_sync_enabled)
+}
+
+pub fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.is_snippets_enabled = is_snippets_enabled;
+    cfg.is_sync_enabled = is_sync_enabled;
+    cfg.save();
+    info!("Settings updated successfully.");
+    Ok(())
 }

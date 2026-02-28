@@ -159,6 +159,23 @@ fn remove_snippet(trigger: String) -> Result<(), String> {
     yiboflow_core::config::remove_snippet(trigger)
 }
 
+#[derive(serde::Serialize)]
+struct SettingsPayload {
+    is_snippets_enabled: bool,
+    is_sync_enabled: bool,
+}
+
+#[tauri::command]
+fn get_settings() -> Result<SettingsPayload, String> {
+    let (is_snippets_enabled, is_sync_enabled) = yiboflow_core::config::get_settings();
+    Ok(SettingsPayload { is_snippets_enabled, is_sync_enabled })
+}
+
+#[tauri::command]
+fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Result<(), String> {
+    yiboflow_core::config::update_settings(is_snippets_enabled, is_sync_enabled)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Intialize Rust logger
@@ -176,7 +193,9 @@ pub fn run() {
             connect_engine,
             get_snippets,
             add_snippet,
-            remove_snippet
+            remove_snippet,
+            get_settings,
+            update_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
