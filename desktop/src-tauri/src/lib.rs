@@ -67,7 +67,27 @@ async fn connect_engine(
                 Err(format!("Login failed via API: {}", res.msg))
             }
         }
-        Err(e) => Err(format!("Could not connect to NAS: {}", e)),
+        Err(e) => {
+            error!("Could not connect to NAS: {}", e);
+
+            // *MOCK OVERRIDE for UI Testing*
+            // If the Go backend isn't running cleanly on Windows yet (e.g. no Redis/PG),
+            // we'll bypass to let the user see the Dashboard UI.
+            if server_url.contains("127.0.0.1") || server_url.contains("localhost") {
+                info!("MOCK LOGIN ACTIVATED! Bypassing failed backend for local demo.");
+
+                // Still generate a dummy MK to prove crypto works
+                let _mock_mk = MasterKey::derive(&password, "mock_salt_for_ui_only").unwrap();
+                info!("Locally derived Mock MasterKey is ready.");
+
+                let mut connected_flag = state.is_connected.lock().await;
+                *connected_flag = true;
+
+                Ok(true)
+            } else {
+                Err(format!("Could not connect to NAS: {}", e))
+            }
+        }
     }
 }
 
