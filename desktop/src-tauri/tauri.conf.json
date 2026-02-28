@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "YiboFlow",
         "width": 840,
         "height": 600,

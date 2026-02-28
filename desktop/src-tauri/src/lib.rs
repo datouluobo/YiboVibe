@@ -41,7 +41,13 @@ async fn connect_engine(
                     &d.access_token[0..10]
                 );
 
-                let mk = match MasterKey::derive(&password, &d.kdf_salt) {
+                let pwd = password.clone();
+                let salt_b64 = d.kdf_salt.clone();
+                let mk = tokio::task::spawn_blocking(move || {
+                    MasterKey::derive(&pwd, &salt_b64)
+                }).await.map_err(|e| format!("Task failed: {}", e))?;
+
+                let mk = match mk {
                     Ok(k) => k,
                     Err(e) => return Err(format!("MasterKey Derivation failed: {}", e)),
                 };
@@ -76,8 +82,12 @@ async fn connect_engine(
             if server_url.contains("127.0.0.1") || server_url.contains("localhost") {
                 info!("MOCK LOGIN ACTIVATED! Bypassing failed backend for local demo.");
 
-                // Still generate a dummy MK to prove crypto works
-                let _mock_mk = MasterKey::derive(&password, "mock_salt_for_ui_only").unwrap();
+                let pwd = password.clone();
+                let mock_mk = tokio::task::spawn_blocking(move || {
+                    let mock_salt = yiboflow_core::crypto::generate_salt();
+                    MasterKey::derive(&pwd, &mock_salt).unwrap()
+                }).await.map_err(|e| format!("Task failed: {}", e))?;
+                
                 info!("Locally derived Mock MasterKey is ready.");
 
                 let mut connected_flag = state.is_connected.lock().await;
