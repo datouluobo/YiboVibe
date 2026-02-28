@@ -25,6 +25,8 @@ tray-icon = "0.14"
 tao = "0.30"
 arboard = "3.4"
 image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+uuid = { version = "1.21.0", features = ["v4"] }
+directories = "6.0.0"
 
 # Win32 OS Hooks (From Spike 2)
 [target.'cfg(windows)'.dependencies]

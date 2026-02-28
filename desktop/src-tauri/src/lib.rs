@@ -10,6 +10,7 @@ use yiboflow_core::ws::WsClient;
 // We can store shared state here later, like the WsClient channel for sending new text.
 pub struct AppState {
     pub is_connected: Mutex<bool>,
+    pub ws_tx: Mutex<Option<tokio::sync::mpsc::Sender<yiboflow_core::ws::WsMessage>>>,
 }
 
 #[tauri::command]
@@ -89,6 +90,8 @@ async fn connect_engine(
 
                         let mut connected_flag = state.is_connected.lock().await;
                         *connected_flag = true;
+                        let mut ws_tx = state.ws_tx.lock().await;
+                        *ws_tx = Some(ws_client.tx.clone());
                         return Ok(true);
                     }
                     Err(e) => return Err(format!("WebSocket Connection Failed: {}", e)),
@@ -135,6 +138,8 @@ async fn connect_engine(
 
                 let mut connected_flag = state.is_connected.lock().await;
                 *connected_flag = true;
+                let mut ws_tx = state.ws_tx.lock().await;
+                *ws_tx = Some(ws_client.tx.clone());
                 return Ok(true);
             }
             Err(e) => return Err(format!("Mock WebSocket Connection Failed: {}", e)),
@@ -176,6 +181,17 @@ fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Result<(
     yiboflow_core::config::update_settings(is_snippets_enabled, is_sync_enabled)
 }
 
+#[tauri::command]
+async fn send_file_p2p(state: tauri::State<'_, AppState>, file_path: String, target_device: u32) -> Result<(), String> {
+    let ws_tx_guard = state.ws_tx.lock().await;
+    if let Some(ws_tx) = ws_tx_guard.as_ref() {
+        let path = std::path::PathBuf::from(file_path);
+        yiboflow_core::p2p::start_file_send(path, target_device, ws_tx.clone()).await
+    } else {
+        Err("Core Engine not connected yet.".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Intialize Rust logger
@@ -187,15 +203,18 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             is_connected: Mutex::new(false),
+            ws_tx: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             connect_engine,
             get_snippets,
             add_snippet,
             remove_snippet,
             get_settings,
-            update_settings
+            update_settings,
+            send_file_p2p
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

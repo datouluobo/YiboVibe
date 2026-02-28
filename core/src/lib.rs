@@ -4,3 +4,4 @@ pub mod crypto;
 pub mod hook_manager;
 pub mod ws;
 pub mod config;
+pub mod p2p;

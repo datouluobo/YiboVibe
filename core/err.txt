@@ -1,3 +1,27 @@
+    Checking windows-sys v0.61.2
+    Checking getrandom v0.4.1
+    Checking uuid v1.21.0
+    Checking mio v1.1.1
+    Checking schannel v0.1.28
+    Checking anstyle-wincon v3.0.11
+    Checking anstyle-query v1.1.5
+    Checking dirs-sys v0.5.0
+    Checking directories v6.0.0
+    Checking anstream v0.6.21
+    Checking native-tls v0.2.18
+    Checking env_logger v0.11.9
+    Checking tokio v1.49.0
+    Checking tokio-util v0.7.18
+    Checking tower v0.5.3
+    Checking tokio-native-tls v0.3.1
+    Checking tokio-tungstenite v0.26.2
+    Checking h2 v0.4.13
+    Checking tower-http v0.6.8
+    Checking hyper v1.8.1
+    Checking hyper-util v0.1.20
+    Checking hyper-tls v0.6.0
+    Checking reqwest v0.12.28
+    Checking yiboflow-core v0.1.0 (F:\Download\GitHub\YiboFlow\core)
 warning: unused import: `Response`
  --> core\src\api.rs:1:23
   |
@@ -9,40 +33,14 @@ warning: unused import: `Response`
 warning: unused import: `PasswordHasher`
  --> core\src\crypto.rs:7:21
   |
-7 | ...d_hash::{PasswordHasher, SaltStr...
-  |             ^^^^^^^^^^^^^^
+7 |     password_hash::{PasswordHasher, SaltString, rand_core::RngCore},
+  |                     ^^^^^^^^^^^^^^
 
 warning: unused import: `std::ptr::null_mut`
  --> core\src\hook_manager.rs:4:5
   |
 4 | use std::ptr::null_mut;
   |     ^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `HINSTANCE`
-  --> core\src\hook_manager.rs:10:34
-   |
-10 | ...undation::{HINSTANCE, LPARAM, L...
-   |               ^^^^^^^^^
-
-warning: unused imports: `INPUT_0` and `KEYBDINPUT`
-  --> core\src\hook_manager.rs:15:12
-   |
-15 | ...T, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, K...
-   |       ^^^^^^^                  ^^^^^^^^^^
-
-warning: unused import: `WM_SYSKEYDOWN`
-  --> core\src\hook_manager.rs:21:72
-   |
-21 | ...KEYDOWN, WM_SYSKEYDOWN,
-   |             ^^^^^^^^^^^^^
-
-warning: `yiboflow-core` (lib) generated 6 warnings (run `cargo fix --lib -p yiboflow-core` to apply 6 suggestions)
-    Checking yiboflow-core v0.1.0 (F:\Download\GitHub\YiboFlow\core)
-warning: unused import: `PasswordHasher`
- --> core\src\crypto.rs:7:21
-  |
-7 |     password_hash::{PasswordHasher, SaltString, rand_core::RngCore},
-  |                     ^^^^^^^^^^^^^^
 
 warning: unused import: `HINSTANCE`
   --> core\src\hook_manager.rs:10:34
@@ -62,49 +60,53 @@ warning: unused import: `WM_SYSKEYDOWN`
 21 |     TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
    |                                                                        ^^^^^^^^^^^^^
 
-error[E0599]: no method named `send_message` found for tuple `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)` in the current scope
-   --> core\src\main.rs:107:51
-    |
-107 |                         if let Err(e) = ws_client.send_message(msg).await {
-    |                                                   ^^^^^^^^^^^^ method not found in `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)`
-    |
-help: one of the expressions' fields has a method of the same name
-    |
-107 |                         if let Err(e) = ws_client.0.send_message(msg).await {
-    |                                                   ++
+warning: unused imports: `IpAddr` and `SocketAddr`
+ --> core\src\p2p.rs:3:16
+  |
+3 | use std::net::{IpAddr, SocketAddr};
+  |                ^^^^^^  ^^^^^^^^^^
 
-error[E0609]: no field `tx` on type `(WsClient, tokio::sync::mpsc::Receiver<WsMessage>)`
-   --> core\src\main.rs:114:80
+warning: `yiboflow-core` (lib) generated 7 warnings (run `cargo fix --lib -p yiboflow-core` to apply 7 suggestions)
+error[E0433]: failed to resolve: unresolved import
+   --> core\src\clipboard.rs:489:72
     |
-114 | ...                   clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
-    |                                                                          ^^ unknown field
+489 |                     if let Ok(offer) = serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone()) {
+    |                                                                        ^^^ unresolved import
     |
-help: one of the expressions' fields has a field of the same name
+help: a similar path exists
     |
-114 |                             clipboard::ClipboardMonitor::new(arc_mk, ws_client.0.tx.clone());
-    |                                                                                ++
-
-error[E0061]: this function takes 5 arguments but 2 arguments were supplied
-   --> core\src\main.rs:114:29
+489 |                     if let Ok(offer) = serde_json::from_value::<crate::yiboflow_core::p2p::P2POffer>(msg.payload.clone()) {
+    |                                                                        +++++++++++++++
+help: consider importing this module
     |
-114 | ...                   clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
-    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------------------
-    |                                                       ||
-    |                                                       |argument #1 of type `std::string::String` is missing
-    |                                                       two arguments of type `tokio::sync::mpsc::Sender<WsMessage>` and `std::option::Option<tokio::sync::mpsc::Sender<ClipboardEvent>>` are missing
+  1 + use yiboflow_core::p2p;
     |
-note: associated function defined here
-   --> core\src\clipboard.rs:31:12
+help: if you import `p2p`, refer to it directly
     |
- 31 | ...fn new(server_url: String, token: String, master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>) -...
-    |       ^^^ ------------------                                             ------------------------------  -------------------------------------------
-help: provide the arguments
-    |
-114 -                             clipboard::ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
-114 +                             clipboard::ClipboardMonitor::new(/* std::string::String */, ws_client.tx.clone(), arc_mk, /* tokio::sync::mpsc::Sender<WsMessage> */, /* std::option::Option<tokio::sync::mpsc::Sender<ClipboardEvent>> */);
+489 -                     if let Ok(offer) = serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone()) {
+489 +                     if let Ok(offer) = serde_json::from_value::<p2p::P2POffer>(msg.payload.clone()) {
     |
 
-Some errors have detailed explanations: E0061, E0599, E0609.
-For more information about an error, try `rustc --explain E0061`.
-warning: `yiboflow-core` (bin "yiboflow-core") generated 6 warnings (2 duplicates)
-error: could not compile `yiboflow-core` (bin "yiboflow-core") due to 3 previous errors; 6 warnings emitted
+error[E0433]: failed to resolve: unresolved import
+   --> core\src\clipboard.rs:497:32
+    |
+497 |                         crate::p2p::handle_p2p_offer(offer, save_dir).await;
+    |                                ^^^ unresolved import
+    |
+help: a similar path exists
+    |
+497 |                         crate::yiboflow_core::p2p::handle_p2p_offer(offer, save_dir).await;
+    |                                +++++++++++++++
+help: consider importing this module
+    |
+  1 + use yiboflow_core::p2p;
+    |
+help: if you import `p2p`, refer to it directly
+    |
+497 -                         crate::p2p::handle_p2p_offer(offer, save_dir).await;
+497 +                         p2p::handle_p2p_offer(offer, save_dir).await;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `yiboflow-core` (bin "yiboflow-core") generated 6 warnings (6 duplicates)
+error: could not compile `yiboflow-core` (bin "yiboflow-core") due to 2 previous errors; 6 warnings emitted

@@ -485,6 +485,19 @@ impl ClipboardMonitor {
                             }
                         }
                     }
+                } else if msg.r#type == "p2p_file_offer" {
+                    if let Ok(offer) = serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone()) {
+                        let mut save_dir = std::env::temp_dir();
+                        if let Some(dirs) = directories::UserDirs::new() {
+                            if let Some(dl) = dirs.download_dir() {
+                                save_dir = dl.to_path_buf();
+                            }
+                        }
+                        
+                        crate::p2p::handle_p2p_offer(offer, save_dir).await;
+                    } else {
+                        error!("Failed to parse p2p_file_offer payload.");
+                    }
                 }
             }
         });

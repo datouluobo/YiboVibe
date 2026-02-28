@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, Keyboard, Settings, LogOut, CheckCircle2, Laptop2, Smartphone, ShieldCheck, Plus, Trash2 } from "lucide-react";
+import { Copy, Keyboard, Settings, LogOut, CheckCircle2, Laptop2, Smartphone, ShieldCheck, Plus, Trash2, FileUp } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import "./Dashboard.css";
 
 export default function Dashboard() {
@@ -123,6 +124,25 @@ export default function Dashboard() {
         }
     };
 
+    const handleSendFile = async (deviceId: number) => {
+        try {
+            const selected = await open({
+                multiple: false,
+                title: "Select File to Send"
+            });
+            if (selected) {
+                await invoke("send_file_p2p", {
+                    filePath: selected as string,
+                    targetDevice: deviceId
+                });
+                alert("File transfer initiated!");
+            }
+        } catch (err) {
+            console.error("File transfer error", err);
+            alert("Transfer failed: " + err);
+        }
+    };
+
     return (
         <div className="dashboard-container">
             {/* Sidebar Navigation */}
@@ -206,7 +226,16 @@ export default function Dashboard() {
                                     <h4>My iPhone 15 Pro</h4>
                                     <p>iOS App</p>
                                 </div>
-                                <div className="device-status">Idle</div>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <button
+                                        onClick={() => handleSendFile(0)}
+                                        className="btn-ghost"
+                                        style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em', background: 'rgba(255,255,255,0.05)', borderRadius: '6px' }}
+                                    >
+                                        <FileUp size={14} /> Send File
+                                    </button>
+                                    <div className="device-status">Idle</div>
+                                </div>
                             </div>
                         </div>
 
