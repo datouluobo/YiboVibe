@@ -82,8 +82,10 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             c = std::char::from_u32(key_code + 32); // Lowercase a-z
         } else if key_code >= 0x30 && key_code <= 0x39 {
             c = std::char::from_u32(key_code); // 0-9
-        } else if key_code == VK_OEM_2.0 as u32 {
-            c = Some('/'); // Slash
+        } else if key_code >= 0x60 && key_code <= 0x69 {
+            c = std::char::from_u32(key_code - 0x60 + 0x30); // Numpad 0-9
+        } else if key_code == VK_OEM_2.0 as u32 || key_code == 0x6F {
+            c = Some('/'); // Main Slash or Numpad Slash
         } else if key_code == 0x08 { // Backspace
             KEY_BUFFER.lock().unwrap().pop();
         } else if key_code == 0x20 || key_code == 0x0D { // Space or Enter
