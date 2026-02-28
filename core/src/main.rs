@@ -4,6 +4,7 @@ mod config;
 mod crypto;
 mod hook_manager;
 mod ws;
+mod p2p;
 
 use log::{error, info};
 use std::time::Duration;

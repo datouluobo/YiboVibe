@@ -16,6 +16,10 @@ export default function Dashboard() {
     const [newTrigger, setNewTrigger] = useState("");
     const [newReplacement, setNewReplacement] = useState("");
 
+    // Settings State
+    const [blockedApps, setBlockedApps] = useState<string[]>([]);
+    const [newBlockedApp, setNewBlockedApp] = useState("");
+
     interface ClipboardLog {
         id: number;
         timestamp: Date;
@@ -39,6 +43,7 @@ export default function Dashboard() {
             loadSnippets();
         } else if (activeTab === "settings") {
             loadSettings();
+            loadBlockedApps();
         }
     }, [activeTab]);
 
@@ -90,6 +95,59 @@ export default function Dashboard() {
             console.error("Failed to save settings", error);
             // Revert state if api fails
             setSettings(settings);
+        }
+    };
+
+    const loadBlockedApps = async () => {
+        try {
+            const data: string[] = await invoke("get_blocked_apps");
+            setBlockedApps(data);
+        } catch (error) {
+            console.error("Failed to load blocked apps", error);
+        }
+    };
+
+    const handleAddBlockedAppFromDialog = async () => {
+        try {
+            const selected = await open({
+                multiple: false,
+                title: "Select Executable to Block",
+                filters: [{ name: 'Executables', extensions: ['exe'] }]
+            });
+            if (selected) {
+                let exeName = (selected as string).split('\\').pop()?.toLowerCase();
+                if (exeName) {
+                    await invoke("add_blocked_app", { appName: exeName });
+                    await loadBlockedApps();
+                }
+            }
+        } catch (err) {
+            console.error("Failed to select exe", err);
+        }
+    };
+
+    const handleAddBlockedApp = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newBlockedApp) return;
+        try {
+            let appName = newBlockedApp.toLowerCase();
+            if (!appName.endsWith(".exe")) {
+                appName += ".exe";
+            }
+            await invoke("add_blocked_app", { appName });
+            setNewBlockedApp("");
+            await loadBlockedApps();
+        } catch (error) {
+            console.error("Failed to add component", error);
+        }
+    };
+
+    const handleRemoveBlockedApp = async (appName: string) => {
+        try {
+            await invoke("remove_blocked_app", { appName });
+            await loadBlockedApps();
+        } catch (error) {
+            console.error("Failed to remove blocked app", error);
         }
     };
 
@@ -372,6 +430,49 @@ export default function Dashboard() {
                                     <input type="checkbox" checked={settings.is_sync_enabled} onChange={() => handleToggleSetting('is_sync_enabled')} />
                                     <span className="toggle-slider success"></span>
                                 </label>
+                            </div>
+                        </div>
+
+                        <div className="glass-panel" style={{ padding: '30px', color: '#eee', marginTop: '20px' }}>
+                            <div className="list-header" style={{ marginBottom: '20px' }}>
+                                <h3>Snippet Exclusion List (Blacklist)</h3>
+                                <p style={{ margin: 0, color: '#888', fontSize: '0.9rem' }}>Snippets will be disabled when these apps are entirely in focus.</p>
+                            </div>
+
+                            <form onSubmit={handleAddBlockedApp} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                                <input
+                                    className="modern-input"
+                                    style={{ flex: 1, background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)', padding: '10px', borderRadius: '8px' }}
+                                    placeholder="Enter exe name (e.g. wow.exe)"
+                                    value={newBlockedApp}
+                                    onChange={(e) => setNewBlockedApp(e.target.value)}
+                                />
+                                <button type="submit" className="btn-primary" style={{ padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}>
+                                    <Plus size={18} /> Add
+                                </button>
+                                <button type="button" onClick={handleAddBlockedAppFromDialog} className="btn-ghost" style={{ padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', display: 'flex', gap: '5px', alignItems: 'center' }}>
+                                    Browse...
+                                </button>
+                            </form>
+
+                            <div className="device-list" style={{ background: 'transparent', padding: 0 }}>
+                                {blockedApps.length === 0 ? (
+                                    <p style={{ color: '#888' }}>No blocked applications.</p>
+                                ) : (
+                                    blockedApps.map(app => (
+                                        <div className="device-item" key={app} style={{ alignItems: 'center', background: 'rgba(255,255,255,0.02)', marginBottom: '10px', borderRadius: '8px' }}>
+                                            <div className="device-info" style={{ flex: 1 }}>
+                                                <h4 style={{ color: '#eee', fontFamily: 'monospace' }}>{app}</h4>
+                                            </div>
+                                            <button
+                                                onClick={() => handleRemoveBlockedApp(app)}
+                                                style={{ background: 'transparent', border: 'none', color: '#8E8E93', cursor: 'pointer', padding: '10px' }}
+                                            >
+                                                <Trash2 size={20} />
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
                             </div>
                         </div>
                     </motion.div>

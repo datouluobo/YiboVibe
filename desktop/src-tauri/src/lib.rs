@@ -164,6 +164,21 @@ fn remove_snippet(trigger: String) -> Result<(), String> {
     yiboflow_core::config::remove_snippet(trigger)
 }
 
+#[tauri::command]
+fn get_blocked_apps() -> Result<Vec<String>, String> {
+    Ok(yiboflow_core::config::get_blocked_apps())
+}
+
+#[tauri::command]
+fn add_blocked_app(app_name: String) -> Result<(), String> {
+    yiboflow_core::config::add_blocked_app(app_name)
+}
+
+#[tauri::command]
+fn remove_blocked_app(app_name: String) -> Result<(), String> {
+    yiboflow_core::config::remove_blocked_app(app_name)
+}
+
 #[derive(serde::Serialize)]
 struct SettingsPayload {
     is_snippets_enabled: bool,
@@ -212,6 +227,9 @@ pub fn run() {
             get_snippets,
             add_snippet,
             remove_snippet,
+            get_blocked_apps,
+            add_blocked_app,
+            remove_blocked_app,
             get_settings,
             update_settings,
             send_file_p2p

@@ -17,9 +17,12 @@ pub struct AppConfig {
     pub is_snippets_enabled: bool,
     #[serde(default = "default_true")]
     pub is_sync_enabled: bool,
+    #[serde(default = "default_empty_vec")]
+    pub blocked_apps: Vec<String>,
 }
 
 fn default_true() -> bool { true }
+fn default_empty_vec() -> Vec<String> { Vec::new() }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -53,6 +56,7 @@ impl AppConfig {
             snippets: default_snippets,
             is_snippets_enabled: true,
             is_sync_enabled: true,
+            blocked_apps: default_empty_vec(),
         };
         cfg.save();
         cfg
@@ -102,6 +106,26 @@ pub fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Resu
     cfg.is_snippets_enabled = is_snippets_enabled;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.save();
-    info!("Settings updated successfully.");
+    Ok(())
+}
+
+pub fn get_blocked_apps() -> Vec<String> {
+    let cfg = GLOBAL_CONFIG.read().unwrap();
+    cfg.blocked_apps.clone()
+}
+
+pub fn add_blocked_app(app_name: String) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    if !cfg.blocked_apps.contains(&app_name) {
+        cfg.blocked_apps.push(app_name);
+        cfg.save();
+    }
+    Ok(())
+}
+
+pub fn remove_blocked_app(app_name: String) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.blocked_apps.retain(|a| a != &app_name);
+    cfg.save();
     Ok(())
 }

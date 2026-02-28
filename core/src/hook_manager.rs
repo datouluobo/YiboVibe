@@ -7,9 +7,19 @@ use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::thread;
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+use std::ffi::OsString;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStringExt;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM, MAX_PATH};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmGetOpenStatus, ImmReleaseContext};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
@@ -19,6 +29,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
     TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    GetForegroundWindow, GetWindowThreadProcessId,
 };
 
 #[cfg(target_os = "windows")]
@@ -79,6 +90,50 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
         }
 
+        let hwnd = unsafe { GetForegroundWindow() };
+
+        // 1. Check IME Open Status
+        let mut is_composing = false;
+        unsafe {
+            let himc = ImmGetContext(hwnd);
+            if himc.0 != 0 {
+                let status = ImmGetOpenStatus(himc);
+                is_composing = status.as_bool();
+                ImmReleaseContext(hwnd, himc);
+            }
+        }
+        if is_composing {
+            KEY_BUFFER.lock().unwrap().clear();
+            return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
+        }
+
+        // 2. Check Blacklist
+        let mut active_exe = String::new();
+        let mut pid: u32 = 0;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid != 0 {
+                if let Ok(process_handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
+                    let mut buf = [0u16; MAX_PATH as usize];
+                    let len = GetModuleFileNameExW(process_handle, None, &mut buf);
+                    if len > 0 {
+                        let current_exe = OsString::from_wide(&buf[..len as usize]);
+                        if let Some(s) = current_exe.to_str() {
+                            active_exe = s.split('\\').last().unwrap_or("").to_lowercase();
+                        }
+                    }
+                }
+            }
+        }
+        
+        if !active_exe.is_empty() {
+            let blocked_apps = crate::config::get_blocked_apps();
+            if blocked_apps.iter().any(|app| app.to_lowercase() == active_exe) {
+                KEY_BUFFER.lock().unwrap().clear();
+                return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
+            }
+        }
+
         let kb_struct = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let key_code = kb_struct.vkCode;
         let mut c: Option<char> = None;
@@ -136,7 +191,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 #[cfg(target_os = "windows")]
 fn replace_text_with_snippet(target: &str, backspace_count: usize) {
     use std::time::Duration;
-    use windows::Win32::UI::Input::KeyboardAndMouse::VK_BACK;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_CONTROL, VIRTUAL_KEY};
 
     // Give the OS a tiny delay to finish processing the current hooked thread context
     std::thread::sleep(Duration::from_millis(15));
@@ -157,6 +212,41 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
             ku.Anonymous.ki.wVk = VK_BACK;
             ku.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
             inputs.push(ku);
+        }
+
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        inputs.clear();
+
+        if target.len() > 50 {
+            // Clipboard Fallback Strategy for large text chunks
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                // save original clipboard (best effort)
+                let old_text_opt = clipboard.get_text().ok();
+                let _ = clipboard.set_text(target);
+                
+                std::thread::sleep(Duration::from_millis(30)); // wait for clipboard
+
+                let vk_v = VIRTUAL_KEY(0x56); // 'V'
+                // simulate Ctrl + V
+                let mut kd_ctrl = INPUT::default();  kd_ctrl.r#type = INPUT_KEYBOARD; kd_ctrl.Anonymous.ki.wVk = VK_CONTROL;
+                let mut kd_v = INPUT::default(); kd_v.r#type = INPUT_KEYBOARD; kd_v.Anonymous.ki.wVk = vk_v;
+                let mut ku_v = INPUT::default(); ku_v.r#type = INPUT_KEYBOARD; ku_v.Anonymous.ki.wVk = vk_v; ku_v.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                let mut ku_ctrl = INPUT::default(); ku_ctrl.r#type = INPUT_KEYBOARD; ku_ctrl.Anonymous.ki.wVk = VK_CONTROL; ku_ctrl.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+
+                inputs.push(kd_ctrl); inputs.push(kd_v); inputs.push(ku_v); inputs.push(ku_ctrl);
+                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                
+                // restore old clipboard asynchronously
+                if let Some(old_text) = old_text_opt {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(500));
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            let _ = cb.set_text(old_text);
+                        }
+                    });
+                }
+                return;
+            }
         }
 
         // 2. Insert target string via Unicode SendInput event
