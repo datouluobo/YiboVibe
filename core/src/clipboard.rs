@@ -117,8 +117,63 @@ impl ClipboardMonitor {
 
         if let Err(e) = tx.send(msg).await {
             error!("Failed to dispatch clipboard over WS channel: {}", e);
-        } else {
             info!("Successfully dispatched encrypted payload to WS channel.");
         }
+    }
+
+    pub fn start_receiving(&self, mut rx: mpsc::Receiver<WsMessage>) {
+        let last_text_ref = Arc::clone(&self.last_text);
+        let mk = Arc::clone(&self.master_key);
+
+        tokio::spawn(async move {
+            info!("Clipboard receiving daemon started.");
+            while let Some(msg) = rx.recv().await {
+                if msg.r#type == "clipboard_update" {
+                    // Extract wrapped key and encrypted data
+                    let wrapped_dk_val = &msg.payload["wrapped_key"];
+                    let enc_data_val = &msg.payload["encrypted_data"];
+
+                    if wrapped_dk_val.is_null() || enc_data_val.is_null() {
+                        error!("Missing encrypted payload fields");
+                        continue;
+                    }
+
+                    // Parse wrapped DK and enc data to proper types
+                    let wrapped_dk: crate::crypto::WrappedDataKey = match serde_json::from_value(wrapped_dk_val.clone()) {
+                        Ok(v) => v,
+                        Err(e) => { error!("Failed to parse wrapped key: {}", e); continue; }
+                    };
+                    
+                    let enc_data: crate::crypto::EncryptedData = match serde_json::from_value(enc_data_val.clone()) {
+                        Ok(v) => v,
+                        Err(e) => { error!("Failed to parse enc data: {}", e); continue; }
+                    };
+
+                    // Unwrap DK using MK
+                    let dk = match mk.unwrap_dk(&wrapped_dk) {
+                        Ok(v) => v,
+                        Err(e) => { error!("Failed to unwrap DK: {:?}", e); continue; }
+                    };
+
+                    // Decrypt Payload using DK
+                    let plaintext = match dk.decrypt_payload(&enc_data) {
+                        Ok(v) => v,
+                        Err(e) => { error!("Failed to decrypt payload: {:?}", e); continue; }
+                    };
+
+                    info!("Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...", plaintext.len());
+
+                    // Set text with loopback protection
+                    let mut last = last_text_ref.lock().unwrap();
+                    *last = plaintext.clone();
+
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Err(e) = clipboard.set_text(plaintext) {
+                            error!("Failed to set arboard clipboard: {}", e);
+                        }
+                    }
+                }
+            }
+        });
     }
 }

@@ -42,7 +42,10 @@ async fn connect_engine(
         Ok(res) => {
             if res.code == 200 && res.data.is_some() {
                 let d = res.data.unwrap();
-                info!("Logged in from GUI! Received Token: {}...", &d.access_token[0..10]);
+                info!(
+                    "Logged in from GUI! Received Token: {}...",
+                    &d.access_token[0..10]
+                );
 
                 let pwd = password.clone();
                 let salt_b64 = d.kdf_salt.clone();
@@ -58,11 +61,12 @@ async fn connect_engine(
 
                 // Attempt WS connection
                 match WsClient::connect(&server_url, &d.access_token).await {
-                    Ok(ws_client) => {
+                    Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Handshake sent implicitly.");
                         let arc_mk = Arc::new(mk);
                         let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
                         cb_monitor.start_polling();
+                        cb_monitor.start_receiving(ws_rx);
 
                         let mut connected_flag = state.is_connected.lock().await;
                         *connected_flag = true;
@@ -72,17 +76,24 @@ async fn connect_engine(
                 }
             } else {
                 api_err = format!("Login failed via API: {}", res.msg);
-                if is_mock_target { needs_mock = true; }
+                if is_mock_target {
+                    needs_mock = true;
+                }
             }
         }
         Err(e) => {
             api_err = format!("Could not connect to NAS: {}", e);
-            if is_mock_target { needs_mock = true; }
+            if is_mock_target {
+                needs_mock = true;
+            }
         }
     }
 
     if needs_mock {
-        info!("MOCK LOGIN ACTIVATED! Bypassing failed backend for local demo. Reason: {}", api_err);
+        info!(
+            "MOCK LOGIN ACTIVATED! Bypassing failed backend for local demo. Reason: {}",
+            api_err
+        );
 
         let pwd = password.clone();
         let mock_mk = tokio::task::spawn_blocking(move || {
@@ -96,11 +107,12 @@ async fn connect_engine(
 
         // Connect to Mock Go Server
         match WsClient::connect(&server_url, "mock_token_for_testing").await {
-            Ok(ws_client) => {
+            Ok((ws_client, ws_rx)) => {
                 info!("WS mockup connection established!");
                 let arc_mk = Arc::new(mock_mk);
                 let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
                 cb_monitor.start_polling();
+                cb_monitor.start_receiving(ws_rx);
 
                 let mut connected_flag = state.is_connected.lock().await;
                 *connected_flag = true;

@@ -29,7 +29,7 @@ impl WsClient {
     pub async fn connect(
         base_url: &str,
         token: &str,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(Self, mpsc::Receiver<WsMessage>), Box<dyn std::error::Error + Send + Sync>> {
         let ws_url = base_url
             .replace("http://", "ws://")
             .replace("https://", "wss://");
@@ -53,6 +53,7 @@ impl WsClient {
 
         // Local channel to allow other parts of the app to send messages out to the WS
         let (tx, mut rx) = mpsc::channel::<WsMessage>(100);
+        let (in_tx, in_rx) = mpsc::channel::<WsMessage>(100);
 
         // Core Read Task (Listens to NAS)
         tokio::spawn(async move {
@@ -62,7 +63,7 @@ impl WsClient {
                     Ok(TungsteniteMessage::Text(text)) => {
                         if let Ok(parsed) = serde_json::from_str::<WsMessage>(&text) {
                             info!("Received WS Broadcast -> Type: {}", parsed.r#type);
-                            // In the future: Dispatch this payload securely via MasterKey
+                            let _ = in_tx.send(parsed).await;
                         } else {
                             error!("Failed to parse incoming WS Message: {}", text);
                         }
@@ -101,7 +102,7 @@ impl WsClient {
             info!("WebSocket write daemon terminated.");
         });
 
-        Ok(Self { tx })
+        Ok((Self { tx }, in_rx))
     }
 
     /// Exposes a convenient method to push a message into the write queue
