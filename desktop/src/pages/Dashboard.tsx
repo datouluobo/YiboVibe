@@ -30,18 +30,15 @@ export default function Dashboard() {
     }, [activeTab]);
 
     useEffect(() => {
-        let unlisten: () => void;
-        const setupListener = async () => {
-            unlisten = await listen<any>("clipboard-event", (event) => {
-                setClipboardLogs(prev => [
-                    { id: Date.now(), timestamp: new Date(), status: event.payload.status, preview: event.payload.preview },
-                    ...prev
-                ].slice(0, 10)); // keep last 10
-            });
-        };
-        setupListener();
+        const unlistenPromise = listen<any>("clipboard-event", (event) => {
+            setClipboardLogs(prev => [
+                { id: Date.now() + Math.random(), timestamp: new Date(), status: event.payload.status, preview: event.payload.preview },
+                ...prev
+            ].slice(0, 10)); // keep last 10
+        });
+
         return () => {
-            if (unlisten) unlisten();
+            unlistenPromise.then(unlistenFn => unlistenFn());
         };
     }, []);
 
