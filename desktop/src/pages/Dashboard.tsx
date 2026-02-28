@@ -322,12 +322,9 @@ export default function Dashboard() {
                                     </h4>
                                     <p style={{ margin: 0, color: '#888', fontSize: '0.9rem' }}>Enable global keyboard hooks for automatic text expansion.</p>
                                 </div>
-                                <label className="flex items-center cursor-pointer">
-                                    <div className="relative">
-                                        <input type="checkbox" className="sr-only" checked={settings.is_snippets_enabled} onChange={() => handleToggleSetting('is_snippets_enabled')} />
-                                        <div className={`block w-14 h-8 rounded-full ${settings.is_snippets_enabled ? 'bg-primary' : 'bg-gray-600'}`} style={{ transition: 'background-color 0.3s' }}></div>
-                                        <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition ${settings.is_snippets_enabled ? 'transform translate-x-6' : ''}`}></div>
-                                    </div>
+                                <label className="custom-toggle">
+                                    <input type="checkbox" checked={settings.is_snippets_enabled} onChange={() => handleToggleSetting('is_snippets_enabled')} />
+                                    <span className="toggle-slider"></span>
                                 </label>
                             </div>
 
@@ -338,12 +335,9 @@ export default function Dashboard() {
                                     </h4>
                                     <p style={{ margin: 0, color: '#888', fontSize: '0.9rem' }}>Securely synchronize clipboard across your connected devices.</p>
                                 </div>
-                                <label className="flex items-center cursor-pointer">
-                                    <div className="relative">
-                                        <input type="checkbox" className="sr-only" checked={settings.is_sync_enabled} onChange={() => handleToggleSetting('is_sync_enabled')} />
-                                        <div className={`block w-14 h-8 rounded-full ${settings.is_sync_enabled ? 'bg-success' : 'bg-gray-600'}`} style={{ transition: 'background-color 0.3s' }}></div>
-                                        <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition ${settings.is_sync_enabled ? 'transform translate-x-6' : ''}`}></div>
-                                    </div>
+                                <label className="custom-toggle">
+                                    <input type="checkbox" checked={settings.is_sync_enabled} onChange={() => handleToggleSetting('is_sync_enabled')} />
+                                    <span className="toggle-slider success"></span>
                                 </label>
                             </div>
                         </div>
