@@ -95,18 +95,23 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     buf.push(c);
                     info!("[HOOK] Key Buffer is now: {}", *buf);
 
-                    // Check for a match
-                    if *buf == "/demo" {
-                        info!("[HOOK] Match Snippet /demo! Returning true string...");
+                    // Check for a match using global config
+                    let current_text = buf.clone();
+                    let snippets = crate::config::get_snippets();
+                    
+                    if let Some(target_text) = snippets.get(&current_text) {
+                        info!("[HOOK] Match Snippet {}! Returning target string...", current_text);
+                        let backspace_count = current_text.chars().count() - 1; // Don't delete the swallowed last char
                         buf.clear(); // Reset
 
-                        // 1. Spawning a new thread to send BACKSPACE x 5 and then the target text
+                        // 1. Spawning a new thread to send BACKSPACEs and then the target text
                         // so we don't block the hook callback thread (which would freeze the global keyboard).
-                        thread::spawn(|| {
-                            replace_text_with_snippet("【YiboFlow Mock Magic Snippet Inject!】");
+                        let target_clone = target_text.clone();
+                        thread::spawn(move || {
+                            replace_text_with_snippet(&target_clone, backspace_count);
                         });
 
-                        // 2. We return 1 to swallow the character 'o' that triggered the match so it isn't printed!
+                        // 2. We return 1 to swallow the character that triggered the match so it isn't printed!
                         return LRESULT(1);
                     }
                 }
@@ -129,7 +134,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
 /// Uses SendInput to simulate deleting the shorthand command and inserting the real text
 #[cfg(target_os = "windows")]
-fn replace_text_with_snippet(target: &str) {
+fn replace_text_with_snippet(target: &str, backspace_count: usize) {
     use std::time::Duration;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_BACK;
 
@@ -137,9 +142,9 @@ fn replace_text_with_snippet(target: &str) {
     std::thread::sleep(Duration::from_millis(15));
 
     unsafe {
-        // 1. Erase "/demo" minus the swallowed 'o', so delete 4 characters!
         let mut inputs: Vec<INPUT> = Vec::new();
-        for _ in 0..4 {
+        // 1. Erase typed snippet minus the swallowed last char
+        for _ in 0..backspace_count {
             // Key Down Backspace
             let mut kd = INPUT::default();
             kd.r#type = INPUT_KEYBOARD;

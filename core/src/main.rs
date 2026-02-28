@@ -1,5 +1,6 @@
 mod api;
 mod clipboard;
+mod config;
 mod crypto;
 mod hook_manager;
 mod ws;

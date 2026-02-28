@@ -43,9 +43,9 @@ async fn connect_engine(
 
                 let pwd = password.clone();
                 let salt_b64 = d.kdf_salt.clone();
-                let mk = tokio::task::spawn_blocking(move || {
-                    MasterKey::derive(&pwd, &salt_b64)
-                }).await.map_err(|e| format!("Task failed: {}", e))?;
+                let mk = tokio::task::spawn_blocking(move || MasterKey::derive(&pwd, &salt_b64))
+                    .await
+                    .map_err(|e| format!("Task failed: {}", e))?;
 
                 let mk = match mk {
                     Ok(k) => k,
@@ -86,8 +86,10 @@ async fn connect_engine(
                 let mock_mk = tokio::task::spawn_blocking(move || {
                     let mock_salt = yiboflow_core::crypto::generate_salt();
                     MasterKey::derive(&pwd, &mock_salt).unwrap()
-                }).await.map_err(|e| format!("Task failed: {}", e))?;
-                
+                })
+                .await
+                .map_err(|e| format!("Task failed: {}", e))?;
+
                 info!("Locally derived Mock MasterKey is ready.");
 
                 let mut connected_flag = state.is_connected.lock().await;
@@ -101,6 +103,21 @@ async fn connect_engine(
     }
 }
 
+#[tauri::command]
+fn get_snippets() -> Result<std::collections::HashMap<String, String>, String> {
+    Ok(yiboflow_core::config::get_snippets())
+}
+
+#[tauri::command]
+fn add_snippet(trigger: String, replacement: String) -> Result<(), String> {
+    yiboflow_core::config::add_snippet(trigger, replacement)
+}
+
+#[tauri::command]
+fn remove_snippet(trigger: String) -> Result<(), String> {
+    yiboflow_core::config::remove_snippet(trigger)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Intialize Rust logger
@@ -111,7 +128,12 @@ pub fn run() {
             is_connected: Mutex::new(false),
         })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![connect_engine])
+        .invoke_handler(tauri::generate_handler![
+            connect_engine,
+            get_snippets,
+            add_snippet,
+            remove_snippet
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
