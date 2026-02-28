@@ -76,54 +76,47 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
     if ncode >= 0 && wparam.0 as u32 == WM_KEYDOWN {
         let kb_struct = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let key_code = kb_struct.vkCode;
+        let mut c: Option<char> = None;
 
-        // Determine if it's the start of a command, e.g., '/' (Forward Slash)
-        // VK_OEM_2 is usually the '/' key on US keyboards
-        if key_code == VK_OEM_2.0 as u32 {
-            info!("[HOOK] Captured forward slash '/'. Beginning command intercept buffer.");
-            let mut buf = KEY_BUFFER.lock().unwrap();
-            buf.clear();
-            buf.push('/');
+        if key_code >= 0x41 && key_code <= 0x5A {
+            c = std::char::from_u32(key_code + 32); // Lowercase a-z
+        } else if key_code >= 0x30 && key_code <= 0x39 {
+            c = std::char::from_u32(key_code); // 0-9
+        } else if key_code == VK_OEM_2.0 as u32 {
+            c = Some('/'); // Slash
+        } else if key_code == 0x08 { // Backspace
+            KEY_BUFFER.lock().unwrap().pop();
+        } else if key_code == 0x20 || key_code == 0x0D { // Space or Enter
+            KEY_BUFFER.lock().unwrap().clear();
         } else {
-            // Very simplified demonstration character conversion: ALPHABET
-            if key_code >= 0x41 && key_code <= 0x5A {
-                // A-Z
-                let mut buf = KEY_BUFFER.lock().unwrap();
-                if buf.starts_with('/') && buf.len() < 10 {
-                    // Max command length 10
-                    let c = std::char::from_u32(key_code + 32).unwrap_or('?'); // To lowercase
-                    buf.push(c);
-                    info!("[HOOK] Key Buffer is now: {}", *buf);
+            // Other special keys (like Esc, F1, etc) might break the word flow
+        }
 
-                    // Check for a match using global config
-                    let current_text = buf.clone();
-                    let snippets = crate::config::get_snippets();
-                    
-                    if let Some(target_text) = snippets.get(&current_text) {
-                        info!("[HOOK] Match Snippet {}! Returning target string...", current_text);
-                        let backspace_count = current_text.chars().count() - 1; // Don't delete the swallowed last char
-                        buf.clear(); // Reset
+        if let Some(ch) = c {
+            let mut buf = KEY_BUFFER.lock().unwrap();
+            buf.push(ch);
+            if buf.len() > 50 {
+                // Keep buffer size manageable
+                buf.remove(0);
+            }
 
-                        // 1. Spawning a new thread to send BACKSPACEs and then the target text
-                        // so we don't block the hook callback thread (which would freeze the global keyboard).
-                        let target_clone = target_text.clone();
-                        thread::spawn(move || {
-                            replace_text_with_snippet(&target_clone, backspace_count);
-                        });
+            // Check against all snippets
+            let snippets = crate::config::get_snippets();
+            for (trigger, replacement) in snippets.iter() {
+                if buf.ends_with(trigger) {
+                    info!("[HOOK] Match Snippet {}! Returning target string...", trigger);
+                    let backspace_count = trigger.chars().count() - 1; // Don't delete the swallowed last char
+                    buf.clear(); // Reset
 
-                        // 2. We return 1 to swallow the character that triggered the match so it isn't printed!
-                        return LRESULT(1);
-                    }
+                    // 1. Spawning a new thread to send BACKSPACEs and then the target text
+                    let target_clone = replacement.clone();
+                    thread::spawn(move || {
+                        replace_text_with_snippet(&target_clone, backspace_count);
+                    });
+
+                    // 2. We return 1 to swallow the character that triggered the match so it isn't printed!
+                    return LRESULT(1);
                 }
-            } else if key_code == 0x08 {
-                // Backspace
-                let mut buf = KEY_BUFFER.lock().unwrap();
-                buf.pop(); // Remove last character
-            } else if key_code == 0x20 || key_code == 0x0D {
-                // Space or Enter
-                // Break buffer
-                let mut buf = KEY_BUFFER.lock().unwrap();
-                buf.clear();
             }
         }
     }
