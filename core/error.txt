@@ -1,0 +1,88 @@
+    Checking yiboflow-core v0.1.0 (F:\Download\GitHub\YiboFlow\core)
+warning: unused import: `Response`
+ --> core\src\api.rs:1:23
+  |
+1 | use reqwest::{Client, Response};
+  |                       ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PasswordHasher`
+ --> core\src\crypto.rs:7:21
+  |
+7 |     password_hash::{PasswordHasher, SaltString, rand_core::RngCore},
+  |                     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::ptr::null_mut`
+ --> core\src\hook_manager.rs:4:5
+  |
+4 | use std::ptr::null_mut;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HINSTANCE`
+  --> core\src\hook_manager.rs:10:34
+   |
+10 | use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+   |                                  ^^^^^^^^^
+
+warning: unused imports: `INPUT_0` and `KEYBDINPUT`
+  --> core\src\hook_manager.rs:15:12
+   |
+15 |     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
+   |            ^^^^^^^                  ^^^^^^^^^^
+
+warning: unused import: `WM_SYSKEYDOWN`
+  --> core\src\hook_manager.rs:21:72
+   |
+21 |     TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+   |                                                                        ^^^^^^^^^^^^^
+
+error: cannot explicitly borrow within an implicitly-borrowing pattern
+   --> core\src\clipboard.rs:131:25
+    |
+131 |             if let Some(ref chan) = ui_tx {
+    |                         ^^^ explicit `ref` binding modifier not allowed when implicitly borrowing
+    |
+    = note: for more information, see <https://doc.rust-lang.org/reference/patterns.html#binding-modes>
+note: matching on a reference type with a non-reference pattern implicitly borrows the contents
+   --> core\src\clipboard.rs:131:20
+    |
+131 |             if let Some(ref chan) = ui_tx {
+    |                    ^^^^^^^^^^^^^^ this non-reference pattern matches on a reference type `&_`
+help: remove the unnecessary binding modifier
+    |
+131 -             if let Some(ref chan) = ui_tx {
+131 +             if let Some(chan) = ui_tx {
+    |
+
+error: future cannot be sent between threads safely
+   --> core\src\clipboard.rs:145:9
+    |
+145 | /         tokio::spawn(async move {
+146 | |             info!("Clipboard receiving daemon started.");
+147 | |             while let Some(msg) = rx.recv().await {
+148 | |                 if msg.r#type == "clipboard_update" {
+...   |
+202 | |         });
+    | |__________^ future created by async block is not `Send`
+    |
+    = help: within `{async block@core\src\clipboard.rs:145:22: 145:32}`, the trait `std::marker::Send` is not implemented for `std::sync::MutexGuard<'_, std::string::String>`
+note: future is not `Send` as this value is used across an await
+   --> core\src\clipboard.rs:196:36
+    |
+184 |                     let mut last = last_text_ref.lock().unwrap();
+    |                         -------- has type `std::sync::MutexGuard<'_, std::string::String>` which is not `Send`
+...
+196 |                                 }).await;
+    |                                    ^^^^^ await occurs here, with `mut last` maybe used later
+note: required by a bound in `tokio::spawn`
+   --> C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\task\spawn.rs:171:21
+    |
+169 |     pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+    |            ----- required by a bound in this function
+170 |     where
+171 |         F: Future + Send + 'static,
+    |                     ^^^^ required by this bound in `spawn`
+
+warning: `yiboflow-core` (lib) generated 6 warnings
+error: could not compile `yiboflow-core` (lib) due to 2 previous errors; 6 warnings emitted

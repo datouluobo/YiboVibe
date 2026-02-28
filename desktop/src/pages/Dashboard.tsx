@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Copy, Keyboard, Settings, LogOut, CheckCircle2, Laptop2, Smartphone, ShieldCheck, Plus, Trash2 } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./Dashboard.css";
 
 export default function Dashboard() {
@@ -14,11 +15,35 @@ export default function Dashboard() {
     const [newTrigger, setNewTrigger] = useState("");
     const [newReplacement, setNewReplacement] = useState("");
 
+    interface ClipboardLog {
+        id: number;
+        timestamp: Date;
+        status: string;
+        preview: string;
+    }
+    const [clipboardLogs, setClipboardLogs] = useState<ClipboardLog[]>([]);
+
     useEffect(() => {
         if (activeTab === "snippets") {
             loadSnippets();
         }
     }, [activeTab]);
+
+    useEffect(() => {
+        let unlisten: () => void;
+        const setupListener = async () => {
+            unlisten = await listen<any>("clipboard-event", (event) => {
+                setClipboardLogs(prev => [
+                    { id: Date.now(), timestamp: new Date(), status: event.payload.status, preview: event.payload.preview },
+                    ...prev
+                ].slice(0, 10)); // keep last 10
+            });
+        };
+        setupListener();
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, []);
 
     const loadSnippets = async () => {
         try {
@@ -136,6 +161,43 @@ export default function Dashboard() {
                                 </div>
                                 <div className="device-status">Idle</div>
                             </div>
+                        </div>
+
+                        <div className="glass-panel device-list" style={{ marginTop: '20px' }}>
+                            <div className="list-header">
+                                <h3>Activity Stream</h3>
+                                <span className="device-count">Live</span>
+                            </div>
+
+                            {clipboardLogs.length === 0 ? (
+                                <p style={{ padding: '20px', color: '#888', textAlign: 'center' }}>No sync activity yet. Try copying something!</p>
+                            ) : (
+                                <div className="activity-feed" style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '10px 20px 20px' }}>
+                                    <AnimatePresence>
+                                        {clipboardLogs.map(log => (
+                                            <motion.div
+                                                key={log.id}
+                                                initial={{ opacity: 0, height: 0 }}
+                                                animate={{ opacity: 1, height: 'auto' }}
+                                                exit={{ opacity: 0, height: 0 }}
+                                                className="activity-item"
+                                                style={{ display: 'flex', alignItems: 'center', gap: '15px', background: 'rgba(255,255,255,0.03)', padding: '12px 15px', borderRadius: '10px' }}
+                                            >
+                                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: log.status === 'sent' ? '#00e676' : '#2979ff', boxShadow: `0 0 10px ${log.status === 'sent' ? '#00e676' : '#2979ff'}` }} />
+                                                <div style={{ flex: 1 }}>
+                                                    <span style={{ color: log.status === 'sent' ? '#00e676' : '#2979ff', fontWeight: 'bold', marginRight: '10px', textTransform: 'uppercase', fontSize: '0.85em' }}>
+                                                        {log.status === 'sent' ? 'Encrypted & Sent' : 'Received & Decrypted'}
+                                                    </span>
+                                                    <span style={{ color: '#eee', fontFamily: 'monospace' }}>{log.preview}</span>
+                                                </div>
+                                                <div style={{ color: '#666', fontSize: '0.85em' }}>
+                                                    {log.timestamp.toLocaleTimeString()}
+                                                </div>
+                                            </motion.div>
+                                        ))}
+                                    </AnimatePresence>
+                                </div>
+                            )}
                         </div>
                     </motion.div>
                 )}

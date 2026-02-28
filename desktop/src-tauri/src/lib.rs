@@ -1,5 +1,6 @@
 use log::{error, info};
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 use yiboflow_core::api::{ApiClient, LoginRequest};
 use yiboflow_core::clipboard::ClipboardMonitor;
@@ -13,11 +14,19 @@ pub struct AppState {
 
 #[tauri::command]
 async fn connect_engine(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
     username: String,
     password: String,
 ) -> Result<bool, String> {
+    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::channel(100);
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = ui_rx.recv().await {
+            let _ = app_clone.emit("clipboard-event", evt);
+        }
+    });
     info!(
         "Tauri Command Received: connect_engine -> Server: {}",
         server_url
@@ -64,7 +73,8 @@ async fn connect_engine(
                     Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Handshake sent implicitly.");
                         let arc_mk = Arc::new(mk);
-                        let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+                        let cb_monitor =
+                            ClipboardMonitor::new(arc_mk, ws_client.tx.clone(), Some(ui_tx));
                         cb_monitor.start_polling();
                         cb_monitor.start_receiving(ws_rx);
 
@@ -110,7 +120,7 @@ async fn connect_engine(
             Ok((ws_client, ws_rx)) => {
                 info!("WS mockup connection established!");
                 let arc_mk = Arc::new(mock_mk);
-                let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone());
+                let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone(), Some(ui_tx));
                 cb_monitor.start_polling();
                 cb_monitor.start_receiving(ws_rx);
 

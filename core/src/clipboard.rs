@@ -7,19 +7,27 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ClipboardEvent {
+    pub status: String,
+    pub preview: String,
+}
+
 /// Holds the last grabbed clipboard string to prevent infinite duplicate sync loops
 pub struct ClipboardMonitor {
     last_text: Arc<Mutex<String>>,
     master_key: Arc<MasterKey>,
     ws_tx: mpsc::Sender<WsMessage>,
+    ui_tx: Option<mpsc::Sender<ClipboardEvent>>,
 }
 
 impl ClipboardMonitor {
-    pub fn new(master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>) -> Self {
+    pub fn new(master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>) -> Self {
         Self {
             last_text: Arc::new(Mutex::new(String::new())),
             master_key,
             ws_tx,
+            ui_tx,
         }
     }
 
@@ -29,6 +37,7 @@ impl ClipboardMonitor {
         let last_text_ref = Arc::clone(&self.last_text);
         let mk = Arc::clone(&self.master_key);
         let tx = self.ws_tx.clone();
+        let ui_tx = self.ui_tx.clone();
 
         tokio::spawn(async move {
             info!("Clipboard monitoring daemon started (polling mode).");
@@ -62,14 +71,14 @@ impl ClipboardMonitor {
                     };
 
                     if should_dispatch {
-                        Self::secure_dispatch(&current_text, &mk, &tx).await;
+                        Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
                     }
                 }
             }
         });
     }
 
-    async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>) {
+    async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>) {
         let preview = if plaintext.len() > 15 {
             format!("{}...", &plaintext[..15])
         } else {
@@ -117,13 +126,21 @@ impl ClipboardMonitor {
 
         if let Err(e) = tx.send(msg).await {
             error!("Failed to dispatch clipboard over WS channel: {}", e);
+        } else {
             info!("Successfully dispatched encrypted payload to WS channel.");
+            if let Some(chan) = ui_tx {
+                let _ = chan.send(ClipboardEvent {
+                    status: "sent".to_string(),
+                    preview: preview.clone(),
+                }).await;
+            }
         }
     }
 
     pub fn start_receiving(&self, mut rx: mpsc::Receiver<WsMessage>) {
         let last_text_ref = Arc::clone(&self.last_text);
         let mk = Arc::clone(&self.master_key);
+        let ui_tx = self.ui_tx.clone();
 
         tokio::spawn(async move {
             info!("Clipboard receiving daemon started.");
@@ -164,12 +181,22 @@ impl ClipboardMonitor {
                     info!("Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...", plaintext.len());
 
                     // Set text with loopback protection
-                    let mut last = last_text_ref.lock().unwrap();
-                    *last = plaintext.clone();
+                    {
+                        let mut last = last_text_ref.lock().unwrap();
+                        *last = plaintext.clone();
+                    } // MutexGuard is dropped here before await!
 
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Err(e) = clipboard.set_text(plaintext) {
+                        if let Err(e) = clipboard.set_text(plaintext.clone()) {
                             error!("Failed to set arboard clipboard: {}", e);
+                        } else {
+                            if let Some(chan) = ui_tx.as_ref() {
+                                let preview = if plaintext.len() > 15 { format!("{}...", &plaintext[..15]) } else { plaintext.clone() };
+                                let _ = chan.send(ClipboardEvent {
+                                    status: "received".to_string(),
+                                    preview,
+                                }).await;
+                            }
                         }
                     }
                 }
