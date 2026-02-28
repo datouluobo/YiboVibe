@@ -31,10 +31,24 @@ export default function Dashboard() {
 
     useEffect(() => {
         const unlistenPromise = listen<any>("clipboard-event", (event) => {
-            setClipboardLogs(prev => [
-                { id: Date.now() + Math.random(), timestamp: new Date(), status: event.payload.status, preview: event.payload.preview },
-                ...prev
-            ].slice(0, 10)); // keep last 10
+            setClipboardLogs(prev => {
+                const newLog = {
+                    id: Date.now() + Math.random(),
+                    timestamp: new Date(),
+                    status: event.payload.status,
+                    preview: event.payload.preview
+                };
+
+                // Aggressive deduplication: ignore exact same text + status if received within the last 1500ms
+                const isDuplicate = prev.some(log =>
+                    log.status === newLog.status &&
+                    log.preview === newLog.preview &&
+                    (newLog.timestamp.getTime() - log.timestamp.getTime() < 1500)
+                );
+                if (isDuplicate) return prev;
+
+                return [newLog, ...prev].slice(0, 10);
+            });
         });
 
         return () => {

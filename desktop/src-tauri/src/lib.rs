@@ -20,6 +20,14 @@ async fn connect_engine(
     username: String,
     password: String,
 ) -> Result<bool, String> {
+    {
+        let connected_flag = state.is_connected.lock().await;
+        if *connected_flag {
+            info!("Already connected. Bypassing engine setup to prevent duplicate monitors.");
+            return Ok(true);
+        }
+    }
+
     let (ui_tx, mut ui_rx) = tokio::sync::mpsc::channel(100);
     let app_clone = app.clone();
     tokio::spawn(async move {
@@ -27,6 +35,7 @@ async fn connect_engine(
             let _ = app_clone.emit("clipboard-event", evt);
         }
     });
+
     info!(
         "Tauri Command Received: connect_engine -> Server: {}",
         server_url
