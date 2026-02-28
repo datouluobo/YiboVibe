@@ -142,6 +142,18 @@ impl DataKey {
         })
     }
 
+    /// Encrypt a binary payload (e.g. raw image bytes) using the DataKey.
+    pub fn encrypt_binary(&self, plaintext: &[u8]) -> Result<EncryptedData, CryptoError> {
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, plaintext)?;
+
+        Ok(EncryptedData {
+            ciphertext: STANDARD.encode(ciphertext),
+            nonce: STANDARD.encode(nonce),
+        })
+    }
+
     /// Decrypt a payload text using the Data Key.
     pub fn decrypt_payload(&self, encrypted_data: &EncryptedData) -> Result<String, CryptoError> {
         let cipher = Aes256Gcm::new(&self.key);
@@ -151,6 +163,16 @@ impl DataKey {
 
         let decrypted_bytes = cipher.decrypt(nonce, ciphertext_bytes.as_ref())?;
         String::from_utf8(decrypted_bytes).map_err(|_| CryptoError::InvalidData)
+    }
+
+    /// Decrypt a binary payload using the Data Key.
+    pub fn decrypt_binary(&self, encrypted_data: &EncryptedData) -> Result<Vec<u8>, CryptoError> {
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce_bytes = STANDARD.decode(&encrypted_data.nonce)?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext_bytes = STANDARD.decode(&encrypted_data.ciphertext)?;
+
+        cipher.decrypt(nonce, ciphertext_bytes.as_ref()).map_err(|e| CryptoError::AesGcm(e.to_string()))
     }
 }
 

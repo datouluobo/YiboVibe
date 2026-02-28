@@ -79,6 +79,10 @@ func main() {
 			// Establish a WebSocket Connection
 			protectedGrp.GET("/ws", handler.WsEndpoint(hub))
 
+			// Handle E2EE large objects (e.g. image clips, files)
+			protectedGrp.POST("/blob", handler.UploadBlob)
+			protectedGrp.GET("/blob/:uuid", handler.DownloadBlob)
+
 			// Query online devices
 			protectedGrp.GET("/online", handler.GetOnlineDevices)
 		}

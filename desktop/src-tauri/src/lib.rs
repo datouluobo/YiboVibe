@@ -83,7 +83,7 @@ async fn connect_engine(
                         info!("WS client created! Handshake sent implicitly.");
                         let arc_mk = Arc::new(mk);
                         let cb_monitor =
-                            ClipboardMonitor::new(arc_mk, ws_client.tx.clone(), Some(ui_tx));
+                            ClipboardMonitor::new(server_url.clone(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), Some(ui_tx));
                         cb_monitor.start_polling();
                         cb_monitor.start_receiving(ws_rx);
 
@@ -129,7 +129,7 @@ async fn connect_engine(
             Ok((ws_client, ws_rx)) => {
                 info!("WS mockup connection established!");
                 let arc_mk = Arc::new(mock_mk);
-                let cb_monitor = ClipboardMonitor::new(arc_mk, ws_client.tx.clone(), Some(ui_tx));
+                let cb_monitor = ClipboardMonitor::new(server_url.clone(), "mock_token_for_testing".to_string(), arc_mk, ws_client.tx.clone(), Some(ui_tx));
                 cb_monitor.start_polling();
                 cb_monitor.start_receiving(ws_rx);
 
