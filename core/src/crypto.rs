@@ -180,3 +180,13 @@ pub fn generate_salt() -> String {
     let salt = SaltString::generate(&mut OsRng);
     salt.as_str().to_string()
 }
+
+pub fn hash_local_password(password: &str, salt_b64: &str) -> Result<String, CryptoError> {
+    let salt = SaltString::from_b64(salt_b64).map_err(|_| CryptoError::InvalidData)?;
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| CryptoError::Argon2(e.to_string()))?
+        .to_string();
+    Ok(password_hash)
+}

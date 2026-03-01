@@ -14,7 +14,7 @@ type User struct {
 	UpdatedAt    time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"updated_at"`
 
 	// Relationships
-	Devices []Device `gorm:"foreignKey:UID;constraint:OnDelete:CASCADE" json:"devices,omitempty"`
+	Devices []Device `gorm:"foreignKey:UID;references:UID;constraint:OnDelete:CASCADE" json:"devices,omitempty"`
 }
 
 // TableName overrides the table name used by User to `users`

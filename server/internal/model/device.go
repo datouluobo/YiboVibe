@@ -15,8 +15,7 @@ type Device struct {
 	LastSeenAt        *time.Time `gorm:"" json:"last_seen_at"`
 	CreatedAt         time.Time  `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
 
-	// Foreign Key Association
-	User *User `gorm:"foreignKey:UID" json:"-"`
+	// Foreign Key Association handled by User
 }
 
 func (Device) TableName() string {

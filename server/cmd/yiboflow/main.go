@@ -27,10 +27,15 @@ func main() {
 
 	// Auto-migrate standard schema if not mocked
 	if config.DB != nil {
-		config.AutoMigrate(
-			&model.User{},
-			&model.Device{},
-		)
+		err1 := config.DB.AutoMigrate(&model.User{})
+		if err1 != nil {
+			log.Fatalf("AutoMigrate User failed: %v", err1)
+		}
+
+		err2 := config.DB.AutoMigrate(&model.Device{})
+		if err2 != nil {
+			log.Fatalf("AutoMigrate Device failed: %v", err2)
+		}
 	}
 
 	// Start the WebSocket Central Hub

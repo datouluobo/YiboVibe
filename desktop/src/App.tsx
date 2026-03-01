@@ -11,9 +11,16 @@ function App() {
     <Router>
       <div className="app-container">
         {/* Tauri Titlebar - Draggable Area */}
-        <div data-tauri-drag-region className="titlebar">
-          <span className="titlebar-title" data-tauri-drag-region>YiboFlow</span>
-          <div className="titlebar-controls">
+        <div
+          className="titlebar"
+          onPointerDown={(e) => {
+            if (e.buttons === 1) {
+              appWindow.startDragging();
+            }
+          }}
+        >
+          <span className="titlebar-title">YiboFlow</span>
+          <div className="titlebar-controls" onPointerDown={(e) => e.stopPropagation()}>
             <div
               className="titlebar-button minimize"
               onClick={() => appWindow.minimize()}

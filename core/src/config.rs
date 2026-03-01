@@ -19,10 +19,15 @@ pub struct AppConfig {
     pub is_sync_enabled: bool,
     #[serde(default = "default_empty_vec")]
     pub blocked_apps: Vec<String>,
+    #[serde(default = "default_empty_string")]
+    pub local_password_hash: String,
+    #[serde(default = "default_empty_string")]
+    pub local_kdf_salt: String,
 }
 
 fn default_true() -> bool { true }
 fn default_empty_vec() -> Vec<String> { Vec::new() }
+fn default_empty_string() -> String { String::new() }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -57,6 +62,8 @@ impl AppConfig {
             is_snippets_enabled: true,
             is_sync_enabled: true,
             blocked_apps: default_empty_vec(),
+            local_password_hash: default_empty_string(),
+            local_kdf_salt: default_empty_string(),
         };
         cfg.save();
         cfg
@@ -116,8 +123,9 @@ pub fn get_blocked_apps() -> Vec<String> {
 
 pub fn add_blocked_app(app_name: String) -> Result<(), String> {
     let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
-    if !cfg.blocked_apps.contains(&app_name) {
-        cfg.blocked_apps.push(app_name);
+    let sanitized_app_name = app_name.trim_matches(|c| c == '\0' || c == ' ').to_lowercase();
+    if !cfg.blocked_apps.contains(&sanitized_app_name) {
+        cfg.blocked_apps.push(sanitized_app_name);
         cfg.save();
     }
     Ok(())
@@ -125,7 +133,8 @@ pub fn add_blocked_app(app_name: String) -> Result<(), String> {
 
 pub fn remove_blocked_app(app_name: String) -> Result<(), String> {
     let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
-    cfg.blocked_apps.retain(|a| a != &app_name);
+    let sanitized_app_name = app_name.trim_matches(|c| c == '\0' || c == ' ').to_lowercase();
+    cfg.blocked_apps.retain(|a| a != &sanitized_app_name);
     cfg.save();
     Ok(())
 }

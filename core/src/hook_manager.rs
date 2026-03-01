@@ -117,10 +117,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     let mut buf = [0u16; MAX_PATH as usize];
                     let len = GetModuleFileNameExW(process_handle, None, &mut buf);
                     if len > 0 {
-                        let current_exe = OsString::from_wide(&buf[..len as usize]);
-                        if let Some(s) = current_exe.to_str() {
-                            active_exe = s.split('\\').last().unwrap_or("").to_lowercase();
-                        }
+                        let mut current_exe = String::from_utf16_lossy(&buf[..len as usize]);
+                        current_exe = current_exe.trim_matches('\0').to_string();
+                        active_exe = current_exe.split('\\').last().unwrap_or("").to_lowercase();
                     }
                 }
             }

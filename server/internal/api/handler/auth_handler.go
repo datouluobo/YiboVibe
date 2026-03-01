@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/datouluobo/YiboFlow/server/internal/service"
@@ -44,7 +45,8 @@ func Register(c *gin.Context) {
 			c.JSON(http.StatusConflict, GeneralResponse{Code: 409, Msg: err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, GeneralResponse{Code: 500, Msg: "Registration failed"})
+		log.Printf("Registration Error: %v", err)
+		c.JSON(http.StatusInternalServerError, GeneralResponse{Code: 500, Msg: "Registration failed: " + err.Error()})
 		return
 	}
 
