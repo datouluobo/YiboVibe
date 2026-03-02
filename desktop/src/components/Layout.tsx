@@ -1,6 +1,19 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Activity, Type, Zap, ClipboardCopy, Navigation, ShieldAlert, Cpu, Settings, LogOut } from "lucide-react";
+import {
+    LayoutDashboard, Keyboard, Sparkles, PenTool, BrainCircuit,
+    Flame, Truck, ShieldCheck, Settings, LogOut
+} from "lucide-react";
+
+interface NavItem {
+    id: string;
+    path: string;
+    icon: any;
+    labelKey: string;
+    tooltipKey: string;
+    disabled?: boolean;
+    group?: string;
+}
 
 export default function Layout() {
     const { t } = useTranslation();
@@ -14,70 +27,135 @@ export default function Layout() {
         navigate("/");
     };
 
-    const navItems = [
-        { id: "hub", path: "/app/hub", icon: Activity, label: t('nav.hub') },
-        { id: "snippets", path: "/app/snippets", icon: Type, label: t('nav.snippets') },
-        { id: "autofill", path: "/app/autofill", icon: Zap, label: t('nav.autofill') },
-        { id: "cloudboard", path: "/app/cloudboard", icon: ClipboardCopy, label: t('nav.cloudboard') },
-        { id: "drop", path: "/app/drop", icon: Navigation, label: t('nav.drop') },
-        { id: "exemptions", path: "/app/exemptions", icon: ShieldAlert, label: t('nav.exemptions') },
-        { id: "predictor", path: "/app/predictor", icon: Cpu, label: t('nav.predictor'), disabled: true },
-        { id: "settings", path: "/app/settings", icon: Settings, label: t('nav.settings') }
+    const navGroups: { id: string; items: NavItem[] }[] = [
+        {
+            id: "overview",
+            items: [
+                { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
+            ]
+        },
+        {
+            id: "input",
+            items: [
+                { id: "flowsnap", path: "/app/flowsnap", icon: Keyboard, labelKey: "nav.flowsnap", tooltipKey: "nav.tooltip_flowsnap" },
+                { id: "flowhint", path: "/app/flowhint", icon: Sparkles, labelKey: "nav.flowhint", tooltipKey: "nav.tooltip_flowhint" },
+                { id: "flowwriter", path: "/app/flowwriter", icon: PenTool, labelKey: "nav.flowwriter", tooltipKey: "nav.tooltip_flowwriter", disabled: true },
+                { id: "flowpredict", path: "/app/flowpredict", icon: BrainCircuit, labelKey: "nav.flowpredict", tooltipKey: "nav.tooltip_flowpredict", disabled: true },
+            ]
+        },
+        {
+            id: "transfer",
+            items: [
+                { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
+                { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
+            ]
+        },
+        {
+            id: "system",
+            items: [
+                { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
+                { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
+            ]
+        }
     ];
 
     return (
         <div className="layout-container" style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
-            <aside className="glass-panel sidebar" style={{ display: 'flex', flexDirection: 'column', padding: '20px 0', borderRight: '1px solid var(--color-glass-border)', background: 'var(--color-surface-elevated)', borderTopLeftRadius: '0', borderBottomLeftRadius: '0', borderTopRightRadius: '0', borderBottomRightRadius: '0' }}>
-                <div style={{ padding: '0 20px', marginBottom: '24px', fontWeight: 600, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Activity size={20} color="var(--color-primary)" />
+            <aside className="glass-panel sidebar" style={{
+                display: 'flex', flexDirection: 'column', padding: '20px 0',
+                borderRight: '1px solid var(--color-glass-border)',
+                background: 'var(--color-surface-elevated)',
+                minWidth: '220px', maxWidth: '220px'
+            }}>
+                {/* Logo */}
+                <div style={{
+                    padding: '0 20px', marginBottom: '20px', fontWeight: 700, fontSize: '17px',
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    letterSpacing: '0.5px'
+                }}>
+                    <LayoutDashboard size={20} color="var(--color-primary)" />
                     YiboFlow
                 </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 12px' }}>
-                    {navItems.map((item) => (
-                        <div
-                            key={item.id}
-                            style={{
-                                padding: '10px 16px',
-                                borderRadius: 'var(--radius-md)',
-                                cursor: item.disabled ? 'not-allowed' : 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '12px',
-                                fontSize: '14px',
-                                opacity: item.disabled ? 0.5 : 1,
-                                background: location.pathname === item.path ? 'var(--color-primary-glow)' : 'transparent',
-                                color: location.pathname === item.path ? 'var(--color-primary)' : 'var(--color-text-main)',
-                                transition: 'background 0.2s',
-                            }}
-                            onClick={() => {
-                                if (!item.disabled) {
-                                    navigate(item.path);
-                                }
-                            }}
-                            onMouseEnter={(e) => {
-                                if (!item.disabled && location.pathname !== item.path) {
-                                    e.currentTarget.style.background = 'var(--color-glass-bg)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (!item.disabled && location.pathname !== item.path) {
-                                    e.currentTarget.style.background = 'transparent';
-                                }
-                            }}
-                        >
-                            <item.icon size={18} />
-                            {item.label}
-                            {item.disabled && <span style={{ fontSize: '10px', background: 'var(--color-border)', padding: '2px 6px', borderRadius: '4px', marginLeft: 'auto' }}>WIP</span>}
+
+                {/* Nav Groups */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0', padding: '0 12px', overflowY: 'auto' }}>
+                    {navGroups.map((group, groupIdx) => (
+                        <div key={group.id}>
+                            {groupIdx > 0 && (
+                                <div style={{
+                                    height: '1px',
+                                    background: 'var(--color-glass-border)',
+                                    margin: '8px 8px',
+                                    opacity: 0.6
+                                }} />
+                            )}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                {group.items.map((item) => {
+                                    const isActive = location.pathname === item.path;
+                                    return (
+                                        <div
+                                            key={item.id}
+                                            title={t(item.tooltipKey)}
+                                            style={{
+                                                padding: '9px 14px',
+                                                borderRadius: 'var(--radius-md)',
+                                                cursor: item.disabled ? 'not-allowed' : 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '11px',
+                                                fontSize: '13.5px',
+                                                opacity: item.disabled ? 0.45 : 1,
+                                                background: isActive ? 'var(--color-primary-glow)' : 'transparent',
+                                                color: isActive ? 'var(--color-primary)' : 'var(--color-text-main)',
+                                                transition: 'background 0.2s, color 0.15s',
+                                                position: 'relative',
+                                            }}
+                                            onClick={() => {
+                                                if (!item.disabled) navigate(item.path);
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                if (!item.disabled && !isActive) {
+                                                    e.currentTarget.style.background = 'var(--color-glass-bg)';
+                                                }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                if (!item.disabled && !isActive) {
+                                                    e.currentTarget.style.background = 'transparent';
+                                                }
+                                            }}
+                                        >
+                                            <item.icon size={17} />
+                                            <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
+                                            {item.disabled && (
+                                                <span style={{
+                                                    fontSize: '9px', fontWeight: 600,
+                                                    background: 'var(--color-border)',
+                                                    padding: '2px 6px', borderRadius: '4px',
+                                                    letterSpacing: '0.5px', textTransform: 'uppercase'
+                                                }}>
+                                                    WIP
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     ))}
                 </div>
-                <div style={{ padding: '0 12px' }}>
+
+                {/* Logout */}
+                <div style={{ padding: '0 12px', marginTop: '8px' }}>
                     <button
                         className="btn-ghost"
                         onClick={handleLogout}
-                        style={{ width: '100%', display: 'flex', justifyContent: 'flex-start', padding: '10px 16px', color: '#ff4d4f' }}
+                        style={{
+                            width: '100%', display: 'flex', justifyContent: 'flex-start',
+                            padding: '9px 14px', color: '#ff4d4f', fontSize: '13.5px',
+                            gap: '11px', alignItems: 'center'
+                        }}
                     >
-                        <LogOut size={18} style={{ marginRight: '8px' }} />
+                        <LogOut size={17} />
                         {t('dashboard.logout')}
                     </button>
                 </div>

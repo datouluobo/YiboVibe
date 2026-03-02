@@ -3,14 +3,15 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Login from "./pages/Login";
 import Layout from "./components/Layout";
-// Pages
-import Hub from "./pages/Hub";
-import Snippets from "./pages/Snippets";
-import AutoFill from "./pages/AutoFill";
-import Cloudboard from "./pages/Cloudboard";
-import Drop from "./pages/Drop";
-import Exemptions from "./pages/Exemptions";
-import Predictor from "./pages/Predictor";
+// Pages — Flow 全家桶
+import FlowDeck from "./pages/FlowDeck";
+import FlowSnap from "./pages/FlowSnap";
+import FlowHint from "./pages/FlowHint";
+import FlowWriter from "./pages/FlowWriter";
+import FlowPredict from "./pages/FlowPredict";
+import FlowSync from "./pages/FlowSync";
+import FlowDrop from "./pages/FlowDrop";
+import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
 import "./App.css";
 
@@ -67,18 +68,17 @@ function App() {
           <Routes>
             <Route path="/" element={<Login />} />
             <Route path="/app" element={<Layout />}>
-              <Route index element={<Navigate to="/app/hub" replace />} />
-              <Route path="hub" element={<Hub />} />
-              <Route path="snippets" element={<Snippets />} />
-              <Route path="autofill" element={<AutoFill />} />
-              <Route path="cloudboard" element={<Cloudboard />} />
-              <Route path="drop" element={<Drop />} />
-              <Route path="exemptions" element={<Exemptions />} />
-              <Route path="predictor" element={<Predictor />} />
+              <Route index element={<Navigate to="/app/flowdeck" replace />} />
+              <Route path="flowdeck" element={<FlowDeck />} />
+              <Route path="flowsnap" element={<FlowSnap />} />
+              <Route path="flowhint" element={<FlowHint />} />
+              <Route path="flowwriter" element={<FlowWriter />} />
+              <Route path="flowpredict" element={<FlowPredict />} />
+              <Route path="flowsync" element={<FlowSync />} />
+              <Route path="flowdrop" element={<FlowDrop />} />
+              <Route path="flowrules" element={<FlowRules />} />
               <Route path="settings" element={<Settings />} />
             </Route>
-            {/* Legacy Fallback */}
-            <Route path="/dashboard" element={<Navigate to="/app/hub" replace />} />
           </Routes>
         </div>
       </div>
