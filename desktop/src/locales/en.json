@@ -1,4 +1,14 @@
 {
+    "nav": {
+        "hub": "Hub",
+        "snippets": "Snippets",
+        "autofill": "Auto-Fill",
+        "cloudboard": "Cloudboard",
+        "drop": "Drop",
+        "exemptions": "Exemptions",
+        "predictor": "Predictor",
+        "settings": "Settings"
+    },
     "login": {
         "title_login": "Login to YiboFlow",
         "subtitle_login": "Enter your Master Password to unlock encrypted snippets.",
@@ -23,7 +33,9 @@
         "tab_settings": "Settings",
         "logout": "Lock & Switch User",
         "status_syncing": "E2EE Engine Active",
-        "engine_connected": "Engine Connected"
+        "engine_connected": "Core Control Hub",
+        "proto_https": "HTTPS (Secure)",
+        "proto_http": "HTTP (Plain LAN)"
     },
     "settings": {
         "title": "Settings",
@@ -43,7 +55,45 @@
         "light_mode": "Light Mode",
         "dark_mode": "Dark Mode",
         "language_english": "English",
-        "language_chinese": "简体中文"
+        "language_chinese": "简体中文",
+        "theme_dark_name": "Dark Glass",
+        "theme_dark_desc": "Default frosted glassmorphism, profound and futuristic",
+        "theme_linear_name": "Linear Minimalist",
+        "theme_linear_desc": "Ultra-clean, high contrast, pure black with 1px borders",
+        "theme_macos_name": "macOS Native",
+        "theme_macos_desc": "Rounded cards and soft ambient shadows",
+        "theme_neon_name": "Midnight Neon",
+        "theme_neon_desc": "Cyberpunk hacker vibes, deep blues and cyan glows",
+        "theme_light_name": "Light Mode",
+        "theme_light_desc": "Clean and bright for daytime use"
+    },
+    "snippets": {
+        "add_btn": "Add Snippet",
+        "trigger": "Trigger",
+        "replacement": "Target Text",
+        "action": "Action",
+        "delete": "Delete",
+        "status_active": "Active",
+        "status_disabled": "Inactive",
+        "empty": "No magic snippets found",
+        "placeholder_trigger": "e.g., /mail",
+        "placeholder_replacement": "admin@example.com",
+        "add_modal_title": "Add Magic Snippet",
+        "add_modal_cancel": "Cancel",
+        "add_modal_save": "Inject"
+    },
+    "autofill": {
+        "title": "Smart Predictive Dictionary",
+        "subtitle": "Build your personal high-frequency vocabulary. Predicts as you type.",
+        "add_btn": "Add Word",
+        "trigger": "Shorthand",
+        "candidate": "Predicted Candidate",
+        "empty": "No predictive words recorded. Try adding your name or a common phrase.",
+        "add_modal_title": "Add to Dictionary",
+        "placeholder_trigger": "e.g. jdoe",
+        "placeholder_candidate": "John Doe",
+        "status_active": "Listening",
+        "status_disabled": "Offline"
     },
     "sync": {
         "title": "Device Synchronization",
@@ -75,15 +125,5 @@
         "network_local": "Loopback",
         "network_lan": "LAN Direct",
         "network_wan": "WAN Tunnel"
-    },
-    "snippets": {
-        "title": "Magic Snippets",
-        "subtitle": "Global keyboard hooks auto-expand your shorthands.",
-        "trigger_placeholder": "Trigger (e.g. /mail)",
-        "replacement_placeholder": "Expansion text...",
-        "add_btn": "Add",
-        "active_snippets_title": "Active Snippets",
-        "rules_count": "{{count}} Rules",
-        "no_snippets_message": "No snippets configured yet. Add one above!"
     }
 }

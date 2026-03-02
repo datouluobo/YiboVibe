@@ -3,6 +3,11 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 
 currentDir = fso.GetParentFolderName(WScript.ScriptFullName)
 
+' 0. Silently kill any previously running instances to free ports/locks
+WshShell.Run "cmd /c taskkill /F /IM ""tauri-app.exe"" /T >nul 2>&1", 0, True
+WshShell.Run "cmd /c taskkill /F /IM ""YiboFlow Desktop.exe"" /T >nul 2>&1", 0, True
+WshShell.Run "cmd /c taskkill /F /IM ""yiboflow_server.exe"" /T >nul 2>&1", 0, True
+
 ' 1. Start Docker completely silently (Wait for it to finish starting)
 WshShell.Run "cmd /c cd """ & currentDir & "\server"" && docker-compose up -d", 0, True
 

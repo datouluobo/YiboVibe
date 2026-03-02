@@ -252,6 +252,21 @@ fn get_blocked_apps() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn get_autofills() -> Result<std::collections::HashMap<String, String>, String> {
+    Ok(yiboflow_core::config::get_autofills())
+}
+
+#[tauri::command]
+fn add_autofill(trigger: String, candidate: String) -> Result<(), String> {
+    yiboflow_core::config::add_autofill(trigger, candidate)
+}
+
+#[tauri::command]
+fn remove_autofill(trigger: String) -> Result<(), String> {
+    yiboflow_core::config::remove_autofill(trigger)
+}
+
+#[tauri::command]
 fn add_blocked_app(app_name: String) -> Result<(), String> {
     yiboflow_core::config::add_blocked_app(app_name)
 }
@@ -265,20 +280,22 @@ fn remove_blocked_app(app_name: String) -> Result<(), String> {
 struct SettingsPayload {
     is_snippets_enabled: bool,
     is_sync_enabled: bool,
+    is_autofill_enabled: bool,
 }
 
 #[tauri::command]
 fn get_settings() -> Result<SettingsPayload, String> {
-    let (is_snippets_enabled, is_sync_enabled) = yiboflow_core::config::get_settings();
+    let (is_snippets_enabled, is_sync_enabled, is_autofill_enabled) = yiboflow_core::config::get_settings();
     Ok(SettingsPayload {
         is_snippets_enabled,
         is_sync_enabled,
+        is_autofill_enabled,
     })
 }
 
 #[tauri::command]
-fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Result<(), String> {
-    yiboflow_core::config::update_settings(is_snippets_enabled, is_sync_enabled)
+fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool, is_autofill_enabled: bool) -> Result<(), String> {
+    yiboflow_core::config::update_settings(is_snippets_enabled, is_sync_enabled, is_autofill_enabled)
 }
 
 #[tauri::command]
@@ -448,6 +465,9 @@ pub fn run() {
             get_snippets,
             add_snippet,
             remove_snippet,
+            get_autofills,
+            add_autofill,
+            remove_autofill,
             get_blocked_apps,
             add_blocked_app,
             remove_blocked_app,

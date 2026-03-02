@@ -1,4 +1,14 @@
 {
+    "nav": {
+        "hub": "控制中枢",
+        "snippets": "魔法短语",
+        "autofill": "自动补全",
+        "cloudboard": "云剪贴板",
+        "drop": "极速互传",
+        "exemptions": "应用豁免",
+        "predictor": "幽灵预测",
+        "settings": "偏好设定"
+    },
     "login": {
         "title_login": "登录 YiboFlow",
         "subtitle_login": "输入主密码解锁您的加密缩略语库。",
@@ -22,8 +32,10 @@
         "tab_snippets": "缩略语",
         "tab_settings": "设置",
         "logout": "锁定并注销",
-        "status_syncing": "端到端加密引擎运行中",
-        "engine_connected": "核心引擎已就绪"
+        "status_syncing": "E2EE 加密同步服务运行中",
+        "engine_connected": "全链路控制中枢",
+        "proto_https": "HTTPS (安全)",
+        "proto_http": "HTTP (明文通道)"
     },
     "settings": {
         "title": "系统设置",
@@ -43,7 +55,45 @@
         "light_mode": "浅色模式",
         "dark_mode": "深色模式",
         "language_english": "English",
-        "language_chinese": "简体中文"
+        "language_chinese": "简体中文",
+        "theme_dark_name": "深渊毛玻璃",
+        "theme_dark_desc": "默认的暗色半透明质感，深邃且充满未来感",
+        "theme_linear_name": "流线极简",
+        "theme_linear_desc": "极客效率粉专属，纯黑底色与 1px 极致冷酷切割线",
+        "theme_macos_name": "果味拟物",
+        "theme_macos_desc": "极度圆润的温润卡片与柔软的环境呼吸阴影",
+        "theme_neon_name": "午夜霓虹",
+        "theme_neon_desc": "等宽字体与深海蓝底，带有赛博朋克的青色霓虹质感",
+        "theme_light_name": "明亮白炽",
+        "theme_light_desc": "为高光办公环境准备的纯净透亮质感"
+    },
+    "snippets": {
+        "add_btn": "添加短语",
+        "trigger": "触发短语",
+        "replacement": "替换侧内容",
+        "action": "操作",
+        "delete": "删除",
+        "status_active": "运行中",
+        "status_disabled": "已停止",
+        "empty": "暂无魔法短语",
+        "placeholder_trigger": "例如: /mail",
+        "placeholder_replacement": "admin@example.com",
+        "add_modal_title": "新增魔法短语",
+        "add_modal_cancel": "取消",
+        "add_modal_save": "注入引擎"
+    },
+    "autofill": {
+        "title": "智能补全词库",
+        "subtitle": "建立您的私人高频词典，输入前几个字母即可无缝上屏弹出。",
+        "add_btn": "添加高频词",
+        "trigger": "记忆短拼",
+        "candidate": "优先联想结果",
+        "empty": "目前没有录入任何高频词库。试着添加您的名字或常用语？",
+        "add_modal_title": "录入词库",
+        "placeholder_trigger": "例如: gs",
+        "placeholder_candidate": "公司法务部张三",
+        "status_active": "监听中",
+        "status_disabled": "未启动"
     },
     "sync": {
         "title": "设备剪切板同步",
@@ -75,15 +125,5 @@
         "network_local": "本机回环",
         "network_lan": "内网直连",
         "network_wan": "公网穿透"
-    },
-    "snippets": {
-        "title": "魔法缩略语引擎",
-        "subtitle": "全局键盘钩子，在任何应用中输入短语自动展开。",
-        "trigger_placeholder": "触发词 (如 /mail)",
-        "replacement_placeholder": "替换内容 (如 hello@yibo.com)",
-        "add_btn": "添加",
-        "active_snippets_title": "已激活的缩略语字典",
-        "rules_count": "{{count}} 组规则",
-        "no_snippets_message": "您的词典空空如也，快在上方建立您的缩略语吧！"
     }
 }

@@ -85,8 +85,8 @@ pub fn start_global_hook() {
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // Only process WM_KEYDOWN for actual key presses, ignore keyup and sys messages unless needed
     if ncode >= 0 && wparam.0 as u32 == WM_KEYDOWN {
-        let (snippets_enabled, _) = crate::config::get_settings();
-        if !snippets_enabled {
+        let (snippets_enabled, _, autofill_enabled) = crate::config::get_settings();
+        if !snippets_enabled && !autofill_enabled {
             return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
         }
 
@@ -161,23 +161,46 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 buf.remove(0);
             }
 
-            // Check against all snippets
-            let snippets = crate::config::get_snippets();
-            for (trigger, replacement) in snippets.iter() {
-                if buf.ends_with(trigger) {
-                    info!("[HOOK] Match Snippet {}! Returning target string...", trigger);
-                    let backspace_count = trigger.chars().count() - 1; // Don't delete the swallowed last char
-                    buf.clear(); // Reset
+            let mut matched_trigger: Option<String> = None;
+            let mut matched_replacement: Option<String> = None;
 
-                    // 1. Spawning a new thread to send BACKSPACEs and then the target text
-                    let target_clone = replacement.clone();
-                    thread::spawn(move || {
-                        replace_text_with_snippet(&target_clone, backspace_count);
-                    });
-
-                    // 2. We return 1 to swallow the character that triggered the match so it isn't printed!
-                    return LRESULT(1);
+            // 1. Check against all snippets
+            if snippets_enabled {
+                let snippets = crate::config::get_snippets();
+                for (trigger, replacement) in snippets.iter() {
+                    if buf.ends_with(trigger) {
+                        matched_trigger = Some(trigger.clone());
+                        matched_replacement = Some(replacement.clone());
+                        break;
+                    }
                 }
+            }
+
+            // 2. Check against autofill dictionary
+            if matched_trigger.is_none() && autofill_enabled {
+                let autofills = crate::config::get_autofills();
+                for (trigger, replacement) in autofills.iter() {
+                    if buf.ends_with(trigger) {
+                        matched_trigger = Some(trigger.clone());
+                        matched_replacement = Some(replacement.clone());
+                        break;
+                    }
+                }
+            }
+
+            if let (Some(trigger), Some(replacement)) = (matched_trigger, matched_replacement) {
+                info!("[HOOK] Match {}! Returning target string...", trigger);
+                let backspace_count = trigger.chars().count() - 1; // Don't delete the swallowed last char
+                buf.clear(); // Reset
+
+                // 1. Spawning a new thread to send BACKSPACEs and then the target text
+                let target_clone = replacement.clone();
+                thread::spawn(move || {
+                    replace_text_with_snippet(&target_clone, backspace_count);
+                });
+
+                // 2. We return 1 to swallow the character that triggered the match so it isn't printed!
+                return LRESULT(1);
             }
         }
     }

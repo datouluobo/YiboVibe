@@ -55,6 +55,70 @@
   --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
 }
 
+[data-theme="linear"] {
+  --color-bg-base: #000000;
+  --color-surface: #0A0A0A;
+  --color-surface-elevated: #111111;
+  --color-primary: #FFFFFF;
+  --color-primary-hover: #EAEAEC;
+  --color-primary-glow: transparent;
+  --color-text-main: #EDEDED;
+  --color-text-muted: #888888;
+  --color-border: #222222;
+  --color-border-focus: #555555;
+  --color-glass-bg: #0A0A0A;
+  --color-glass-border: rgba(255, 255, 255, 0.08);
+  --shadow-glow: none;
+  --shadow-glass: none;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+[data-theme="macos"] {
+  --color-bg-base: #1C1C1E;
+  --color-surface: #2C2C2E;
+  --color-surface-elevated: #3A3A3C;
+  --color-primary: #0A84FF;
+  --color-primary-hover: #007AFF;
+  --color-primary-glow: transparent;
+  --color-text-main: #FFFFFF;
+  --color-text-muted: #EBEBF599;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-focus: rgba(10, 132, 255, 0.5);
+  --color-glass-bg: rgba(44, 44, 46, 0.85);
+  --color-glass-border: rgba(255, 255, 255, 0.05);
+  --shadow-glow: none;
+  --shadow-glass: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+}
+
+[data-theme="neon"] {
+  --color-bg-base: #050510;
+  --color-surface: #0A0A1F;
+  --color-surface-elevated: #131330;
+  --color-primary: #00FFFF;
+  --color-primary-hover: #00CCCC;
+  --color-primary-glow: rgba(0, 255, 255, 0.5);
+  --color-text-main: #FFFFFF;
+  --color-text-muted: #00AAAA;
+  --color-border: #004444;
+  --color-border-focus: #00FFFF;
+  --color-glass-bg: rgba(10, 10, 31, 0.8);
+  --color-glass-border: #004444;
+  --shadow-glow: 0 0 20px rgba(0, 255, 255, 0.4);
+  --shadow-glass: 0 0 15px rgba(0, 255, 255, 0.15);
+  --font-family: 'Fira Code', 'Consolas', monospace;
+  --radius-sm: 0px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

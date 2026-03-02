@@ -1,7 +1,7 @@
-# YiboFlow 项目开发规范文档 (v1.3)
+# YiboFlow 项目开发规范文档 (v2.0)
 
 > **文档性质**：项目技术契约，指导全平台开发实施。
-> **版本历史**：v1.0 初稿 → v1.2 生态整合 → **v1.3 评审修订**（补充安全架构、数据库完善、路线图细化）
+> **版本历史**：v1.0 初稿 → v1.3 评审修订 → **v2.0 功能矩阵重构**（统一命名体系、新增 AI 引擎规范、FlowHint/FlowRules/导入导出体系）
 > **适用范围**：当前为单文档综合规范。随项目推进，各章节可按需拆分为独立子文档。
 
 ---
@@ -10,7 +10,7 @@
 
 **YiboFlow** 是一款以私有 NAS (Synology) 为底座的跨平台生产力增强套件。
 
-* **核心功能**：自定义缩略语全局替换、端到端加密 (E2EE) 剪切板同步、多端定向文件互传。
+* **核心功能**：自定义缩略语全局替换、词库智能补全、AI 文本润色与预测、端到端加密 (E2EE) 剪切板同步、多端定向文件互传。
 * **生态定位**：作为 **Yibo 系列** 的底层通信与自动化引擎，需具备被 **YiboFile (C#)** 集成调用的能力。
 
 ### 1.1 非功能性需求 (NFR)
@@ -18,6 +18,7 @@
 | 指标 | 目标值 | 备注 |
 |------|--------|------|
 | 缩略语替换延迟 | < 50ms | 从击键到替换完成，用户无感知延迟 |
+| 智能补全候选延迟 | < 100ms | 从按键到候选窗弹出 |
 | 剪切板同步端到端延迟 | < 3s (局域网) / < 8s (公网) | 含加密、传输、解密全链路 |
 | 单文件最大传输体积 | ≥ 4GB | 需支持断点续传 |
 | 并发设备数上限 | 每用户 ≤ 10 台 | 首版目标，后续可调 |
@@ -34,19 +35,81 @@
 
 ---
 
-## 2. 系统架构
+## 2. 产品命名体系
 
-### 2.1 技术栈
+YiboFlow 采用统一的 `Flow` 前缀英文命名 + 中国古典意象中文命名的双语命名体系。
+
+### 2.1 功能模块命名表
+
+| 功能 | 英文名 | 中文名 | 典故/意蕴 | 功能定义 | 开发状态 |
+|------|--------|--------|----------|---------|---------|
+| 仪表盘 | **FlowDeck** | **布告** | 衙门布告栏，一览全局 | 全局状态总览、设备监控、AI 引擎连通性 | ✅ 已实现 |
+| 魔法短语 | **FlowSnap** | **锦囊** | 锦囊妙计 | 精确匹配 trigger → 整句替换 | ✅ 已实现 |
+| 智能补全 | **FlowHint** | **灵犀** | 心有灵犀一点通 | 词库前缀补全 → 候选窗 → Tab 上屏 | 🔜 待开发 |
+| AI 润色 | **FlowWriter** | **妙笔** | 妙笔生花 | 选中文本 → AI 重写润色 → 写回原位 | 🔜 待开发 |
+| AI 预测 | **FlowPredict** | **先知** | 先知先觉 | AI 根据上下文预测下一段输入 | 🔜 待开发 |
+| 云剪贴板 | **FlowSync** | **烽火** | 烽火连城，一端燃起全线响应 | E2EE 端到端加密剪贴板实时同步 | ✅ 已实现 |
+| 文件互传 | **FlowDrop** | **走镖** | 镖局护送，安全押运 | P2P 加密跨设备文件投送 | ✅ 已实现 |
+| 规则中心 | **FlowRules** | **中枢** | 神经中枢 | 按应用×功能的细粒度权限矩阵 | 🔜 待重构 |
+| 偏好设定 | **Settings** | **偏好** | — | 主题/语言/AI 引擎/备份恢复 | ✅ 已实现 |
+
+### 2.2 Desktop UI 侧栏布局
+
+侧栏按功能逻辑分为四组，每个导航项悬停时显示 Tooltip 功能简介（中英文双语）：
+
+```
+┌──────────────────────┐
+│  ◉ YiboFlow          │
+│                      │
+│  📊 FlowDeck · 布告   │  ← 全局状态总览与设备连接监控
+│  ─────────────────── │     Tooltip: "全局状态总览与设备连接监控"
+│  ⌨️ FlowSnap · 锦囊   │  ← 第一组：输入增强
+│  ✨ FlowHint · 灵犀   │
+│  🖊️ FlowWriter · 妙笔 │  ← AI 智能（与输入增强相邻）
+│  🔮 FlowPredict · 先知│
+│  ─────────────────── │
+│  📋 FlowSync · 烽火   │  ← 第二组：数据传输
+│  🚀 FlowDrop · 走镖   │
+│  ─────────────────── │
+│  🛡️ FlowRules · 中枢  │  ← 第三组：系统管理
+│  ⚙️ Settings · 偏好   │
+└──────────────────────┘
+```
+
+**分组逻辑**：
+- **第一组**：输入增强全家桶（锦囊 → 灵犀 → 妙笔 → 先知，能力递进）
+- **第二组**：数据传输（烽火 + 走镖）
+- **第三组**：系统管理（中枢 + 偏好）
+
+### 2.3 侧栏 Tooltip 文本
+
+| 侧栏项 | 中文 Tooltip | 英文 Tooltip |
+|--------|-------------|-------------|
+| FlowDeck · 布告 | 全局状态总览与设备连接监控 | System status overview and device monitoring |
+| FlowSnap · 锦囊 | 自定义缩略语，打出关键词即刻展开为完整文本 | Custom text expansion — type a keyword, get full text |
+| FlowHint · 灵犀 | 智能词库补全，按 Tab 上屏候选词 | Dictionary-powered inline completion, Tab to accept |
+| FlowWriter · 妙笔 | 选中文本，AI 一键润色重写 | Select text, AI rewrites with one hotkey |
+| FlowPredict · 先知 | AI 根据上下文预测你接下来要输入的内容 | AI predicts your next input based on context |
+| FlowSync · 烽火 | E2EE 端到端加密剪贴板实时同步 | E2EE real-time clipboard sync across all devices |
+| FlowDrop · 走镖 | P2P 跨设备安全文件极速传输 | P2P encrypted cross-device file transfer |
+| FlowRules · 中枢 | 按应用精细控制每个功能模块的生效范围 | Per-app fine-grained control over all modules |
+| Settings · 偏好 | 主题、语言、AI 引擎与全局偏好配置 | Theme, language, AI engine and global preferences |
+
+---
+
+## 3. 系统架构
+
+### 3.1 技术栈
 
 | 组件 | 技术选型 | 关键职责 |
 | --- | --- | --- |
 | **Server (NAS)** | Go (Gin) + PostgreSQL + Redis | 多用户鉴权、WebSocket 信令中心、TTL 管理 |
-| **Core (Win)** | **Rust 独立进程** | **系统托盘常驻**：键盘 Hook、剪切板监听、加密引擎、文件传输、IPC 服务 |
+| **Core (Win)** | **Rust 独立进程** | **系统托盘常驻**：键盘 Hook、剪切板监听、加密引擎、文件传输、IPC 服务、FlowHint 候选窗 |
 | **Desktop UI** | **Tauri (Rust + React)** | 配置管理面板，与 Core 进程通过 IPC 通信 |
 | **Mobile** | Flutter + 原生扩展 | App 处理大文件与同步；iOS Keyboard Extension 需用 **原生 Swift** 实现 |
 | **Eco-Link** | IPC (Named Pipe) | YiboFile (C#) 调用 YiboFlow Core 的集成通道 |
 
-### 2.2 进程架构（Windows）
+### 3.2 进程架构（Windows）
 
 ```
 ┌──────────────────────────────────┐
@@ -56,6 +119,8 @@
 │  │ 剪切板监听模块              │  │
 │  │ AES-256-GCM 加密引擎       │  │
 │  │ 文件传输引擎 (TCP + 断点续传)│  │
+│  │ FlowHint 候选悬浮窗引擎     │  │
+│  │ AI 引擎适配层 (OpenAI 兼容) │  │
 │  │ Named Pipe IPC Server      │  │
 │  └────────────────────────────┘  │
 └──────┬───────────────────┬───────┘
@@ -70,8 +135,9 @@
 - Core 与 UI 进程分离，Core 可独立运行，UI 关闭不影响后台功能
 - YiboFile 无需启动 Tauri，直接与 Core 进程 IPC 通信
 - Core 进程负责全部业务逻辑，UI 仅为配置界面的薄壳
+- FlowHint 候选悬浮窗由 Core 进程直接管理（需跨应用渲染）
 
-### 2.3 服务端部署
+### 3.3 服务端部署
 
 | 项目 | 规格 |
 |------|------|
@@ -80,7 +146,7 @@
 | 容器编排 | Go Server + PostgreSQL 15+ + Redis 7+ |
 | 数据持久化 | Docker Volume 挂载至 NAS 存储池 |
 
-### 2.4 移动端架构说明
+### 3.4 移动端架构说明
 
 * **Flutter 主 App**：处理剪切板同步 UI、文件接收预览、缩略语配置管理
 * **iOS Keyboard Extension**：
@@ -92,9 +158,9 @@
 
 ---
 
-## 3. 核心功能实现逻辑
+## 4. 核心功能实现逻辑
 
-### 3.1 缩略语智能替换 (Windows)
+### 4.1 FlowSnap 锦囊 — 缩略语智能替换
 
 #### 触发与执行
 
@@ -109,25 +175,124 @@
 | **模拟按键** (默认) | 逐字符发送键盘事件 | 通用文本编辑器 |
 | **剪切板粘贴** | 写入剪切板后模拟 Ctrl+V | 富文本编辑器 (Word, Notion 等) |
 
-> 用户可在设置中选择默认策略，也可按应用单独配置。
+> 用户可在设置中选择默认策略，也可通过 FlowRules 中枢按应用单独配置。
 
 #### 安全机制
 
-* **应用黑名单/白名单**：
-  - 默认全局启用
-  - 支持用户手动添加"排除应用"列表（如游戏、IDE 调试模式）
-  - 通过前台窗口进程名匹配
+* **应用控制**：通过 FlowRules 中枢按应用控制启用/禁用（详见第 5 章）
+* **撤销 (Undo)**：替换后保留最近一次替换的原始文本，`Ctrl+Z` 可还原，窗口期 5 秒
+* **IME 兼容**：检测输入法组合窗口状态，IME 处于组合/候选状态时暂停匹配
 
-* **撤销 (Undo)**：
-  - 替换后保留最近一次替换的原始文本
-  - 用户按 `Ctrl+Z` 时还原为原始输入（prefix + keyword）
-  - 撤销窗口期：替换后 5 秒内有效
+### 4.2 FlowHint 灵犀 — 词库智能补全
 
-* **IME 兼容**：
-  - 检测输入法组合窗口（Composition Window）状态
-  - IME 处于组合/候选状态时暂停匹配，确认输入后再恢复
+#### 功能定义
 
-### 3.2 剪切板 E2EE 同步
+基于词库的**前缀匹配**，在光标附近弹出候选窗，用户按 Tab 确认上屏。与 FlowSnap 锦囊的区别：
+
+| 维度 | FlowSnap 锦囊 | FlowHint 灵犀 |
+|------|--------------|--------------|
+| 触发时机 | 精确匹配整个 trigger 后自动替换 | 持续前缀匹配，每次按键重新计算候选 |
+| 视觉反馈 | 无（直接替换） | 光标旁候选悬浮窗 |
+| 上屏方式 | 自动替换 | 用户主动按 Tab 确认 |
+| 词库 | 全局统一 | **按应用分组绑定**（通过 FlowRules 中枢） |
+| 默认状态 | 默认启用 | **默认关闭**（需先建词库） |
+
+#### 候选窗交互规范
+
+**渲染方式**：独立无边框、始终置顶、鼠标穿透的悬浮窗（第一阶段：纯候选窗；第二阶段：补充光标后虚影文字）。
+
+**操作键位**：
+
+| 操作 | 默认键 | 说明 |
+|------|--------|------|
+| 接受当前候选 | `Tab` | 可在 FlowRules 中枢按应用自定义 |
+| 上移候选 | `↑` | 仅在候选窗可见时劫持，不可见时放行 |
+| 下移候选 | `↓` | 同上 |
+| 取消/关闭候选 | `Esc` | 关闭候选窗，继续正常输入 |
+| 按序号选择 | **不使用** | 避免与输入法数字候选冲突 |
+
+**关键原则**：候选窗不可见 = 完全透明，所有按键原样放行，用户感知不到 FlowHint 存在。
+
+#### 可配置参数
+
+| 参数 | 默认值 | 级别 | 说明 |
+|------|--------|------|------|
+| `min_trigger_chars` | `2` | 词库级 / 全局 | 输入满 N 个字符后才开始匹配 |
+| `max_candidates` | `5` | 全局 | 候选窗最多显示条目数 |
+| `debounce_ms` | `50` | 全局 | 每次按键后等待时间，防止高速打字时频繁刷新 |
+
+#### 词库体系
+
+**存储位置**：
+- 内置词库：`%APPDATA%/YiboFlow/dictionaries/builtin/`
+- 用户词库：`%APPDATA%/YiboFlow/dictionaries/custom/`
+
+**标准词库格式** (JSON)：
+
+```json
+{
+  "id": "cmd_commands",
+  "name": "CMD 命令词库",
+  "description": "Windows 命令提示符常用命令补全",
+  "version": "1.0",
+  "author": "YiboFlow Built-in",
+  "min_trigger_chars": 2,
+  "entries": [
+    {
+      "prefix": "pi",
+      "candidates": ["ping", "ping 127.0.0.1", "pip install"]
+    },
+    {
+      "prefix": "ipc",
+      "candidates": ["ipconfig", "ipconfig /all", "ipconfig /flushdns"]
+    }
+  ]
+}
+```
+
+**首批内置词库计划**：
+
+| 词库文件 | 绑定场景 | 条目量（估） |
+|---------|---------|------------|
+| `cmd.json` | cmd.exe | ~80 |
+| `git.json` | 通用（任何终端） | ~100 |
+| `general_zh.json` | 通用 | ~200 |
+
+> 更多词库（powershell, docker, ffmpeg, curl, kubectl 等）作为后续候选，由需求驱动逐步添加。
+
+**词库管理功能**（灵犀页面内）：
+
+| 操作 | 内置词库 | 自定义词库 |
+|------|---------|----------|
+| 查看词条 | ✅ | ✅ |
+| 编辑词条 | ❌ | ✅ |
+| 添加词条 | ❌ | ✅ |
+| 删除词条 | ❌ | ✅ |
+| 启用/禁用 | ✅ | ✅ |
+| 删除整个词库 | ❌ | ✅ (二次确认) |
+| 另存为自定义副本 | ✅ | — |
+
+"另存为自定义"支持用户基于内置词库修改，不破坏原始数据。
+
+### 4.3 FlowWriter 妙笔 — AI 文本润色（待开发）
+
+**功能定义**：选中文本 → 按全局快捷键 → AI 润色重写 → 直接替换回原位置。
+
+**技术流程**：`读取剪贴板选中内容 → 调用 AI 引擎 → 获得润色结果 → 模拟 Ctrl+V 写回`
+
+**触发方式**：用户可自定义的全局快捷键（默认建议 `Ctrl+Shift+R`）。
+
+**AI 引擎**：共享统一 AI 引擎配置（详见第 6 章）。
+
+### 4.4 FlowPredict 先知 — AI 预测补全（待开发）
+
+**功能定义**：AI 根据当前上下文预测用户接下来要输入的内容，类似 GitHub Copilot 的体验。
+
+**触发方式**：用户可自定义的全局快捷键（默认建议 `Ctrl+Shift+P`），或持续被动预测模式。
+
+**AI 引擎**：共享统一 AI 引擎配置（详见第 6 章）。
+
+### 4.5 FlowSync 烽火 — 剪切板 E2EE 同步
 
 #### 加密架构（MK/DK 分层密钥）
 
@@ -144,37 +309,28 @@
 ```
 
 **关键设计**：
-- **KDF**：Argon2id，参数 `m=64MB, t=3, p=4`（具体参数按目标设备性能调优）
+- **KDF**：Argon2id，参数 `m=64MB, t=3, p=4`
 - **Data Key**：每条剪切板记录使用独立随机 DK，DK 用 MK 包裹后一并存储
 - **密码修改**：仅需用新 MK 重新包裹所有 DK，**无需重加密历史数据**
-- **Nonce 管理**：每次加密随机生成 12 字节 nonce，与密文一起存储，绝不重复使用
+- **Nonce 管理**：每次加密随机生成 12 字节 nonce，与密文一起存储
 - **NAS 零知识**：服务端仅存储密文和 Wrapped DK，不触碰明文和 MK
 
 #### 同步流程
 
 * **文本**：加密后直传 NAS，各端拉取后解密
 * **图片**：加密后存 NAS 文件系统，生成 UUID 引用，各端按需拉取解密
-* **移动端唤醒**：NAS 发送静默推送 (Silent Push) → App 后台唤醒拉取 → 失败则待用户打开 App 时补齐
+* **移动端唤醒**：NAS 发送静默推送 → App 后台唤醒拉取 → 失败则待用户打开 App 时补齐
 
-### 3.3 文件互传与 TTL
+### 4.6 FlowDrop 走镖 — 文件互传与 TTL
 
 #### 传输协议
 
 * **方案**：基于 **TCP 直连**（同一局域网 / VPN 可达场景）
-  - 私有 NAS 场景下无需 WebRTC/STUN/TURN 的复杂信令
   - NAS 作为设备发现与连接协调的信令中心
   - 设备不可直连时，NAS 作为临时中转
-
-* **断点续传**：
-  - 文件分块传输（默认块大小 1MB）
-  - 每块传输完成后记录偏移量
-  - 断线重连后从上次偏移量继续
-
-* **完整性校验**：
-  - 传输完成后计算 SHA-256 全文校验和
-  - 与发送端校验和比对，不一致则重传
-
-* **传输加密**：文件传输通道 **不加密**（私有局域网场景，信任网络环境）
+* **断点续传**：文件分块传输（默认 1MB），每块完成后记录偏移量
+* **完整性校验**：SHA-256 全文校验和
+* **传输加密**：文件传输通道不加密（私有局域网场景，信任网络环境）
 
 #### TTL 自动销毁
 
@@ -184,21 +340,223 @@
 
 ---
 
-## 4. 跨语言集成规划（YiboFile 预留接口）
+## 5. FlowRules 中枢 — 应用规则中心
 
-> **当前阶段**：仅在架构层面预留集成空间，不做实际开发。
-> **集成范围**：YiboFile 可调用 YiboFlow 向指定设备发送文件。
+### 5.1 设计理念
 
-### 4.1 集成方式：IPC (Named Pipe)
+从简单的"应用黑名单"进化为**每个功能模块 × 每个应用**的细粒度权限矩阵。支持：
+- 某个功能对某个程序不生效（黑名单）
+- 某个功能仅对某个程序生效（白名单）
+- FlowHint 灵犀可绑定特定词库到特定应用
 
-YiboFlow Core 作为系统托盘常驻进程，对外暴露 Named Pipe 接口。
+### 5.2 矩阵 UI 设计
 
-**管道名称**：`\\.\pipe\YiboFlow`
+```
+             FlowSnap  FlowHint  FlowWriter FlowPredict FlowSync
+全选/反选      [☑]       [☐]       [☑]        [☑]        [☑]
+────────────────────────────────────────────────────────────────
+(默认)         ✅         ⊘         ✅         ✅          ✅
+cmd.exe        ❌         ⚙️         ❌         ❌          ✅
+code.exe       ✅         ⚙️         ✅         ✅          ✅
+lol.exe        ❌         ❌         ❌         ❌          ❌
+────────────────────────────────────────────────────────────────
+                                                [+ 添加应用规则]
+```
 
-**消息协议**（JSON，预定义）：
+### 5.3 开关状态
+
+| 状态 | 视觉 | 含义 | 交互 |
+|------|------|------|------|
+| 开 `✅` | 绿色实心 | 功能对此应用启用 | 单击切换 |
+| 关 `❌` | 灰色空心 | 功能对此应用禁用 | 单击切换 |
+| 半开 `⚙️` | 主题色齿轮 | FlowHint 专属：已启用并绑定特定词库 | 单击开关 + 齿轮图标进词库选择 |
+
+**FlowHint 列交互**：单击切换开关，旁边小齿轮图标点击进入词库绑定面板。
+
+### 5.4 "默认"行
+
+`(默认)` 行代表全局默认策略。未被手动加入矩阵的应用都继承此行配置。`⊘` 表示默认关闭。
+
+### 5.5 全选/反选
+
+- **列头**：控制该功能对所有已添加应用的开关（不影响默认行）
+- **行尾**：控制该应用的所有功能开关
+
+### 5.6 数据结构
 
 ```json
-// 请求：发送文件
+{
+  "rules": {
+    "default": {
+      "flowsnap": true,
+      "flowhint": false,
+      "flowwriter": true,
+      "flowpredict": true,
+      "flowsync": true
+    },
+    "app_overrides": [
+      {
+        "process": "cmd.exe",
+        "display_name": "命令提示符",
+        "flowsnap": false,
+        "flowhint": true,
+        "flowhint_dicts": ["cmd_commands"],
+        "flowwriter": false,
+        "flowpredict": false,
+        "flowsync": true
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 6. AI 引擎配置规范
+
+FlowWriter 妙笔与 FlowPredict 先知共享同一套 AI 引擎后端配置。
+
+### 6.1 端点拓扑
+
+支持三层部署场景：
+
+| 层级 | 示例 | 说明 |
+|------|------|------|
+| ☁️ 云端 API | DeepSeek / OpenAI / Gemini / Anthropic | 公网调用 |
+| 🏢 局域网自建 | NAS Ollama / vLLM / 工作站 GPU 服务器 | 内网低延迟，隐私可控 |
+| 🏠 本机 | localhost Ollama | 完全离线，零泄露 |
+
+### 6.2 Provider 预置列表
+
+| Provider | 默认 Endpoint | 默认 Model | 协议 |
+|---------|--------------|-----------|------|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | OpenAI 兼容 |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` | OpenAI 原生 |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.0-flash` | OpenAI 兼容 |
+| Anthropic | `https://api.anthropic.com/v1` | `claude-sonnet-4-20250514` | 薄转换层适配 |
+| 本机 Ollama | `http://localhost:11434/v1` | 自动检测 | OpenAI 兼容 |
+| 局域网自建 | 用户自定义 URL | 用户自定义 | OpenAI 兼容 |
+| 完全自定义 | 用户填写 | 用户填写 | OpenAI 兼容 |
+
+**统一协议**：底层全部走 OpenAI 兼容的 `/chat/completions` 格式。
+
+### 6.3 自动模式 — 可排序优先级链
+
+"自动"模式按用户自定义的优先级链依次探测端点，直到找到可用的。
+
+- 优先级链**支持拖拽排序**
+- 右侧实时显示各端点连通状态
+- 底部显示当前实际激活的端点和模型
+
+### 6.4 快捷键配置
+
+| 功能 | 默认快捷键 |
+|------|----------|
+| FlowWriter 妙笔触发 | `Ctrl+Shift+R` |
+| FlowPredict 先知触发 | `Ctrl+Shift+P` |
+
+均支持用户在 Settings 偏好中自定义录入。
+
+---
+
+## 7. FlowDeck 布告 — 仪表盘规范
+
+FlowDeck 布告页面展示四个状态区块：
+
+| 区块 | 内容 |
+|------|------|
+| 引擎核心 | Core 引擎运行状态、E2EE 密钥就绪状态、键盘 Hook 激活状态 |
+| 同步网络 | NAS Hub 连接状态、WebSocket 活跃状态、协议安全性 (HTTPS/HTTP) |
+| 在线设备 | 已连接的设备列表及各设备状态 |
+| AI 引擎 | 所有已配置端点的实时连通性、当前激活端点及模型、延迟指标 |
+
+---
+
+## 8. 导入导出与备份恢复
+
+### 8.1 统一入口
+
+导入导出功能**统一收口到 Settings 偏好页面**的"备份与恢复"面板，不在各功能模块页面分散入口。
+
+### 8.2 导出流程
+
+点击"导出配置" → 弹窗选择要导出的模块 → 生成 `.ybflow` 文件。
+
+可选模块：
+- ☑ FlowSnap 锦囊数据
+- ☑ FlowHint 灵犀词库
+- ☑ FlowRules 中枢规则
+- ☑ Settings 偏好设定
+- ☑ AI 引擎配置
+- ☐ 包含 API Key（敏感数据，默认不勾选）
+
+### 8.3 备份包结构
+
+```
+YiboFlow_Backup_20260302.ybflow    ← 实际为 .zip
+├── manifest.json                  ← 版本信息、导出时间、模块清单
+├── snippets.json                  ← FlowSnap 锦囊数据
+├── rules.json                     ← FlowRules 中枢矩阵
+├── settings.json                  ← 偏好设定
+├── dictionaries/                  ← FlowHint 灵犀词库
+│   ├── cmd.json
+│   └── my_custom_dict.json
+└── ai_prompts.json                ← FlowWriter/FlowPredict 自定义 Prompt 模板
+```
+
+### 8.4 导入流程
+
+选择 `.ybflow` 文件 → 自动检测内容 → 弹出预览面板：
+
+- **快捷操作**（覆盖 80% 场景）：`[全部合并]` `[全部覆盖]` `[全部忽略]`
+- **精细控制**：逐模块下拉选择冲突策略
+
+### 8.5 冲突处理策略
+
+| 策略 | 行为 |
+|------|------|
+| **合并** | 新增不存在的条目，已存在的保留本地版本 |
+| **覆盖** | 完全替换本地数据 |
+| **重命名** | 冲突条目以 `_imported` 后缀保留两个版本 |
+| **忽略** | 跳过此模块，不导入 |
+
+---
+
+## 9. 主题与国际化
+
+### 9.1 主题引擎
+
+支持 5 套视觉主题，通过 CSS 变量 + `data-theme` 属性切换：
+
+| 主题 ID | 英文名 | 中文名 | 风格 |
+|---------|--------|--------|------|
+| `dark` | Dark Glass | 深渊毛玻璃 | 默认，暗色半透明质感 |
+| `linear` | Linear Minimalist | 流线极简 | 纯黑底色，1px 极致切割线 |
+| `macos` | macOS Native | 果味拟物 | 圆润卡片，柔软环境阴影 |
+| `neon` | Midnight Neon | 午夜霓虹 | 深海蓝底，赛博朋克青色霓虹 |
+| `light` | Light Mode | 明亮白炽 | 高光办公环境纯净质感 |
+
+主题选择持久化到 `localStorage`，启动时自动恢复。
+
+### 9.2 国际化
+
+- 支持 **中文 / English** 双语无缝切换
+- 翻译资源文件：`src/locales/zh.json`、`src/locales/en.json`
+- 通过 `react-i18next` 实现运行时切换
+
+---
+
+## 10. 跨语言集成规划（YiboFile 预留接口）
+
+> **当前阶段**：仅在架构层面预留集成空间，不做实际开发。
+
+### 10.1 集成方式：IPC (Named Pipe)
+
+管道名称：`\\.\pipe\YiboFlow`
+
+消息协议（JSON）：
+
+```json
 {
   "action": "send_file",
   "payload": {
@@ -208,88 +566,88 @@ YiboFlow Core 作为系统托盘常驻进程，对外暴露 Named Pipe 接口。
   },
   "request_id": "uuid-v4"
 }
-
-// 响应
-{
-  "request_id": "uuid-v4",
-  "status": "accepted",  // accepted / rejected / error
-  "transfer_id": "uuid-v4",
-  "message": ""
-}
 ```
 
-### 4.2 YiboFile 侧调用示例（C# 伪代码）
-
-```csharp
-// 未来集成时的参考实现
-using var pipe = new NamedPipeClientStream(".", "YiboFlow", PipeDirection.InOut);
-await pipe.ConnectAsync(timeout: 3000);
-
-var request = JsonSerializer.Serialize(new {
-    action = "send_file",
-    payload = new { file_path = selectedFile, target_device = "phone_01", ttl_hours = 24 },
-    request_id = Guid.NewGuid().ToString()
-});
-
-// 发送请求 & 读取响应
-await pipe.WriteAsync(Encoding.UTF8.GetBytes(request));
-// ...
-```
-
-### 4.3 后续扩展空间
+### 10.2 后续扩展空间
 
 | 阶段 | 能力 | 说明 |
 |------|------|------|
-| **Phase 1** (预留) | `send_file` | 当前仅定义接口，不实现 |
-| **Phase 2** | `query_devices` | 查询在线设备列表 |
-| **Phase 3** | `sync_clipboard` | 触发剪切板同步 |
-| **Phase 4** | `get_transfer_status` | 查询传输进度 |
+| Phase 1 (预留) | `send_file` | 当前仅定义接口 |
+| Phase 2 | `query_devices` | 查询在线设备列表 |
+| Phase 3 | `sync_clipboard` | 触发剪切板同步 |
+| Phase 4 | `get_transfer_status` | 查询传输进度 |
 
 ---
 
-## 5. 认证与鉴权
+## 11. 认证与鉴权
 
-### 5.1 方案选型：JWT + Refresh Token
+### 11.1 JWT + Refresh Token
 
 | 令牌 | 有效期 | 用途 |
 |------|--------|------|
-| Access Token | 15 分钟 | API 请求鉴权，短期有效 |
-| Refresh Token | 30 天 | 刷新 Access Token，存储于客户端安全区域 |
+| Access Token | 15 分钟 | API 请求鉴权 |
+| Refresh Token | 30 天 | 刷新 Access Token |
 
-### 5.2 多设备登录策略
+### 11.2 多设备登录
 
-- 同一用户允许多设备同时在线（上限由 `devices` 表控制）
+- 同一用户允许多设备同时在线
 - 每台设备独立持有 Refresh Token
-- 用户可在任意客户端查看并远程注销指定设备的会话
-
-### 5.3 流程
-
-```
-客户端                              NAS Server
-  │                                     │
-  │── POST /api/auth/login ────────────▶│  验证 username + password_hash
-  │◀── { access_token, refresh_token } ─│  注册 device, 下发令牌对
-  │                                     │
-  │── GET /api/xxx (Bearer token) ─────▶│  校验 Access Token
-  │                                     │
-  │── POST /api/auth/refresh ──────────▶│  Refresh Token 轮换
-  │◀── { new_access, new_refresh } ─────│
-```
+- 支持远程注销指定设备会话
 
 ---
 
-## 6. API 契约规范
+## 12. API 契约规范
 
-### 6.1 通用约定
+### 12.1 通用约定
 
 | 项目 | 规范 |
 |------|------|
 | 基础路径 | `/api/v1` |
 | 数据格式 | JSON (`Content-Type: application/json`) |
 | 认证方式 | `Authorization: Bearer <access_token>` |
-| 时间格式 | ISO 8601 (`2026-02-27T00:00:00Z`) |
+| 时间格式 | ISO 8601 |
 
-### 6.2 错误响应格式
+### 12.2 核心接口
+
+#### 认证
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/auth/login` | 登录 |
+| POST | `/api/v1/auth/refresh` | 刷新 Token |
+| POST | `/api/v1/auth/logout` | 注销 |
+
+#### 设备
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/devices` | 设备列表 |
+| DELETE | `/api/v1/devices/:id` | 远程注销设备 |
+
+#### 缩略语
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/snippets` | 拉取全量（含 `version` 乐观锁） |
+| POST | `/api/v1/snippets` | 新增 |
+| PUT | `/api/v1/snippets/:id` | 更新 |
+| DELETE | `/api/v1/snippets/:id` | 删除 |
+
+#### 剪切板
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/clipboard` | 推送加密内容 |
+| GET | `/api/v1/clipboard/latest` | 拉取最新 |
+| GET | `/api/v1/clipboard/history` | 分页拉取历史 |
+
+#### WebSocket
+
+| 路径 | 说明 |
+|------|------|
+| `ws://.../api/v1/ws` | 长连接：设备通知、剪切板推送、传输信令 |
+
+### 12.3 错误响应格式
 
 ```json
 {
@@ -301,131 +659,68 @@ await pipe.WriteAsync(Encoding.UTF8.GetBytes(request));
 }
 ```
 
-### 6.3 错误码体系
-
-| HTTP 状态码 | 错误码前缀 | 说明 |
-|------------|-----------|------|
-| 400 | `INVALID_*` | 请求参数校验失败 |
-| 401 | `AUTH_*` | 认证失败 / Token 过期 |
-| 403 | `FORBIDDEN_*` | 无权访问 |
-| 404 | `*_NOT_FOUND` | 资源不存在 |
-| 409 | `CONFLICT_*` | 版本冲突（乐观锁） |
-| 500 | `INTERNAL_*` | 服务端内部错误 |
-
-### 6.4 核心接口概览
-
-#### 认证
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/auth/login` | 用户登录，返回令牌对 |
-| POST | `/api/v1/auth/refresh` | 刷新 Access Token |
-| POST | `/api/v1/auth/logout` | 注销当前设备会话 |
-
-#### 设备
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/devices` | 获取当前用户的设备列表 |
-| DELETE | `/api/v1/devices/:id` | 远程注销指定设备 |
-
-#### 缩略语
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/snippets` | 拉取全量缩略语（含 `version`） |
-| POST | `/api/v1/snippets` | 新增缩略语 |
-| PUT | `/api/v1/snippets/:id` | 更新（需携带 `version` 乐观锁） |
-| DELETE | `/api/v1/snippets/:id` | 删除缩略语 |
-
-#### 剪切板
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/clipboard` | 推送加密剪切板内容 |
-| GET | `/api/v1/clipboard/latest` | 拉取最新一条 |
-| GET | `/api/v1/clipboard/history` | 分页拉取历史 |
-
-#### WebSocket
-
-| 路径 | 说明 |
-|------|------|
-| `ws://.../api/v1/ws` | 长连接通道：设备上下线通知、剪切板推送、传输信令 |
-
 ---
 
-## 7. 数据库设计 (PostgreSQL ≥ 15)
-
-### 7.1 DDL
+## 13. 数据库设计 (PostgreSQL ≥ 15)
 
 ```sql
--- ============================================
 -- 用户表
--- ============================================
 CREATE TABLE users (
     uid SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    kdf_salt TEXT NOT NULL,              -- Argon2id 盐值，用于客户端派生 MK
+    kdf_salt TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- ============================================
--- 设备表：多端同步依赖设备注册
--- ============================================
+-- 设备表
 CREATE TABLE devices (
     id SERIAL PRIMARY KEY,
     uid INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
     device_name VARCHAR(100) NOT NULL,
-    device_type VARCHAR(20) NOT NULL,    -- 'windows', 'ios', 'android'
-    device_fingerprint TEXT UNIQUE NOT NULL, -- 设备唯一标识
-    refresh_token_hash TEXT,             -- 当前 Refresh Token 的哈希
+    device_type VARCHAR(20) NOT NULL,
+    device_fingerprint TEXT UNIQUE NOT NULL,
+    refresh_token_hash TEXT,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_devices_uid ON devices(uid);
 
--- ============================================
 -- 缩略语表
--- ============================================
 CREATE TABLE snippets (
     id SERIAL PRIMARY KEY,
     uid INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
     prefix VARCHAR(5) NOT NULL DEFAULT '/',
     keyword VARCHAR(50) NOT NULL,
-    content_enc TEXT NOT NULL,            -- AES-256-GCM 加密内容
-    wrapped_dk TEXT NOT NULL,             -- MK 包裹的 Data Key
-    nonce TEXT NOT NULL,                  -- GCM nonce (Base64)
-    version INTEGER NOT NULL DEFAULT 1,  -- 乐观锁版本号，多端同步冲突检测
+    content_enc TEXT NOT NULL,
+    wrapped_dk TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX idx_snippets_uid_prefix_keyword ON snippets(uid, prefix, keyword);
 
--- ============================================
 -- 剪切板历史
--- ============================================
 CREATE TABLE clipboard_history (
     id SERIAL PRIMARY KEY,
     uid INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
-    data_type VARCHAR(10) NOT NULL,      -- 'text' / 'image'
-    payload_enc TEXT,                     -- 文本：加密内容；图片：NULL
-    file_ref UUID,                       -- 图片：NAS 文件系统中的 UUID 引用
+    data_type VARCHAR(10) NOT NULL,
+    payload_enc TEXT,
+    file_ref UUID,
     wrapped_dk TEXT NOT NULL,
     nonce TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,       -- TTL 过期时间
+    expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_clipboard_uid ON clipboard_history(uid);
 CREATE INDEX idx_clipboard_expires ON clipboard_history(expires_at);
 
--- ============================================
 -- 文件传输记录
--- ============================================
 CREATE TABLE file_transfers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sender_uid INTEGER NOT NULL REFERENCES users(uid),
@@ -433,12 +728,11 @@ CREATE TABLE file_transfers (
     receiver_device_id INTEGER NOT NULL REFERENCES devices(id),
     file_name TEXT NOT NULL,
     file_size BIGINT NOT NULL,
-    file_hash TEXT,                       -- SHA-256 校验和
-    storage_path TEXT,                    -- NAS 中转时的临时路径
+    file_hash TEXT,
+    storage_path TEXT,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
-        -- pending / transferring / completed / expired / failed
-    bytes_transferred BIGINT DEFAULT 0,  -- 断点续传进度
-    expires_at TIMESTAMP NOT NULL,       -- TTL 过期时间
+    bytes_transferred BIGINT DEFAULT 0,
+    expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -447,57 +741,54 @@ CREATE INDEX idx_transfers_status ON file_transfers(status);
 CREATE INDEX idx_transfers_expires ON file_transfers(expires_at);
 ```
 
-### 7.2 版本兼容性策略
-
-| 项目 | 策略 |
-|------|------|
-| **数据库迁移** | 使用 `golang-migrate` 管理 SQL 迁移文件，每次变更生成带时间戳的 up/down 文件 |
-| **API 版本** | URL 路径版本化 (`/api/v1`, `/api/v2`)，旧版本至少保留一个大版本的兼容期 |
-| **客户端-服务端协商** | 客户端启动时请求 `/api/v1/version`，服务端返回最低兼容客户端版本号；低于此版本强制提示升级 |
-| **Snippet 同步冲突** | 基于 `version` 字段的乐观锁；冲突时客户端提示用户手动选择 |
-
 ---
 
-## 8. 项目目录结构
+## 14. 项目目录结构
 
 ```
 YiboFlow/
 ├── docs/                      # 文档
 │   └── specs.md               # 本文档
 ├── server/                    # Go 服务端
-│   ├── cmd/                   # 入口
-│   ├── internal/              # 业务逻辑 (handler, service, repo)
-│   ├── migrations/            # 数据库迁移文件
+│   ├── cmd/
+│   ├── internal/
+│   ├── migrations/
 │   ├── Dockerfile
 │   └── go.mod
 ├── core/                      # Rust 核心进程 (yiboflow-core)
 │   ├── src/
-│   │   ├── keyboard/          # 键盘 Hook
+│   │   ├── keyboard/          # 键盘 Hook + FlowSnap + FlowHint 匹配
 │   │   ├── clipboard/         # 剪切板监听
 │   │   ├── crypto/            # 加密引擎
 │   │   ├── transfer/          # 文件传输
+│   │   ├── ai/                # AI 引擎适配层
+│   │   ├── hint_window/       # FlowHint 候选悬浮窗
 │   │   ├── ipc/               # Named Pipe IPC Server
 │   │   ├── tray/              # 系统托盘
 │   │   └── main.rs
 │   └── Cargo.toml
 ├── desktop/                   # Tauri UI (配置面板)
-│   ├── src/                   # React 前端
-│   ├── src-tauri/             # Tauri Rust 胶水层
+│   ├── src/
+│   │   ├── pages/             # 各功能模块页面
+│   │   ├── components/        # 通用组件
+│   │   ├── locales/           # i18n 翻译资源
+│   │   └── index.css          # 主题系统
+│   ├── src-tauri/
 │   └── package.json
 ├── mobile/                    # Flutter 移动端
-│   ├── lib/                   # Dart 代码
-│   ├── ios/                   # 含原生 Swift Keyboard Extension
+│   ├── lib/
+│   ├── ios/
 │   └── android/
-├── proto/                     # 共享协议定义 (IPC 消息格式等)
-├── docker-compose.yml         # 服务端一键部署
+├── proto/                     # 共享协议定义
+├── docker-compose.yml
 └── README.md
 ```
 
 ---
 
-## 9. CI/CD 与构建规范
+## 15. CI/CD 与构建规范
 
-### 9.1 构建矩阵
+### 15.1 构建矩阵
 
 | 组件 | 构建工具 | 产物 |
 |------|---------|------|
@@ -506,71 +797,34 @@ YiboFlow/
 | Desktop | `npm run tauri build` | `YiboFlow-Setup.msi` |
 | Mobile | `flutter build apk/ipa` | `.apk` / `.ipa` |
 
-### 9.2 版本号规范
+### 15.2 版本号规范
 
 采用 **语义化版本 (SemVer)**：`MAJOR.MINOR.PATCH`
 
-| 变更类型 | 版本递增 | 示例 |
-|---------|---------|------|
-| 不兼容的 API/协议变更 | MAJOR | 加密协议升级 |
-| 向后兼容的功能新增 | MINOR | 新增缩略语分组功能 |
-| Bug 修复 | PATCH | 修复剪切板同步延迟 |
+**关键约束**：Server、Core、Desktop、Mobile 各自独立版本号，通过 `/api/v1/version` 约束兼容范围。
 
-**关键约束**：Server、Core、Desktop、Mobile 各自独立版本号，但通过 `/api/v1/version` 接口约束兼容范围。
+### 15.3 提交规范 (Conventional Commits)
 
-### 9.3 发布流程
-
-```
-feature/* ──▶ develop ──▶ release/* ──▶ main (tag vX.Y.Z)
-    │           │            │
-    └── PR ─────┘     └── 集成测试 ──┘
-```
+格式：`<type>(<scope>): <description>`
+- **type**: `feat`, `fix`, `refactor`, `docs`, `chore`
+- **scope**: `server`, `core`, `desktop`, `proto`, `deps`
 
 ---
 
-## 10. 版本控制与代码管理方案
+## 16. 版本控制与代码管理
 
-> 采用 **Hybrid（混合）方案**：主仓库 + 移动端独立仓库。
+### 16.1 仓库架构
 
-### 10.1 仓库架构设计
+| 仓库 | 包含组件 | 说明 |
+|------|---------|------|
+| `YiboFlow` | Server, Core, Desktop, Docs, Proto | 主仓库，核心组件原子提交 |
+| `YiboFlow-Mobile` | Flutter App, iOS Extension | 移动端独立仓库 |
 
-为平衡"核心组件强耦合需原子提交"和"移动端发布节奏独立"的冲突，项目拆分为 2 个代码仓库：
+### 16.2 分支模型
 
-| 仓库名称 | 包含组件 | 说明 |
-|---------|---------|------|
-| `YiboFlow` | Server, Core, Desktop, Docs, Proto | **主仓库**。三端核心逻辑强耦合（如 API 变更需双端同改），在同一仓库可实现原子 PR。 |
-| `YiboFlow-Mobile` | Flutter App, iOS Extension | **移动端独立仓库**。受应用商店审核约束及构建链限制，独立管理发布节奏。 |
+- **全局分支模型**：日常开发基于单一 `master` 分支，目前不采用复杂的多分支模型（如 Git Flow 等）。所有变更原子提交至 `master`。
 
-### 10.2 分支模型与开发工作流
-
-#### 主仓库 (`YiboFlow`) — 采用 GitHub Flow (简化版)
-
-三端核心紧密联动，直接基于 `main` 分支迭代。
-* **`main`**：受保护的默认分支，始终保持可部署/可编译状态。
-* **`feat/*`, `fix/*`**：日常开发分支，完成后通过 PR 合并入 `main`。
-* **`release/vX.Y.0`**：(可选) 仅在某个大版本需要长期维护打补丁时创建。
-
-#### 移动端仓库 (`YiboFlow-Mobile`) — 采用 Git Flow
-
-移动端需要维护线上版的稳定性，同时开发新功能。
-* **`main`**：对应线上商店的最新发布可用版本。
-* **`develop`**：日常集成开发分支。
-* **`feature/*`**：从 `develop` 切出，开发新功能。
-* **`release/*`**：发布前准备分支（改版本号、上架截图等），测试通过后合并至 `main` 和 `develop`。
-* **`hotfix/*`**：处理线上紧急 Bug，从 `main` 切出，修复后合并回 `main` 和 `develop`。
-
-### 10.3 版本号体系与兼容矩阵
-
-#### 统一基准与独立发布
-
-* **主仓库平台版本 (Platform Version)**：
-  `YiboFlow` 仓库整体采用单一版本号（如 `v0.3.0`）。发布时，Server、Core 进程、Tauri 桌面端三者统一打相同的 Tag。
-* **移动端独立版本 (Mobile Version)**：
-  `YiboFlow-Mobile` 仓库拥有独立的版本号（如 `v0.2.0`）。
-
-#### 跨端兼容性控制 (`compatibility.json`)
-
-在主仓库的根目录维护一个跨端兼容矩阵文件，用于指导移动端编译、CI 拦截，以及服务端 API 握手校验：
+### 16.3 兼容矩阵 (`compatibility.json`)
 
 ```json
 {
@@ -580,174 +834,116 @@ feature/* ──▶ develop ──▶ release/* ──▶ main (tag vX.Y.Z)
     "core": ">=v0.3.0",
     "desktop": ">=v0.3.0",
     "mobile": ">=v0.2.0"
-  },
-  "updated_at": "2026-02-27"
+  }
 }
 ```
 
-### 10.4 提交规范 (Conventional Commits)
+---
 
-所有仓库均需遵循 Angular 规范格式，以便跨模块归类变更：
-`<type>(<scope>): <description>`
+## 17. 日志与可观测性
 
-* **type**: `feat` (新功能), `fix` (修复), `refactor` (重构), `docs` (文档), `chore` (构建/杂项)
-* **scope**:
-  * 主仓库：`server`, `core`, `desktop`, `proto`, `deps`
-  * 移动仓库：`ios`, `android`, `ui`, `sync`
-
-*示例：* `feat(core): 实现 AES-256-GCM 剪切板加密模块`
+- 所有组件采用 JSON 格式结构化日志
+- 日志级别：`error` / `warn` / `info` / `debug`
+- Server 暴露 `/metrics` (Prometheus)，可选接入 Grafana
 
 ---
 
-## 11. 日志与可观测性
+## 18. 错误处理约定
 
-### 11.1 结构化日志
-
-所有组件采用 JSON 格式结构化日志：
-
-```json
-{
-  "ts": "2026-02-27T00:00:00.000Z",
-  "level": "info",
-  "module": "clipboard",
-  "msg": "clipboard sync completed",
-  "uid": 1,
-  "device": "windows_pc",
-  "latency_ms": 120
-}
-```
-
-### 11.2 日志级别
-
-| 级别 | 用途 |
-|------|------|
-| `error` | 影响功能的异常，需关注 |
-| `warn` | 潜在问题，如重试、超时 |
-| `info` | 关键业务事件（登录、同步、传输完成） |
-| `debug` | 开发调试信息，生产环境关闭 |
-
-### 11.3 NAS 端监控
-
-- Server 暴露 `/metrics` 端点 (Prometheus 格式)
-- 关键指标：WebSocket 连接数、API 延迟 P95、剪切板同步成功率
-- 可选：接入 Grafana 仪表盘（需 NAS Docker 额外部署）
-
----
-
-## 12. 错误处理约定
-
-### 12.1 客户端错误处理原则
+### 客户端
 
 | 场景 | 策略 |
 |------|------|
 | 网络不可达 | 本地缓存待同步数据，恢复后自动重试 |
-| Token 过期 | 自动使用 Refresh Token 刷新，失败则跳转登录 |
-| 版本不兼容 | 弹窗提示用户升级，阻止继续操作 |
-| 同步冲突 (乐观锁) | 展示冲突内容，让用户选择保留版本 |
+| Token 过期 | 自动刷新，失败则跳转登录 |
+| 版本不兼容 | 弹窗提示升级 |
+| 同步冲突 | 展示冲突内容，用户选择保留版本 |
 
-### 12.2 服务端错误处理原则
+### 服务端
 
 | 场景 | 策略 |
 |------|------|
-| 数据库连接失败 | 重试 3 次后返回 503，记录 error 日志 |
-| Redis 不可用 | 降级为数据库直读，warn 日志 |
-| TTL 清理失败 | 记录失败记录，下次定时任务补偿清理 |
+| 数据库连接失败 | 重试 3 次后 503 |
+| Redis 不可用 | 降级数据库直读 |
+| TTL 清理失败 | 下次定时任务补偿 |
 
 ---
 
-## 13. 开发路线图 (Roadmap)
+## 19. 隐私与数据安全声明
 
-### 第零阶段：安全基础设施与技术验证
-
-**目标**：验证核心技术可行性，确立安全架构。
-
-| 任务 | 验收标准 | 预估 |
-|------|---------|------|
-| MK/DK 分层密钥方案原型 | Rust 实现加密/解密/密码修改全流程，单元测试通过 | 2-3 天 |
-| Rust 加密库选型基准测试 | `ring` vs `RustCrypto` 性能对比报告 | 1 天 |
-| Rust 全局键盘 Hook 原型 | 能捕获全局按键，正确处理 IME 状态 | 2-3 天 |
-| Tauri 无窗口托盘模式验证 | Core 进程独立运行 + 托盘图标 + 菜单 | 1 天 |
-| NAS Docker 部署基线 | Go + PostgreSQL + Redis compose 启动成功 | 1 天 |
-
-### 第一阶段：NAS 信令中台
-
-**目标**：可用的多用户后端服务。
-
-| 任务 | 验收标准 | 预估 |
-|------|---------|------|
-| 用户注册/登录 API | JWT 认证全流程，Refresh Token 轮换 | 3-4 天 |
-| 设备注册/管理 API | CRUD + 远程注销 | 2 天 |
-| WebSocket 长连接 | 设备上下线通知，心跳保活 | 2-3 天 |
-| Redis TTL 自动回收 | 过期数据定时清理，含补偿机制 | 1-2 天 |
-| 数据库迁移基础设施 | golang-migrate 集成，初始迁移文件 | 1 天 |
-
-### 第二阶段：Rust 核心模块 (yiboflow-core)
-
-**目标**：Windows 端核心功能可用。
-
-| 任务 | 验收标准 | 预估 |
-|------|---------|------|
-| 键盘 Hook + 缩略语替换 | 支持双策略（模拟按键/剪切板）、黑名单、Undo、IME 兼容 | 5-7 天 |
-| 剪切板监听 + E2EE 同步 | MK/DK 加密全链路，与 NAS 双向同步 | 4-5 天 |
-| 文件传输引擎 | TCP 直连 + 断点续传 + SHA-256 校验 | 4-5 天 |
-| Named Pipe IPC Server | 接收 JSON 指令，执行文件发送（为 YiboFile 预留） | 2 天 |
-| 系统托盘 | 开机自启、托盘图标、右键菜单 | 1-2 天 |
-
-### 第三阶段：客户端 UI
-
-**目标**：桌面端配置界面 + 移动端基本功能。
-
-| 任务 | 验收标准 | 预估 |
-|------|---------|------|
-| Tauri 配置面板 | 缩略语管理、设备管理、同步设置 | 5-7 天 |
-| Flutter App (Android) | 剪切板查看/同步、文件接收、缩略语配置 | 7-10 天 |
-| iOS 适配 | 待获取开发者账号后进行 | 待定 |
-
-### 第四阶段：生态闭环与打磨
-
-**目标**：YiboFile 集成 + 整体优化。
-
-| 任务 | 验收标准 | 预估 |
-|------|---------|------|
-| YiboFile 集成桥接 | 右键菜单触发文件发送（通过 Named Pipe） | 3-4 天 |
-| 全链路测试 | 多设备同步、断点续传、TTL 清理集成测试 | 3-5 天 |
-| 性能优化 | NFR 指标全部达标 | 2-3 天 |
-
----
-
-## 14. 隐私与数据安全声明
-
-虽然 YiboFlow 为私有部署，仍需遵循以下数据处理原则：
-
-* **最小化存储**：仅存储用户主动同步的数据，不采集额外信息
+* **最小化存储**：仅存储用户主动同步的数据
 * **TTL 强制过期**：所有临时数据必须有过期时间，到期自动物理删除
 * **零知识架构**：NAS 服务端不存储、不处理任何明文内容
-* **用户可控**：用户可随时导出/删除个人数据和全部设备记录
+* **用户可控**：用户可随时导出/删除个人数据
 
 ---
 
-## 15. 未来功能规划与愿景 (Future Outlook)
+## 20. 开发路线图 (Roadmap)
 
-记录后续计划引入的体验增强与架构突破功能：
+### Phase 0：安全基础设施与技术验证 ✅
 
-### 15.1 全局感知级智能补全与预测系统 (Auto-Complete & AI Prediction)
-* **全局输入状态机与监控**：软件启动后即进入静默监控模式，嗅探用户的高频输入习惯。
-* **规则级智能提示 (类似 AI IDE 补全)**：根据当前输入的上下文，提供半透明的悬浮代码或文本补全提示（类似于 Copilot 的 Ghost Text 体验）。支持用户自定义的程序语言库与词典库。
-* **(远期) 接入大模型 (LLM) 的打字辅助预测推荐引擎**：
-  * 利用大语言模型 "预测下一个概率最高的 Token (字词)" 的天然特性。
-  * **混合部署架构 (Hybrid AI Architecture)**：
-    * **Cloud API**：接入云端强大的大语言模型 API（如 DeepSeek, OpenAI 等）。
-    * **NAS Local LLM**：充分利用 NAS 硬件算力，使用类似 Ollama 或 llama.cpp 等技术，在 NAS 端旁路部署一个十几亿参数的超轻量级本地模型（专精 Next-Token 预测）。实现绝对隐私的零延迟/内网低延迟的高性能文字补全引擎。
-  * **形态体现**：在用户打字时，像一个“增强版输入法候选框”一样悬浮在屏幕光标附近，提供 AI 实时预测的下文内容。
-  * 通过配置专门的热键（如 `Tab` 等）让用户以惊人的速度直接一键确认上屏输入。这与“缩略语”、“常规补全”属于一脉相承的效率增强进化。
+| 任务 | 状态 |
+|------|------|
+| MK/DK 分层密钥方案 | ✅ 完成 |
+| Rust 全局键盘 Hook | ✅ 完成 |
+| Tauri 托盘模式 | ✅ 完成 |
+| NAS Docker 部署基线 | ✅ 完成 |
 
-### 15.2 物理按键级重映射层 (Hardware Key Remapping)
-* **键位级功能替代 (Key Substitution)**：支持极其深度的硬件级按键拦截与置换。
-  * **硬核刚需场景**：针对特殊尺寸/紧凑型键盘（如 Pad 键盘没有物理 F1 等功能键），允许用户将其他任意物理按键（如 `[` 或长按某功能键组合）**在系统底层直接映射替换** 为所需的物理按键功能（如 `F2` 重命名指令等）。
+### Phase 1：NAS 信令中台
 
-### 15.2 缩略语增强架构 (Snippets Advanced)
-* **文件夹嵌套管理 (Folders & Categories)**：引入树状分类系统，支持将数百上千个缩略语分配进不同的多级文件夹中进行结构化收纳与快速定位。
+| 任务 | 验收标准 |
+|------|---------|
+| 用户注册/登录 API | JWT 全流程 |
+| 设备管理 API | CRUD + 远程注销 |
+| WebSocket 长连接 | 心跳保活 |
+| Redis TTL 回收 | 定时清理 + 补偿 |
 
-### 15.3 国际化与视觉进化 (i18n & Theming)
-* **多语言架构 (i18n)**：彻底抽离桌面端与移动端的硬编码文本，首期提供 **中文 / English** 双语无缝切换。
-* **外观模式 (Light/Dark Mode)**：引入全局主题引擎，支持明亮模式 (Light) 和暗黑模式 (Dark)，并支持跟随跨系统 (Windows/macOS/iOS) 主题自动色板平滑切换。
+### Phase 2：Rust 核心模块
+
+| 任务 | 验收标准 |
+|------|---------|
+| FlowSnap 锦囊 | 双策略替换、IME 兼容、Undo |
+| FlowSync 烽火 | MK/DK 加密全链路同步 |
+| FlowDrop 走镖 | TCP + 断点续传 + SHA-256 |
+| Named Pipe IPC | JSON 指令处理 |
+
+### Phase 3：Desktop UI + FlowRules 中枢
+
+| 任务 | 验收标准 |
+|------|---------|
+| Tauri 配置面板 | 全部功能模块页面 |
+| FlowRules 中枢重构 | 矩阵 UI + 按应用权限控制 |
+| 导入导出系统 | .ybflow 备份/恢复 |
+
+### Phase 4：FlowHint 灵犀
+
+| 任务 | 验收标准 |
+|------|---------|
+| 候选悬浮窗引擎 | ↑↓ 选择 + Tab 上屏 |
+| 词库加载系统 | builtin + custom 目录热加载 |
+| 词库管理 UI | 查看/编辑/创建/删除/另存为 |
+| 首批内置词库 | cmd + git + general_zh |
+
+### Phase 5：AI 引擎 + FlowWriter 妙笔 + FlowPredict 先知
+
+| 任务 | 验收标准 |
+|------|---------|
+| AI 引擎适配层 | OpenAI 兼容协议，多 Provider 支持 |
+| 自动模式优先级链 | 可拖拽排序 + 实时状态探测 |
+| FlowWriter 妙笔 | 全局快捷键→选中润色→写回 |
+| FlowPredict 先知 | 上下文预测 + 候选窗 |
+
+### Phase 6：生态闭环
+
+| 任务 | 验收标准 |
+|------|---------|
+| YiboFile 集成 | Named Pipe 桥接 |
+| Flutter 移动端 | 剪切板同步 + 文件接收 |
+| 全链路测试 | NFR 指标达标 |
+
+### 未来展望
+
+- **物理按键级重映射层**：硬件级按键拦截与置换
+- **FlowSnap 增强**：文件夹嵌套管理，树状分类
+- **FlowHint 社区词库市场**：在线仓库，一键安装
+- **FlowHint 虚影渲染**：光标后半透明预测文字（Phase 4 第二阶段）

@@ -1,11 +1,31 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
+import Layout from "./components/Layout";
+// Pages
+import Hub from "./pages/Hub";
+import Snippets from "./pages/Snippets";
+import AutoFill from "./pages/AutoFill";
+import Cloudboard from "./pages/Cloudboard";
+import Drop from "./pages/Drop";
+import Exemptions from "./pages/Exemptions";
+import Predictor from "./pages/Predictor";
+import Settings from "./pages/Settings";
 import "./App.css";
 
 function App() {
-  const appWindow = getCurrentWindow();
+  let appWindow: any = null;
+  try {
+    appWindow = getCurrentWindow();
+  } catch (e) {
+    console.warn("Not running in Tauri environment, skipping window APIs");
+  }
+
+  useEffect(() => {
+    const theme = localStorage.getItem('yiboflow_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  }, []);
 
   return (
     <Router>
@@ -43,10 +63,22 @@ function App() {
         </div>
 
         {/* Main Routed Content */}
-        <div className="main-content">
+        <div className="main-content" style={{ display: 'flex' }}>
           <Routes>
             <Route path="/" element={<Login />} />
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/app" element={<Layout />}>
+              <Route index element={<Navigate to="/app/hub" replace />} />
+              <Route path="hub" element={<Hub />} />
+              <Route path="snippets" element={<Snippets />} />
+              <Route path="autofill" element={<AutoFill />} />
+              <Route path="cloudboard" element={<Cloudboard />} />
+              <Route path="drop" element={<Drop />} />
+              <Route path="exemptions" element={<Exemptions />} />
+              <Route path="predictor" element={<Predictor />} />
+              <Route path="settings" element={<Settings />} />
+            </Route>
+            {/* Legacy Fallback */}
+            <Route path="/dashboard" element={<Navigate to="/app/hub" replace />} />
           </Routes>
         </div>
       </div>

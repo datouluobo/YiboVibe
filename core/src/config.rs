@@ -13,8 +13,12 @@ lazy_static! {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub snippets: HashMap<String, String>,
+    #[serde(default = "default_empty_hashmap")]
+    pub autofill_dict: HashMap<String, String>,
     #[serde(default = "default_true")]
     pub is_snippets_enabled: bool,
+    #[serde(default = "default_true")]
+    pub is_autofill_enabled: bool,
     #[serde(default = "default_true")]
     pub is_sync_enabled: bool,
     #[serde(default = "default_empty_vec")]
@@ -28,6 +32,7 @@ pub struct AppConfig {
 fn default_true() -> bool { true }
 fn default_empty_vec() -> Vec<String> { Vec::new() }
 fn default_empty_string() -> String { String::new() }
+fn default_empty_hashmap() -> HashMap<String, String> { HashMap::new() }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -59,7 +64,9 @@ impl AppConfig {
 
         let cfg = Self { 
             snippets: default_snippets,
+            autofill_dict: HashMap::new(),
             is_snippets_enabled: true,
+            is_autofill_enabled: true,
             is_sync_enabled: true,
             blocked_apps: default_empty_vec(),
             local_password_hash: default_empty_string(),
@@ -103,15 +110,37 @@ pub fn get_snippets() -> HashMap<String, String> {
     cfg.snippets.clone()
 }
 
-pub fn get_settings() -> (bool, bool) {
-    let cfg = GLOBAL_CONFIG.read().unwrap();
-    (cfg.is_snippets_enabled, cfg.is_sync_enabled)
+pub fn add_autofill(trigger: String, candidate: String) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.autofill_dict.insert(trigger, candidate);
+    cfg.save();
+    info!("Autofill added successfully.");
+    Ok(())
 }
 
-pub fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool) -> Result<(), String> {
+pub fn remove_autofill(trigger: String) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.autofill_dict.remove(&trigger);
+    cfg.save();
+    info!("Autofill removed successfully.");
+    Ok(())
+}
+
+pub fn get_autofills() -> HashMap<String, String> {
+    let cfg = GLOBAL_CONFIG.read().unwrap();
+    cfg.autofill_dict.clone()
+}
+
+pub fn get_settings() -> (bool, bool, bool) {
+    let cfg = GLOBAL_CONFIG.read().unwrap();
+    (cfg.is_snippets_enabled, cfg.is_sync_enabled, cfg.is_autofill_enabled)
+}
+
+pub fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool, is_autofill_enabled: bool) -> Result<(), String> {
     let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_snippets_enabled = is_snippets_enabled;
     cfg.is_sync_enabled = is_sync_enabled;
+    cfg.is_autofill_enabled = is_autofill_enabled;
     cfg.save();
     Ok(())
 }

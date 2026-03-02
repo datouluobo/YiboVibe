@@ -122,7 +122,7 @@ impl ClipboardMonitor {
                     };
 
                     if should_dispatch {
-                        let (_, is_sync_enabled) = crate::config::get_settings();
+                        let (_, is_sync_enabled, _) = crate::config::get_settings();
                         if is_sync_enabled {
                             Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
                         }
@@ -141,7 +141,7 @@ impl ClipboardMonitor {
                     };
 
                     if should_dispatch {
-                        let (_, is_sync_enabled) = crate::config::get_settings();
+                        let (_, is_sync_enabled, _) = crate::config::get_settings();
                         if is_sync_enabled {
                             Self::secure_dispatch_image(current_image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
                         }
@@ -333,7 +333,7 @@ impl ClipboardMonitor {
             info!("Clipboard receiving daemon started.");
             while let Some(msg) = rx.recv().await {
                 if msg.r#type == "clipboard_update" {
-                    let (_, is_sync_enabled) = crate::config::get_settings();
+                    let (_, is_sync_enabled, _) = crate::config::get_settings();
                     if !is_sync_enabled {
                         continue;
                     }
