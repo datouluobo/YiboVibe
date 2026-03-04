@@ -4,4 +4,8 @@ pub mod crypto;
 pub mod hook_manager;
 pub mod ws;
 pub mod config;
+pub mod rules;
 pub mod p2p;
+pub mod backup;
+pub mod dictionary;
+pub mod smart_router;

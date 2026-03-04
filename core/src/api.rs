@@ -43,7 +43,10 @@ impl ApiClient {
     pub fn new(base_url: String) -> Self {
         Self {
             base_url,
-            client: Client::new(),
+            client: Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             access_token: None,
         }
     }

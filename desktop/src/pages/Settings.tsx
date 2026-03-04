@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
-import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages } from "lucide-react";
+import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages, Save, UploadCloud, DownloadCloud } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
 
 export default function Settings() {
     const { t, i18n } = useTranslation();
@@ -11,6 +13,42 @@ export default function Settings() {
         const theme = localStorage.getItem('yiboflow_theme') || 'dark';
         setCurrentTheme(theme);
     }, []);
+
+    const handleExport = async () => {
+        try {
+            const destPath = await save({
+                title: "导出 YiboFlow 配置",
+                filters: [{ name: "YiboFlow Backup", extensions: ["ybflow"] }]
+            });
+            if (destPath) {
+                await invoke("export_config", { destPath });
+                alert("导出成功！");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("导出失败: " + e);
+        }
+    };
+
+    const handleImport = async () => {
+        try {
+            const srcPath = await open({
+                title: "导入 YiboFlow 配置",
+                multiple: false,
+                filters: [{ name: "YiboFlow Backup", extensions: ["ybflow"] }]
+            });
+            if (srcPath && !Array.isArray(srcPath)) {
+                if (window.confirm("导入配置将覆盖现有设置，是否继续？")) {
+                    await invoke("import_config", { srcPath });
+                    alert("导入成功！");
+                    window.location.reload();
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            alert("导入失败: " + e);
+        }
+    };
 
     const handleThemeChange = (themeId: string) => {
         setCurrentTheme(themeId);
@@ -129,6 +167,40 @@ export default function Settings() {
                             </div>
                         );
                     })}
+                </div>
+            </div>
+
+            {/* Backup & Restore */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <DownloadCloud size={20} color="var(--color-primary)" /> {t('settings.backup_title')}
+                </h3>
+                <p style={{ color: 'var(--color-text-muted)', marginBottom: '16px', fontSize: '14px' }}>{t('settings.backup_desc')}</p>
+
+                <div style={{ display: 'flex', gap: '12px' }}>
+                    <button
+                        onClick={handleExport}
+                        className="btn-ghost"
+                        style={{
+                            padding: '10px 24px', borderRadius: 'var(--radius-md)', fontSize: '14px',
+                            display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--color-border)'
+                        }}
+                    >
+                        <Save size={16} />
+                        {t('settings.btn_export')}
+                    </button>
+                    <button
+                        onClick={handleImport}
+                        className="btn-primary"
+                        style={{
+                            padding: '10px 24px', borderRadius: 'var(--radius-md)', fontSize: '14px',
+                            display: 'flex', alignItems: 'center', gap: '8px', border: 'none',
+                            background: 'var(--color-primary)', color: '#fff'
+                        }}
+                    >
+                        <UploadCloud size={16} />
+                        {t('settings.btn_import')}
+                    </button>
                 </div>
             </div>
 

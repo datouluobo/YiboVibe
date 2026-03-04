@@ -1,10 +1,14 @@
 mod api;
 mod clipboard;
 mod config;
+mod rules;
 mod crypto;
 mod hook_manager;
 mod ws;
 mod p2p;
+mod backup;
+mod dictionary;
+mod smart_router;
 
 use log::{error, info};
 use std::time::Duration;
@@ -17,7 +21,10 @@ use tray_icon::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    info!("Starting YiboFlow Desktop Core Daemon (v1.3)...");
+    info!("Starting YiboFlow Core Engine...");
+    
+    // 初始化本地词库引擎
+    dictionary::init_and_load_dictionaries();
 
     // Start Global Keyboard Hook Daemon
     hook_manager::start_global_hook();

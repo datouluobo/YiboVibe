@@ -1,12 +1,11 @@
 import { useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Login from "./pages/Login";
 import Layout from "./components/Layout";
 // Pages — Flow 全家桶
 import FlowDeck from "./pages/FlowDeck";
-import FlowSnap from "./pages/FlowSnap";
-import FlowHint from "./pages/FlowHint";
+import FlowMind from "./pages/FlowMind";
 import FlowWriter from "./pages/FlowWriter";
 import FlowPredict from "./pages/FlowPredict";
 import FlowSync from "./pages/FlowSync";
@@ -70,8 +69,7 @@ function App() {
             <Route path="/app" element={<Layout />}>
               <Route index element={<Navigate to="/app/flowdeck" replace />} />
               <Route path="flowdeck" element={<FlowDeck />} />
-              <Route path="flowsnap" element={<FlowSnap />} />
-              <Route path="flowhint" element={<FlowHint />} />
+              <Route path="flowmind" element={<FlowMind />} />
               <Route path="flowwriter" element={<FlowWriter />} />
               <Route path="flowpredict" element={<FlowPredict />} />
               <Route path="flowsync" element={<FlowSync />} />

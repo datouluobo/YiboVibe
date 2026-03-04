@@ -4,9 +4,11 @@ use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async_with_config,
+    connect_async_tls_with_config,
+    Connector,
     tungstenite::{client::IntoClientRequest, protocol::Message as TungsteniteMessage},
 };
+use native_tls::TlsConnector;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsMessage {
@@ -42,7 +44,16 @@ impl WsClient {
             HeaderValue::from_str(&format!("Bearer {}", token))?,
         );
 
-        let (ws_stream, response) = connect_async_with_config(request, None, false).await?;
+        let mut builder = TlsConnector::builder();
+        builder.danger_accept_invalid_certs(true);
+        let connector = Connector::NativeTls(builder.build().unwrap());
+
+        let (ws_stream, response) = connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(connector),
+        ).await?;
         info!(
             "WebSocket connected with HTTP status: {}",
             response.status()

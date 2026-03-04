@@ -98,7 +98,7 @@ export default function Login() {
                         localStorage.removeItem('yiboflow_saved_pwd');
                     }
                     updateHistory(serverUrl);
-                    navigate("/dashboard");
+                    navigate("/app");
                 } else {
                     setErrorMsg("Failed to authenticate with core engine.");
                 }

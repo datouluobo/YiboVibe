@@ -1,7 +1,7 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-    LayoutDashboard, Keyboard, Sparkles, PenTool, BrainCircuit,
+    LayoutDashboard, Sparkles, PenTool, BrainCircuit,
     Flame, Truck, ShieldCheck, Settings, LogOut
 } from "lucide-react";
 
@@ -37,8 +37,7 @@ export default function Layout() {
         {
             id: "input",
             items: [
-                { id: "flowsnap", path: "/app/flowsnap", icon: Keyboard, labelKey: "nav.flowsnap", tooltipKey: "nav.tooltip_flowsnap" },
-                { id: "flowhint", path: "/app/flowhint", icon: Sparkles, labelKey: "nav.flowhint", tooltipKey: "nav.tooltip_flowhint" },
+                { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
                 { id: "flowwriter", path: "/app/flowwriter", icon: PenTool, labelKey: "nav.flowwriter", tooltipKey: "nav.tooltip_flowwriter", disabled: true },
                 { id: "flowpredict", path: "/app/flowpredict", icon: BrainCircuit, labelKey: "nav.flowpredict", tooltipKey: "nav.tooltip_flowpredict", disabled: true },
             ]

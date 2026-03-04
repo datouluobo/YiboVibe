@@ -152,9 +152,7 @@ async fn connect_engine(
                 }
             } else {
                 api_err = format!("Login failed via API: {}", res.msg);
-                if is_mock_target {
-                    needs_mock = true;
-                }
+                needs_mock = true;
             }
         }
         Err(e) => {
@@ -232,13 +230,20 @@ async fn connect_engine(
 }
 
 #[tauri::command]
-fn get_snippets() -> Result<std::collections::HashMap<String, String>, String> {
-    Ok(yiboflow_core::config::get_snippets())
+fn get_snippets() -> Result<(std::collections::HashMap<String, String>, std::collections::HashMap<String, String>), String> {
+    let (mut multi_snippets, folders) = yiboflow_core::config::get_snippets();
+    let mut single_snippets = std::collections::HashMap::new();
+    for (k, v) in multi_snippets {
+        if let Some(first) = v.into_iter().next() {
+            single_snippets.insert(k, first);
+        }
+    }
+    Ok((single_snippets, folders))
 }
 
 #[tauri::command]
-fn add_snippet(trigger: String, replacement: String) -> Result<(), String> {
-    yiboflow_core::config::add_snippet(trigger, replacement)
+fn add_snippet(trigger: String, replacement: String, folder: Option<String>) -> Result<(), String> {
+    yiboflow_core::config::add_snippet(trigger, replacement, folder)
 }
 
 #[tauri::command]
@@ -278,24 +283,107 @@ fn remove_blocked_app(app_name: String) -> Result<(), String> {
 
 #[derive(serde::Serialize)]
 struct SettingsPayload {
-    is_snippets_enabled: bool,
+    is_smartlib_enabled: bool,
     is_sync_enabled: bool,
     is_autofill_enabled: bool,
+    flowhint_min_chars: usize,
+    flowhint_accept_key: u32,
 }
 
 #[tauri::command]
 fn get_settings() -> Result<SettingsPayload, String> {
-    let (is_snippets_enabled, is_sync_enabled, is_autofill_enabled) = yiboflow_core::config::get_settings();
+    let (is_smartlib_enabled, is_sync_enabled, is_autofill_enabled, flowhint_min_chars, flowhint_accept_key) = yiboflow_core::config::get_settings();
     Ok(SettingsPayload {
-        is_snippets_enabled,
+        is_smartlib_enabled,
         is_sync_enabled,
         is_autofill_enabled,
+        flowhint_min_chars,
+        flowhint_accept_key,
     })
 }
 
 #[tauri::command]
-fn update_settings(is_snippets_enabled: bool, is_sync_enabled: bool, is_autofill_enabled: bool) -> Result<(), String> {
-    yiboflow_core::config::update_settings(is_snippets_enabled, is_sync_enabled, is_autofill_enabled)
+fn update_settings(is_smartlib_enabled: bool, is_sync_enabled: bool, is_autofill_enabled: bool, flowhint_min_chars: usize, flowhint_accept_key: u32) -> Result<(), String> {
+    yiboflow_core::config::update_settings(is_smartlib_enabled, is_sync_enabled, is_autofill_enabled, flowhint_min_chars, flowhint_accept_key)
+}
+
+#[tauri::command]
+fn diagnose_flowhint() -> Result<String, String> {
+    let mut report = String::new();
+
+    // 1. Config
+    let (snap_en, _sync, autofill_en, _, _) = yiboflow_core::config::get_settings();
+    report.push_str(&format!("[Config] snippets_enabled={}, autofill_enabled={}\n", snap_en, autofill_en));
+
+    // 2. Rules default
+    let rules = yiboflow_core::rules::get_rules();
+    report.push_str(&format!("[Rules] default.flowhint={}\n", rules.default.flowhint));
+    report.push_str(&format!("[Rules] default.flowsnap={}\n", rules.default.flowsnap));
+
+    // 3. Feature query for notepad
+    let hint_ok = yiboflow_core::rules::is_feature_enabled("notepad.exe", yiboflow_core::rules::Feature::FlowHint);
+    report.push_str(&format!("[Rules] is_feature_enabled(notepad.exe, FlowHint)={}\n", hint_ok));
+
+    // 4. Dict IDs
+    let dict_ids = yiboflow_core::rules::get_app_flowhint_dicts("notepad.exe");
+    report.push_str(&format!("[Dicts] dict_ids_for_notepad={:?}\n", dict_ids));
+
+    // 5. Dictionary search
+    let cands = yiboflow_core::dictionary::search_candidates_tail(&dict_ids, "gi");
+    report.push_str(&format!("[Dicts] search_candidates_tail('gi')={:?}\n", cands));
+
+    let cands_exact = yiboflow_core::dictionary::search_candidates(&dict_ids, "gi");
+    report.push_str(&format!("[Dicts] search_candidates_exact('gi')={:?}\n", cands_exact));
+
+    // 6. HINT_TX status
+    let tx_set = yiboflow_core::hook_manager::HINT_TX.lock().map(|tx| tx.is_some()).unwrap_or(false);
+    report.push_str(&format!("[Channel] HINT_TX is_set={}\n", tx_set));
+
+    // 7. Try actually sending a test event
+    if tx_set {
+        yiboflow_core::hook_manager::set_hint_tx_test_send();
+        report.push_str("[Channel] Sent test HintEvent::Show\n");
+    }
+
+    Ok(report)
+}
+
+#[tauri::command]
+fn accept_hint_candidate(index: usize) -> Result<(), String> {
+    yiboflow_core::hook_manager::accept_hint_by_index(index);
+    Ok(())
+}
+
+#[tauri::command]
+fn dismiss_hint_window() -> Result<(), String> {
+    yiboflow_core::hook_manager::dismiss_hint();
+    Ok(())
+}
+
+#[tauri::command]
+fn update_hint_position(x: i32, y: i32) -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.hint_fixed_x = x;
+    cfg.hint_fixed_y = y;
+    cfg.save();
+    Ok(())
+}
+
+#[tauri::command]
+fn move_hint_window(x: i32, y: i32) -> Result<(), String> {
+    if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
+        let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow { x, y });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_hint_position() -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.hint_fixed_x = -1;
+    cfg.hint_fixed_y = -1;
+    cfg.save();
+    Ok(())
 }
 
 #[tauri::command]
@@ -337,6 +425,125 @@ async fn send_file_p2p(
     }
 }
 
+// ---------------------------------------------------------------------------
+// FlowRules Commands — per-app feature permission matrix
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct FlowRulesPayload {
+    default: yiboflow_core::rules::DefaultRules,
+    app_overrides: Vec<yiboflow_core::rules::AppRule>,
+}
+
+#[tauri::command]
+fn get_flow_rules() -> Result<FlowRulesPayload, String> {
+    let cfg = yiboflow_core::rules::get_rules();
+    Ok(FlowRulesPayload {
+        default: cfg.default,
+        app_overrides: cfg.app_overrides,
+    })
+}
+
+#[tauri::command]
+fn set_default_rules(
+    flowsnap: bool,
+    flowhint: bool,
+    flowwriter: bool,
+    flowpredict: bool,
+    flowsync: bool,
+) -> Result<(), String> {
+    yiboflow_core::rules::set_default_rules(yiboflow_core::rules::DefaultRules {
+        flowsnap,
+        flowhint,
+        flowwriter,
+        flowpredict,
+        flowsync,
+    })
+}
+
+#[tauri::command]
+fn upsert_app_rule(
+    process: String,
+    display_name: String,
+    flowsnap: bool,
+    flowhint: bool,
+    flowhint_dicts: Vec<String>,
+    flowwriter: bool,
+    flowpredict: bool,
+    flowsync: bool,
+) -> Result<(), String> {
+    yiboflow_core::rules::upsert_app_rule(yiboflow_core::rules::AppRule {
+        process,
+        display_name,
+        flowsnap,
+        flowhint,
+        flowhint_dicts,
+        flowwriter,
+        flowpredict,
+        flowsync,
+    })
+}
+
+#[tauri::command]
+fn remove_app_rule(process: String) -> Result<(), String> {
+    yiboflow_core::rules::remove_app_rule(process)
+}
+
+#[tauri::command]
+fn toggle_app_feature(process: String, feature: String) -> Result<(), String> {
+    let f = parse_feature(&feature)?;
+    yiboflow_core::rules::toggle_app_feature(process, f)
+}
+
+#[tauri::command]
+fn toggle_default_feature(feature: String) -> Result<(), String> {
+    let f = parse_feature(&feature)?;
+    yiboflow_core::rules::toggle_default_feature(f)
+}
+
+fn parse_feature(s: &str) -> Result<yiboflow_core::rules::Feature, String> {
+    match s.to_lowercase().as_str() {
+        "flowsnap" => Ok(yiboflow_core::rules::Feature::FlowSnap),
+        "flowhint" => Ok(yiboflow_core::rules::Feature::FlowHint),
+        "flowwriter" => Ok(yiboflow_core::rules::Feature::FlowWriter),
+        "flowpredict" => Ok(yiboflow_core::rules::Feature::FlowPredict),
+        "flowsync" => Ok(yiboflow_core::rules::Feature::FlowSync),
+        _ => Err(format!("Unknown feature: {}", s)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backup & Restore
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn export_config(dest_path: String) -> Result<(), String> {
+    log::info!("Tauri Command: export_config to {}", dest_path);
+    yiboflow_core::backup::export_config(&dest_path)
+}
+
+#[tauri::command]
+fn import_config(src_path: String) -> Result<(), String> {
+    log::info!("Tauri Command: import_config from {}", src_path);
+    yiboflow_core::backup::import_config(&src_path)
+}
+
+#[tauri::command]
+fn get_all_dictionaries() -> Result<Vec<yiboflow_core::dictionary::SmartDictionary>, String> {
+    Ok(yiboflow_core::dictionary::get_all_dictionaries())
+}
+
+#[tauri::command]
+fn save_dictionary(dict: yiboflow_core::dictionary::SmartDictionary) -> Result<(), String> {
+    log::info!("Tauri Command: save_dictionary {}", dict.id);
+    yiboflow_core::dictionary::save_dictionary(dict)
+}
+
+#[tauri::command]
+fn delete_dictionary(id: String) -> Result<(), String> {
+    log::info!("Tauri Command: delete_dictionary {}", id);
+    yiboflow_core::dictionary::delete_dictionary(&id)
+}
 #[tauri::command]
 fn get_window_under_cursor() -> Result<String, String> {
     #[cfg(target_os = "windows")]
@@ -383,6 +590,10 @@ fn get_window_under_cursor() -> Result<String, String> {
 pub fn run() {
     // Intialize Rust logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // 预热词库引擎
+    yiboflow_core::dictionary::init_and_load_dictionaries();
+    yiboflow_core::dictionary::load_freq_cache();
 
     #[cfg(target_os = "windows")]
     yiboflow_core::hook_manager::start_global_hook();
@@ -457,6 +668,115 @@ pub fn run() {
                 }
             });
 
+            // Dynamically create the Hint window so window-state-plugin ignores it
+            let hint_win = tauri::WebviewWindowBuilder::new(
+                app,
+                "hint",
+                tauri::WebviewUrl::App("/#/hint".into()),
+            )
+            .title("FlowHint")
+            .inner_size(300.0, 280.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .visible(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .build()
+            .unwrap();
+
+            // Get Win32 HWND for direct window management (no focus stealing)
+            #[cfg(target_os = "windows")]
+            let hint_hwnd = {
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
+                let raw_hwnd = hint_win.hwnd().unwrap();
+                let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
+                unsafe {
+                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                    // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
+                }
+                hwnd
+            };
+
+            // Bridge FlowHint events from Hook to Tauri Frontend
+            // Show/hide/position the hint window from Rust side using Win32 APIs
+            // to guarantee NO focus stealing (SW_SHOWNOACTIVATE)
+            let (hint_tx, hint_rx) = std::sync::mpsc::channel();
+            yiboflow_core::hook_manager::set_hint_tx(hint_tx);
+            let app_handle = app.handle().clone();
+            #[cfg(target_os = "windows")]
+            let hint_hwnd_raw = hint_hwnd.0 as isize; // isize is Send-safe
+            std::thread::spawn(move || {
+                use yiboflow_core::hook_manager::HintEvent;
+                while let Ok(event) = hint_rx.recv() {
+                    let ev_clone = event.clone();
+                    let app_handle_clone = app_handle.clone();
+                    
+                    let _ = app_handle_clone.run_on_main_thread(move || {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let hint_hwnd = windows::Win32::Foundation::HWND(hint_hwnd_raw as *mut _);
+                            use windows::Win32::UI::WindowsAndMessaging::{
+                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
+                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SWP_NOZORDER,
+                            };
+                            match &ev_clone {
+                                HintEvent::Show { candidates, x, y, .. } => {
+                                    // Cap visible items at 8 for height; scrolling handles the rest
+                                    let visible_count = candidates.len().min(8) as i32;
+                                    // handle(18) + items(n*35) + footer(32) + padding(12) + border(4) = 66
+                                    let inner_height = 70 + (visible_count * 35);
+                                    let outer_height = inner_height;
+                                    let outer_width = 300;
+
+                                    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+                                    let (cfg_x, cfg_y) = (cfg.hint_fixed_x, cfg.hint_fixed_y);
+                                    drop(cfg);
+
+                                    // If user has pinned position, use it; otherwise follow caret
+                                    let pos_x = if cfg_x != -1 { cfg_x } else { *x };
+                                    let pos_y = if cfg_y != -1 { cfg_y } else { *y + 20 }; // offset below caret
+
+                                    unsafe {
+                                        // Position and show without activating
+                                        SetWindowPos(
+                                            hint_hwnd,
+                                            Some(HWND_TOPMOST),
+                                            pos_x, pos_y,
+                                            outer_width, outer_height,
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                        );
+                                        ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
+                                    }
+                                }
+                                HintEvent::Hide => {
+                                    unsafe {
+                                        ShowWindow(hint_hwnd, SW_HIDE);
+                                    }
+                                }
+                                HintEvent::MoveWindow { x, y } => {
+                                    unsafe {
+                                        SetWindowPos(
+                                            hint_hwnd,
+                                            None,
+                                            *x, *y,
+                                            0, 0,
+                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+
+                    // Always emit event to frontend for content updates
+                    let _ = app_handle.emit("hint-event", event);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -476,6 +796,23 @@ pub fn run() {
             send_file_p2p,
             get_window_under_cursor,
             change_local_password,
+            get_flow_rules,
+            set_default_rules,
+            upsert_app_rule,
+            remove_app_rule,
+            toggle_app_feature,
+            toggle_default_feature,
+            export_config,
+            import_config,
+            get_all_dictionaries,
+            save_dictionary,
+            delete_dictionary,
+            diagnose_flowhint,
+            accept_hint_candidate,
+            dismiss_hint_window,
+            update_hint_position,
+            move_hint_window,
+            reset_hint_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
