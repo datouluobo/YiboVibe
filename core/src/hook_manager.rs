@@ -686,7 +686,7 @@ fn parse_hotkey(hk: &str) -> (bool, bool, bool, bool, u32) {
 /// Plan B: paste text via clipboard without any backspace deletion
 /// Used by FlowHint to append the remaining suffix of a candidate
 #[cfg(target_os = "windows")]
-fn paste_text_only(text: &str) {
+pub fn paste_text_only(text: &str) {
     use std::time::Duration;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VIRTUAL_KEY};
 

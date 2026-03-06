@@ -5,6 +5,7 @@ import App from "./App";
 import "./i18n";
 
 import HintWindow from "./pages/HintWindow";
+import WriterWindow from "./pages/WriterWindow";
 
 const savedTheme = localStorage.getItem('yiboflow_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
@@ -15,14 +16,15 @@ document.addEventListener("contextmenu", (e) => {
 });
 
 const isHintOverlay = window.location.hash === '#/hint';
+const isWriterOverlay = window.location.hash === '#/writer';
 
-if (isHintOverlay) {
+if (isHintOverlay || isWriterOverlay) {
   document.body.style.background = 'transparent';
   document.documentElement.style.background = 'transparent';
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {isHintOverlay ? <HintWindow /> : <App />}
+    {isHintOverlay ? <HintWindow /> : (isWriterOverlay ? <WriterWindow /> : <App />)}
   </React.StrictMode>,
 );

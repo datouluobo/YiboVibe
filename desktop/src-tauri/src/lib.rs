@@ -330,6 +330,79 @@ fn remove_custom_prompt(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_flowwriter_config() -> Result<yiboflow_core::config::FlowWriterConfig, String> {
+    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+    Ok(cfg.flowwriter.clone())
+}
+
+#[tauri::command]
+fn update_flowwriter_config(config: yiboflow_core::config::FlowWriterConfig) -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.flowwriter = config;
+    yiboflow_core::config::save_config_inner(&cfg);
+    Ok(())
+}
+
+#[tauri::command]
+async fn stream_ai_writer(
+    action: String,
+    action_payload: Option<String>,
+    user_input: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let prompt_action = match action.as_str() {
+        "Polish" => yiboflow_core::ai::prompt::PromptAction::Polish,
+        "Expand" => yiboflow_core::ai::prompt::PromptAction::Expand { ratio: action_payload.unwrap_or("1.5".into()).parse().unwrap_or(1.5) },
+        "Condense" => yiboflow_core::ai::prompt::PromptAction::Condense { ratio: action_payload.unwrap_or("50%".into()) },
+        "Summarize" => yiboflow_core::ai::prompt::PromptAction::Summarize,
+        "Style" => yiboflow_core::ai::prompt::PromptAction::Style { style: action_payload.unwrap_or("Professional".into()) },
+        "Translate" => yiboflow_core::ai::prompt::PromptAction::Translate { target_lang: action_payload.unwrap_or("English".into()) },
+        "Explain" => yiboflow_core::ai::prompt::PromptAction::Explain,
+        "Custom" => yiboflow_core::ai::prompt::PromptAction::Custom { template_id: action_payload.unwrap_or_default() },
+        _ => return Err("Invalid PromptAction".into()),
+    };
+
+    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().ai_engine.clone();
+    let client = yiboflow_core::ai::client::AiClient::new(cfg);
+    let msgs = yiboflow_core::ai::prompt::build_messages(&prompt_action, &user_input);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    
+    tokio::spawn(async move {
+        client.chat_stream(msgs, tx).await;
+    });
+
+    while let Some(res) = rx.recv().await {
+        match res {
+            Ok(chunk) => {
+                let _ = window.emit("writer-stream-chunk", chunk);
+            }
+            Err(e) => {
+                let _ = window.emit("writer-stream-error", e.to_string());
+                break;
+            }
+        }
+    }
+    let _ = window.emit("writer-stream-end", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn dismiss_writer_window() -> Result<(), String> {
+    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
+    Ok(())
+}
+
+#[tauri::command]
+fn paste_writer_text(text: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    yiboflow_core::hook_manager::paste_text_only(&text);
+    
+    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
+    Ok(())
+}
+
+#[tauri::command]
 fn diagnose_flowhint() -> Result<String, String> {
     let mut report = String::new();
 
@@ -1139,6 +1212,11 @@ pub fn run() {
             get_custom_prompts,
             add_custom_prompt,
             remove_custom_prompt,
+            stream_ai_writer,
+            dismiss_writer_window,
+            paste_writer_text,
+            get_flowwriter_config,
+            update_flowwriter_config,
             get_settings,
             update_settings,
             send_file_p2p,
