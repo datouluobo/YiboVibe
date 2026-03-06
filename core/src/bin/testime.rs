@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
-use windows::Win32::Foundation::{HWND, MAX_PATH};
+use windows::Win32::Foundation::MAX_PATH;
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmGetOpenStatus, ImmReleaseContext};
@@ -27,7 +27,7 @@ fn main() {
             if len > 0 {
                 let current_exe = OsString::from_wide(&buf[..len as usize]);
                 if let Some(s) = current_exe.to_str() {
-                    let exe_name = s.split('\\').last().unwrap_or("").to_lowercase();
+                    let exe_name = s.split('\\').next_back().unwrap_or("").to_lowercase();
                     println!("Foreground exe: {}", exe_name);
                 }
             }

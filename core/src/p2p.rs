@@ -1,6 +1,5 @@
 use log::{error, info};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -22,13 +21,11 @@ pub struct P2POffer {
 fn get_local_ips() -> Vec<String> {
     let mut ips = Vec::new();
     // A quick hack: connect a UDP socket to a public IP to find out which local interface is used
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(addr) = socket.local_addr() {
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
+        && socket.connect("8.8.8.8:80").is_ok()
+            && let Ok(addr) = socket.local_addr() {
                 ips.push(addr.ip().to_string());
             }
-        }
-    }
     ips.push("127.0.0.1".to_string());
     ips
 }
@@ -79,22 +76,20 @@ pub async fn start_file_send(
             
             // Read token (assume it's exactly 36 bytes for a UUID)
             let mut recv_token = vec![0u8; 36];
-            if stream.read_exact(&mut recv_token).await.is_ok() {
-                if let Ok(s) = String::from_utf8(recv_token) {
+            if stream.read_exact(&mut recv_token).await.is_ok()
+                && let Ok(s) = String::from_utf8(recv_token) {
                     if s == token {
                         info!("P2P Token verified. Streaming file...");
                         stream.write_all(b"OK").await.unwrap_or_default();
                         
-                        if let Ok(mut file) = tokio::fs::File::open(&file_path).await {
-                            if let Ok(bytes_sent) = tokio::io::copy(&mut file, &mut stream).await {
+                        if let Ok(mut file) = tokio::fs::File::open(&file_path).await
+                            && let Ok(bytes_sent) = tokio::io::copy(&mut file, &mut stream).await {
                                 info!("P2P Transfer complete: {} bytes sent.", bytes_sent);
                             }
-                        }
                     } else {
                         error!("P2P Invalid token received: {}", s);
                     }
                 }
-            }
         } else {
             error!("P2P Sender timed out waiting for connection.");
         }
@@ -114,13 +109,12 @@ pub async fn handle_p2p_offer(
         // Try all IPs
         for ip in offer.ips {
             let addr = format!("{}:{}", ip, offer.port);
-            if let Ok(stream) = tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(&addr)).await {
-                if let Ok(stream) = stream {
+            if let Ok(stream) = tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(&addr)).await
+                && let Ok(stream) = stream {
                     info!("P2P Successfully connected to sender at {}", addr);
                     connected_stream = Some(stream);
                     break;
                 }
-            }
         }
         
         if let Some(mut stream) = connected_stream {

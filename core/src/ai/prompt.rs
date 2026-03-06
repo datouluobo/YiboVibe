@@ -1,6 +1,5 @@
 use crate::ai::client::ChatMessage;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -43,13 +42,11 @@ fn get_prompts_file_path() -> PathBuf {
 
 pub fn load_custom_prompts() -> CustomPromptsConfig {
     let path = get_prompts_file_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str(&content) {
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(cfg) = serde_json::from_str(&content) {
                 return cfg;
             }
-        }
-    }
     let default_cfg = CustomPromptsConfig {
         custom_prompts: Vec::new(),
         custom_languages: vec![

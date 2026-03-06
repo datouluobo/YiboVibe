@@ -1,8 +1,8 @@
-use log::{error, info};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -41,21 +41,19 @@ pub fn export_config(dest_path: &str) -> Result<(), String> {
 
     // 2. Export config.json
     let config_path = data_dir.join("config.json");
-    if config_path.exists() {
-        if let Ok(content) = fs::read_to_string(&config_path) {
+    if config_path.exists()
+        && let Ok(content) = fs::read_to_string(&config_path) {
             zip.start_file("config.json", options).map_err(|e| e.to_string())?;
             zip.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
         }
-    }
 
     // 3. Export rules.json
     let rules_path = data_dir.join("rules.json");
-    if rules_path.exists() {
-        if let Ok(content) = fs::read_to_string(&rules_path) {
+    if rules_path.exists()
+        && let Ok(content) = fs::read_to_string(&rules_path) {
             zip.start_file("rules.json", options).map_err(|e| e.to_string())?;
             zip.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
         }
-    }
 
     // 4. Export dictionaries
     let dict_dir = data_dir.join("dictionaries");
@@ -89,11 +87,10 @@ pub fn import_config(src_path: &str) -> Result<(), String> {
     // Validate Manifest
     if let Ok(mut manifest_file) = archive.by_name("manifest.json") {
         let mut content = String::new();
-        if manifest_file.read_to_string(&mut content).is_ok() {
-            if let Ok(manifest) = serde_json::from_str::<BackupManifest>(&content) {
+        if manifest_file.read_to_string(&mut content).is_ok()
+            && let Ok(manifest) = serde_json::from_str::<BackupManifest>(&content) {
                 info!("Importing backup from {}, version: {}", manifest.timestamp, manifest.version);
             }
-        }
     } else {
         return Err("Invalid backup: Missing manifest.json".to_string());
     }
@@ -110,11 +107,10 @@ pub fn import_config(src_path: &str) -> Result<(), String> {
             // It's a directory
             fs::create_dir_all(&outpath).unwrap_or(());
         } else {
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
+            if let Some(p) = outpath.parent()
+                && !p.exists() {
                     fs::create_dir_all(p).unwrap_or(());
                 }
-            }
             if let Ok(mut outfile) = File::create(&outpath) {
                 std::io::copy(&mut file, &mut outfile).unwrap_or(0);
             }

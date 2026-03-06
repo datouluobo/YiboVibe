@@ -4,7 +4,7 @@ use crate::sync::packager::VaultPackager;
 use crate::sync::vault::VaultManifest;
 use crate::sync::vault::FileTrackingMeta;
 use crate::sync::MergePlan;
-use log::{error, info, warn};
+use log::info;
 use std::fs;
 use std::path::PathBuf;
 
@@ -89,7 +89,7 @@ pub async fn pull_and_replay_vault(
     // We do a naive approach first: compare timestamp to local `sync_meta`
     // Real Delta Replay checks every chunk, but for structural mapping we'll loop through:
     
-    for (rel_path, meta) in &remote_manifest.files {
+    for rel_path in remote_manifest.files.keys() {
         let local_path = sandbox_root.join(rel_path);
         
         let needs_download = if !local_path.exists() {
@@ -127,11 +127,10 @@ pub async fn pull_and_replay_vault(
 
 pub fn get_local_baseline_manifest(sandbox_root: &std::path::Path) -> Option<VaultManifest> {
     let path = sandbox_root.join(".sync_manifest.json");
-    if let Ok(bytes) = fs::read(&path) {
-        if let Ok(manifest) = serde_json::from_slice(&bytes) {
+    if let Ok(bytes) = fs::read(&path)
+        && let Ok(manifest) = serde_json::from_slice(&bytes) {
             return Some(manifest);
         }
-    }
     None
 }
 

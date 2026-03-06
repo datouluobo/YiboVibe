@@ -1,8 +1,8 @@
-use log::{error, info, warn};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::RwLock;
 use walkdir::WalkDir;
 
@@ -61,16 +61,14 @@ pub fn reload() {
 
 pub fn load_freq_cache() {
     let path = get_freq_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(map) = serde_json::from_str::<HashMap<String, u32>>(&content) {
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(map) = serde_json::from_str::<HashMap<String, u32>>(&content) {
                 let mut cache = FREQ_CACHE.write().unwrap();
                 *cache = map;
                 info!("Loaded {} frequency entries.", cache.len());
                 return;
             }
-        }
-    }
     info!("No freq cache found, starting fresh.");
 }
 
@@ -248,8 +246,8 @@ pub fn reload_all_dictionaries() {
 
     for entry in WalkDir::new(&base_dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
-            if let Ok(content) = fs::read_to_string(path) {
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json")
+            && let Ok(content) = fs::read_to_string(path) {
                 if let Ok(dict) = serde_json::from_str::<SmartDictionary>(&content) {
                     loaded_map.insert(dict.id.clone(), dict);
                 } else if let Ok(legacy) = serde_json::from_str::<LegacyDictionary>(&content) {
@@ -273,7 +271,6 @@ pub fn reload_all_dictionaries() {
                     warn!("Failed to parse dict JSON: {:?}", path);
                 }
             }
-        }
     }
 
     let count = loaded_map.len();
@@ -302,11 +299,10 @@ pub fn search_candidates(dict_ids: &[String], buffer: &str) -> Vec<String> {
                 let cand_lower = cand.to_lowercase();
                 if buf_lower.chars().count() >= dict.min_trigger_chars {
                     // search_candidates in new design: you can keep it matching cand_lower startswith buf_lower
-                    if cand_lower.starts_with(&buf_lower) {
-                        if !results.contains(cand) {
+                    if cand_lower.starts_with(&buf_lower)
+                        && !results.contains(cand) {
                             results.push(cand.clone());
                         }
-                    }
                 }
             }
         }
@@ -345,11 +341,10 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<String> 
 
                     if buf_tail == cand_head {
                         // Don't suggest if user already typed the full candidate
-                        if tail_len < cand_chars.len() {
-                            if !results.iter().any(|(_, c)| c == cand) {
+                        if tail_len < cand_chars.len()
+                            && !results.iter().any(|(_, c)| c == cand) {
                                 results.push((tail_len, cand.clone()));
                             }
-                        }
                         break; // found best match for this candidate
                     }
                 }

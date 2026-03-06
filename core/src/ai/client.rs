@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
-use log::{info, error, warn};
+use log::{info, warn};
 
 #[derive(Error, Debug)]
 pub enum AiError {
@@ -254,17 +254,13 @@ impl AiClient {
                         continue;
                     }
                     
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                        if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                            if let Some(choice) = choices.first() {
-                                if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                        && let Some(choices) = json.get("choices").and_then(|c| c.as_array())
+                            && let Some(choice) = choices.first()
+                                && let Some(delta) = choice.get("delta")
+                                    && let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                                         let _ = tx.send(Ok(content.to_string())).await;
                                     }
-                                }
-                            }
-                        }
-                    }
                 }
                 Err(e) => {
                     let _ = tx.send(Err(AiError::Api(format!("Stream parse err: {:?}", e)))).await;

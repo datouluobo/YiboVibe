@@ -1,4 +1,4 @@
-use log::{info, error, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -68,16 +68,13 @@ pub fn get_active_user_dir() -> PathBuf {
 pub fn load_session() {
     let mut path = get_yiboflow_global_dir();
     path.push("last_session.json");
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(config) = serde_json::from_str::<SessionConfig>(&content) {
-                if let Some(u) = config.last_username {
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(config) = serde_json::from_str::<SessionConfig>(&content)
+                && let Some(u) = config.last_username {
                     info!("[Session] Loaded last session user: {}", u);
                     *ACTIVE_USER.write().unwrap() = Some(u);
                 }
-            }
-        }
-    }
 }
 
 pub fn save_session(username: String) {
@@ -105,13 +102,11 @@ pub fn get_users_config_path() -> PathBuf {
 
 pub fn load_users_config() -> UsersConfig {
     let path = get_users_config_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<UsersConfig>(&content) {
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(cfg) = serde_json::from_str::<UsersConfig>(&content) {
                 return cfg;
             }
-        }
-    }
     UsersConfig::default()
 }
 
@@ -184,11 +179,10 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
     new_path.push("users");
     new_path.push(&new_safe_name);
 
-    if old_path.exists() {
-        if let Err(e) = fs::rename(&old_path, &new_path) {
+    if old_path.exists()
+        && let Err(e) = fs::rename(&old_path, &new_path) {
             return Err(format!("Failed to rename user directory: {}", e));
         }
-    }
 
     // Update users.json
     let mut user = cfg.users.remove(old_username).unwrap();
@@ -198,11 +192,10 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
 
     // If it was the active session, update it
     let active_user = ACTIVE_USER.read().unwrap().clone();
-    if let Some(active) = active_user {
-        if active == old_username {
+    if let Some(active) = active_user
+        && active == old_username {
             save_session(new_username.to_string());
         }
-    }
 
     Ok(true)
 }

@@ -1,17 +1,11 @@
 #[cfg(target_os = "windows")]
 use log::{error, info};
 #[cfg(target_os = "windows")]
-use std::ptr::null_mut;
-#[cfg(target_os = "windows")]
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::thread;
 #[cfg(target_os = "windows")]
-use std::ffi::OsString;
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStringExt;
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM, MAX_PATH};
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM, MAX_PATH};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
@@ -19,16 +13,14 @@ use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmGetOpenStatus, ImmGetConversionStatus, ImmReleaseContext};
-#[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
+    INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput,
     VK_OEM_2,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN,
     GetForegroundWindow, GetWindowThreadProcessId,
 };
 
@@ -127,7 +119,7 @@ pub fn dismiss_hint() {
 // Caret Coordinate Fetcher
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "windows")]
-unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> {
+unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> { unsafe {
     use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -137,16 +129,15 @@ unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, 
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
         ..Default::default()
     };
-    if GetGUIThreadInfo(thread_id, &mut gui_info).is_ok() {
-        if gui_info.hwndCaret.0 != 0 {
+    if GetGUIThreadInfo(thread_id, &mut gui_info).is_ok()
+        && gui_info.hwndCaret.0 != 0 {
             let mut pt = POINT { x: gui_info.rcCaret.left, y: gui_info.rcCaret.bottom };
             if ClientToScreen(gui_info.hwndCaret, &mut pt).as_bool() {
                 return Some((pt.x, pt.y));
             }
         }
-    }
     None
-}
+}}
 
 #[derive(Debug, Clone)]
 pub struct HintState {
@@ -241,17 +232,16 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         let mut pid: u32 = 0;
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            if pid != 0 {
-                if let Ok(process_handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
+            if pid != 0
+                && let Ok(process_handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
                     let mut buf = [0u16; MAX_PATH as usize];
                     let len = GetModuleFileNameExW(process_handle, None, &mut buf);
                     if len > 0 {
                         let mut current_exe = String::from_utf16_lossy(&buf[..len as usize]);
                         current_exe = current_exe.trim_matches('\0').to_string();
-                        active_exe = current_exe.split('\\').last().unwrap_or("").to_lowercase();
+                        active_exe = current_exe.split('\\').next_back().unwrap_or("").to_lowercase();
                     }
                 }
-            }
         }
         
         // Determine per-feature permission for the active foreground process
@@ -361,7 +351,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         };
 
         // When switching into Chinese mode, clear the English buffer
-        if is_ime_chinese_mode && key_code >= 0x41 && key_code <= 0x5A {
+        if is_ime_chinese_mode && (0x41..=0x5A).contains(&key_code) {
             let mut buf = KEY_BUFFER.lock().unwrap();
             if !buf.is_empty() {
                 buf.clear();
@@ -372,7 +362,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             }
         }
 
-        if key_code >= 0x41 && key_code <= 0x5A && !is_ime_chinese_mode {
+        if (0x41..=0x5A).contains(&key_code) && !is_ime_chinese_mode {
             if let Some(ch) = std::char::from_u32(key_code + 32) { // Lowercase a-z
                 let mut buf = KEY_BUFFER.lock().unwrap();
                 buf.push(ch);
@@ -380,13 +370,13 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 buf_changed = true;
                 swallowed_char = true; // Potentially swallow if it completes a FlowSnap
             }
-        } else if key_code >= 0x30 && key_code <= 0x39 {
+        } else if (0x30..=0x39).contains(&key_code) {
             if let Some(ch) = std::char::from_u32(key_code) { // 0-9
                 KEY_BUFFER.lock().unwrap().push(ch);
                 buf_changed = true;
                 swallowed_char = true;
             }
-        } else if key_code >= 0x60 && key_code <= 0x69 {
+        } else if (0x60..=0x69).contains(&key_code) {
             if let Some(ch) = std::char::from_u32(key_code - 0x60 + 0x30) { // Numpad 0-9
                 KEY_BUFFER.lock().unwrap().push(ch);
                 buf_changed = true;
@@ -487,8 +477,8 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
             let mut matched_snap = false;
             // --- FlowSnap Processing ---
-             if let Some(trigger) = matched_trigger {
-                if !matched_replacements.is_empty() {
+             if let Some(trigger) = matched_trigger
+                && !matched_replacements.is_empty() {
                     matched_snap = true;
                     let trigger_len = trigger.chars().count();
                     // Swallow the last char (LRESULT(1)), so we need N-1 backspaces
@@ -552,7 +542,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         }
                     }
                 }
-            }
 
             // --- FlowHint Processing ---
             if !matched_snap {

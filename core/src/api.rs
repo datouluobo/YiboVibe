@@ -1,4 +1,4 @@
-use reqwest::{Client, Response};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -69,11 +69,10 @@ impl ApiClient {
         let res = self.client.post(&url).json(&pr).send().await?;
         let result: GeneralResponse<AuthResponseData> = res.json().await?;
 
-        if result.code == 200 {
-            if let Some(ref data) = result.data {
+        if result.code == 200
+            && let Some(ref data) = result.data {
                 self.access_token = Some(data.access_token.clone());
             }
-        }
 
         Ok(result)
     }

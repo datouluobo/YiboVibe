@@ -84,19 +84,12 @@ impl AppRule {
 
 /// 完整 FlowRules 配置
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Default)]
 pub struct FlowRulesConfig {
     pub default: DefaultRules,
     pub app_overrides: Vec<AppRule>,
 }
 
-impl Default for FlowRulesConfig {
-    fn default() -> Self {
-        Self {
-            default: DefaultRules::default(),
-            app_overrides: Vec::new(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Runtime Cache — 热路径查询 O(1)
@@ -226,11 +219,10 @@ pub fn is_all_disabled(process_name: &str) -> bool {
 /// 获取某个进程专属绑定的 FlowHint 词库 ID 列表
 pub fn get_app_flowhint_dicts(process_name: &str) -> Vec<String> {
     let cache = RULES_CACHE.read().unwrap();
-    if let Some(rule) = cache.app_map.get(process_name) {
-        if !rule.flowhint_dicts.is_empty() {
+    if let Some(rule) = cache.app_map.get(process_name)
+        && !rule.flowhint_dicts.is_empty() {
             return rule.flowhint_dicts.clone();
         }
-    }
     
     let dict_cache = crate::dictionary::DICT_CACHE.read().unwrap();
     dict_cache.keys().cloned().collect()

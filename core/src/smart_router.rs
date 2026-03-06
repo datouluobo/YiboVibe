@@ -1,4 +1,4 @@
-use crate::dictionary::{SmartEntry, SmartDictionary, DICT_CACHE};
+use crate::dictionary::DICT_CACHE;
 use std::collections::HashMap;
 
 /// FlowSnap 引擎所需的匹配表

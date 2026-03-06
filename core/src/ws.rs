@@ -100,15 +100,14 @@ impl WsClient {
         tokio::spawn(async move {
             info!("WebSocket write daemon started.");
             while let Some(msg) = rx.recv().await {
-                if let Ok(json_str) = serde_json::to_string(&msg) {
-                    if let Err(e) = ws_write
+                if let Ok(json_str) = serde_json::to_string(&msg)
+                    && let Err(e) = ws_write
                         .send(TungsteniteMessage::Text(json_str.into()))
                         .await
                     {
                         error!("WebSocket write error: {}", e);
                         break;
                     }
-                }
             }
             info!("WebSocket write daemon terminated.");
         });

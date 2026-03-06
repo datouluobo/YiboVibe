@@ -384,14 +384,12 @@ impl ClipboardMonitor {
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                             if let Err(e) = clipboard.set_text(plaintext.clone()) {
                                 error!("Failed to set arboard clipboard: {}", e);
-                            } else {
-                                if let Some(chan) = ui_tx.as_ref() {
-                                    let preview = if plaintext.len() > 15 { format!("{}...", &plaintext[..15]) } else { plaintext.clone() };
-                                    let _ = chan.send(ClipboardEvent {
-                                        status: "received".to_string(),
-                                        preview,
-                                    }).await;
-                                }
+                            } else if let Some(chan) = ui_tx.as_ref() {
+                                let preview = if plaintext.len() > 15 { format!("{}...", &plaintext[..15]) } else { plaintext.clone() };
+                                let _ = chan.send(ClipboardEvent {
+                                    status: "received".to_string(),
+                                    preview,
+                                }).await;
                             }
                         }
                     } else if format_type == "image" {
@@ -474,25 +472,22 @@ impl ClipboardMonitor {
 
                             if let Err(e) = clipboard.set_image(arboard_img.clone()) {
                                 error!("Failed to set arboard image clipboard: {}", e);
-                            } else {
-                                if let Some(chan) = ui_tx.as_ref() {
-                                    let preview = Self::generate_thumbnail_base64(&arboard_img);
-                                    let _ = chan.send(ClipboardEvent {
-                                        status: "received".to_string(),
-                                        preview,
-                                    }).await;
-                                }
+                            } else if let Some(chan) = ui_tx.as_ref() {
+                                let preview = Self::generate_thumbnail_base64(&arboard_img);
+                                let _ = chan.send(ClipboardEvent {
+                                    status: "received".to_string(),
+                                    preview,
+                                }).await;
                             }
                         }
                     }
                 } else if msg.r#type == "p2p_file_offer" {
                     if let Ok(offer) = serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone()) {
                         let mut save_dir = std::env::temp_dir();
-                        if let Some(dirs) = directories::UserDirs::new() {
-                            if let Some(dl) = dirs.download_dir() {
+                        if let Some(dirs) = directories::UserDirs::new()
+                            && let Some(dl) = dirs.download_dir() {
                                 save_dir = dl.to_path_buf();
                             }
-                        }
                         
                         crate::p2p::handle_p2p_offer(offer, save_dir).await;
                     } else {

@@ -1,6 +1,5 @@
-use log::{error, info};
+use log::error;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

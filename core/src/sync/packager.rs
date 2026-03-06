@@ -1,7 +1,7 @@
-use crate::sync::crypto::{encrypt_payload, decrypt_payload};
+use crate::sync::crypto::encrypt_payload;
 use crate::sync::vault::{EncryptableEnvelope, FileTrackingMeta, VaultManifest};
 use hex;
-use log::{info, warn};
+use log::info;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -40,21 +40,19 @@ impl VaultPackager {
                 if let Ok(content) = fs::read(&full_path) {
                     hashes.insert(target.to_string(), calculate_hash(&content));
                 }
-            } else if full_path.is_dir() {
-                if let Ok(entries) = fs::read_dir(&full_path) {
+            } else if full_path.is_dir()
+                && let Ok(entries) = fs::read_dir(&full_path) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_file() {
-                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if path.is_file()
+                            && let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                                 let relative_id = format!("{}/{}", target, file_name);
                                 if let Ok(content) = fs::read(&path) {
                                     hashes.insert(relative_id, calculate_hash(&content));
                                 }
                             }
-                        }
                     }
                 }
-            }
         }
         hashes
     }
@@ -85,12 +83,11 @@ impl VaultPackager {
                 if let Ok(entries) = fs::read_dir(&full_path) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_file() {
-                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if path.is_file()
+                            && let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                                 let relative_id = format!("{}/{}", target, file_name);
                                 self.process_file(&path, &relative_id, &mut new_manifest, &mut out_envelopes)?;
                             }
-                        }
                     }
                 }
             }
@@ -123,12 +120,11 @@ impl VaultPackager {
         let hash = calculate_hash(&content);
         
         // Check if file has changed
-        if let Some(meta) = manifest.files.get(relative_id) {
-            if meta.checksum == hash && !meta.is_delta {
+        if let Some(meta) = manifest.files.get(relative_id)
+            && meta.checksum == hash && !meta.is_delta {
                 // File unchanged, skip encryption step to save CPU/Bandwidth
                 return Ok(());
             }
-        }
 
         info!("Segment {} was modified. Encrypting for Vault...", relative_id);
 
