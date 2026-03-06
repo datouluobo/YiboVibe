@@ -117,53 +117,71 @@ export default function WriterWindow() {
     return (
         <div className="writer-overlay">
             <div className="writer-container">
-                <div className="writer-header" onMouseDown={() => getCurrentWindow().startDragging()}>
-                    <span>YiboFlow Midas</span>
-                    <button className="writer-close-btn" onMouseDown={(e) => e.stopPropagation()} onClick={handleDismiss}>✕</button>
+                {/* Drag handle — same as FlowHint */}
+                <div
+                    className="writer-drag-handle"
+                    onMouseDown={() => getCurrentWindow().startDragging()}
+                    style={{ position: 'relative' }}
+                >
+                    <div className="writer-drag-pill" />
+                    <button
+                        className="writer-close-btn"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={handleDismiss}
+                    >✕</button>
                 </div>
 
-                <div className="writer-input-section">
+                <div className="writer-body">
+                    {/* Source text snippet */}
                     <div className="writer-input-snippet">
-                        {payloadText.length > 100
-                            ? payloadText.substring(0, 100) + "..."
-                            : payloadText || t('flowwriter.waiting_for_text')}
+                        {payloadText.length > 120
+                            ? payloadText.substring(0, 120) + "..."
+                            : payloadText || t('flowwriter.waiting_for_text', '等待文本输入...')}
                     </div>
+
+                    {/* Action buttons */}
+                    {!isProcessing && output === "" && (
+                        <div className="writer-actions">
+                            <button onClick={() => handleAction("Polish")}>✨ 润色</button>
+                            <button onClick={() => handleAction("Expand", "1.5")}>📝 扩写</button>
+                            <button onClick={() => handleAction("Condense", "50%")}>✂️ 缩写</button>
+                            <button onClick={() => handleAction("Summarize")}>📌 总结</button>
+                            <button onClick={() => handleAction("Translate", "English")}>🌐 译为英文</button>
+                            <button onClick={() => handleAction("Explain")}>💡 解释</button>
+
+                            {customPrompts.map(p => (
+                                <button key={p.id} onClick={() => handleAction("Custom", p.id)}>
+                                    {p.icon} {p.name}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Output area */}
+                    {(isProcessing || output || error) && (
+                        <div className="writer-output-section">
+                            {error && <div className="writer-error">{error}</div>}
+
+                            <div className="writer-result">
+                                <ReactMarkdown>{output}</ReactMarkdown>
+                                {isProcessing && <span className="writer-cursor"></span>}
+                            </div>
+
+                            {!isProcessing && !error && output && (
+                                <div className="writer-output-footer">
+                                    <button className="writer-btn-secondary" onClick={() => setOutput("")}>放弃</button>
+                                    <button className="writer-btn-primary" onClick={handleApply}>替换/插入</button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
-                {!isProcessing && output === "" && (
-                    <div className="writer-actions">
-                        <button onClick={() => handleAction("Polish")}>✨ 润色</button>
-                        <button onClick={() => handleAction("Expand", "1.5")}>📝 扩写</button>
-                        <button onClick={() => handleAction("Condense", "50%")}>✂️ 缩写</button>
-                        <button onClick={() => handleAction("Summarize")}>📌 总结</button>
-                        <button onClick={() => handleAction("Translate", "English")}>🌐 译为英文</button>
-                        <button onClick={() => handleAction("Explain")}>💡 解释</button>
-
-                        {customPrompts.map(p => (
-                            <button key={p.id} onClick={() => handleAction("Custom", p.id)}>
-                                {p.icon} {p.name}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
-                {(isProcessing || output || error) && (
-                    <div className="writer-output-section">
-                        {error && <div className="writer-error">{error}</div>}
-
-                        <div className="writer-result markdown-body">
-                            <ReactMarkdown>{output}</ReactMarkdown>
-                            {isProcessing && <span className="writer-cursor"></span>}
-                        </div>
-
-                        {!isProcessing && !error && output && (
-                            <div className="writer-output-footer">
-                                <button className="writer-btn-secondary" onClick={() => setOutput("")}>放弃</button>
-                                <button className="writer-btn-primary" onClick={handleApply}>替换/插入</button>
-                            </div>
-                        )}
-                    </div>
-                )}
+                {/* Footer — matches FlowHint */}
+                <div className="writer-footer">
+                    <span>Esc 关闭</span>
+                    <span style={{ color: '#5E6AD2' }}>YiboFlow Midas</span>
+                </div>
             </div>
         </div>
     );

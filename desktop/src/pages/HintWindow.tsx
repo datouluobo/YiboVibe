@@ -153,6 +153,7 @@ export default function HintWindow() {
             boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
+            overflow: 'hidden',
         }}>
             {/* INNER CARD: Actual UI bounds */}
             <div style={{
