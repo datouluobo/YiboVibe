@@ -9,3 +9,5 @@ pub mod p2p;
 pub mod backup;
 pub mod dictionary;
 pub mod smart_router;
+pub mod local_auth;
+pub mod sync;

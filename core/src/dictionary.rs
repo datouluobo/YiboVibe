@@ -43,17 +43,20 @@ fn default_min_trigger() -> usize {
 }
 
 pub fn get_dict_dir() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-    path.push("YiboFlow");
+    let mut path = crate::local_auth::get_active_user_dir();
     path.push("dictionaries");
     path
 }
 
 fn get_freq_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-    path.push("YiboFlow");
+    let mut path = crate::local_auth::get_active_user_dir();
     path.push("freq.json");
     path
+}
+
+pub fn reload() {
+    load_freq_cache();
+    init_and_load_dictionaries();
 }
 
 pub fn load_freq_cache() {

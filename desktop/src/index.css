@@ -143,6 +143,10 @@ body {
   /* Desktop App feel */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Disable selection by default to feel like a native app */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #root {

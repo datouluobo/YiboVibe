@@ -19,6 +19,9 @@ services:
       - DB_DSN=host=db user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} port=5432 sslmode=disable TimeZone=Asia/Shanghai
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - GIN_MODE=${GIN_MODE:-release}
+      - VAULT_DATA_DIR=/root/vault_data
+    volumes:
+      - vaultdata:/root/vault_data
     depends_on:
       db:
         condition: service_healthy
@@ -73,6 +76,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  vaultdata:
 
     # 专属极安全的内部网段，切分物理隔离屏障
 networks:

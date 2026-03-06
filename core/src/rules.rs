@@ -140,13 +140,19 @@ lazy_static! {
 
 impl FlowRulesConfig {
     pub fn rules_path() -> PathBuf {
-        let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-        path.push("YiboFlow");
-        if !path.exists() {
-            let _ = fs::create_dir_all(&path);
-        }
+        let mut path = crate::local_auth::get_active_user_dir();
         path.push("rules.json");
         path
+    }
+
+    pub fn reload() {
+        let new_cfg = Self::load_or_default();
+        if let Ok(mut lock) = RULES_CONFIG.write() {
+            *lock = new_cfg.clone();
+        }
+        if let Ok(mut lock) = RULES_CACHE.write() {
+            *lock = RulesCache::from_config(&new_cfg);
+        }
     }
 
     pub fn load_or_default() -> Self {
@@ -176,6 +182,10 @@ impl FlowRulesConfig {
             Err(e) => error!("Failed to serialize rules: {}", e),
         }
     }
+}
+
+pub fn reload() {
+    FlowRulesConfig::reload();
 }
 
 /// 将当前 CONFIG 刷入磁盘并重建缓存

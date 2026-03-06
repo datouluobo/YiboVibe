@@ -8,3 +8,10 @@ node_modules/
 *.txt
 *.exe
 .env
+/server/yiboflow_server_linux
+/start_debug.bat
+/git_log.txt
+/git_status.txt
+/git_status_out.txt
+/error.txt
+/error.log

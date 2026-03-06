@@ -2,7 +2,6 @@ import { useTranslation } from "react-i18next";
 import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { message } from "@tauri-apps/plugin-dialog";
 import { CustomSelect } from "../components/CustomSelect";
 
 interface SmartEntry {
@@ -39,6 +38,7 @@ export default function FlowMind() {
 
     // Custom confirm dialog for delete
     const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean, targetId: string | null }>({ isOpen: false, targetId: null });
+    const [alertDialog, setAlertDialog] = useState<{ isOpen: boolean, message: string }>({ isOpen: false, message: "" });
 
     const TRIGGER_OPTIONS = [
         { val: "", label: "无" },
@@ -208,7 +208,7 @@ export default function FlowMind() {
             await invoke("delete_dictionary", { id });
             await loadData();
         } catch (e) {
-            await message("删除失败: " + e, { kind: 'error' });
+            setAlertDialog({ isOpen: true, message: "删除失败: " + e });
         }
     };
 
@@ -216,12 +216,21 @@ export default function FlowMind() {
         if (!editingDict) return;
         try {
             if (!editingDict.name.trim()) {
-                await message("请输入词库名称", { kind: 'warning' });
+                setAlertDialog({ isOpen: true, message: "请输入词库名称" });
                 return;
             }
-            for (const e of editingDict.entries) {
+            for (let i = 0; i < editingDict.entries.length; i++) {
+                const e = editingDict.entries[i];
                 if (!e.content.trim()) {
-                    await message("词条内容不能为空", { kind: 'warning' });
+                    setAlertDialog({ isOpen: true, message: `第 ${i + 1} 个词条内容不能为空` });
+                    return;
+                }
+                if (e.trigger_key && !e.keyword?.trim()) {
+                    setAlertDialog({ isOpen: true, message: `第 ${i + 1} 个词条已设置触发前缀，请提供配套的缩写词` });
+                    return;
+                }
+                if (!e.trigger_key && e.keyword?.trim()) {
+                    setAlertDialog({ isOpen: true, message: `第 ${i + 1} 个词条已设置缩写词，必须提供配套的触发前缀` });
                     return;
                 }
             }
@@ -229,7 +238,7 @@ export default function FlowMind() {
             setIsModalOpen(false);
             await loadData();
         } catch (e) {
-            await message("保存失败: " + e, { kind: 'error' });
+            setAlertDialog({ isOpen: true, message: "保存失败: " + e });
         }
     };
 
@@ -482,14 +491,14 @@ export default function FlowMind() {
                                         <div key={idx} style={{ display: 'flex', gap: '8px', background: 'var(--color-surface)', padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)' }}>
                                             <div style={{ width: '135px' }}>
                                                 {isReadOnly ? (
-                                                    <input className="modern-input" placeholder="触发键 (可选)"
+                                                    <input className="modern-input" placeholder="无触发前缀"
                                                         value={entry.trigger_key || ''} readOnly={true}
                                                         style={{ padding: '0 8px', height: '34px', width: '100%', fontSize: '12px' }} />
                                                 ) : (
                                                     <CustomSelect
                                                         options={TRIGGER_OPTIONS}
                                                         value={entry.trigger_key || ''}
-                                                        placeholder="选择触发键"
+                                                        placeholder="无前缀"
                                                         triggerStyle={{ padding: '0 12px', height: '34px', fontSize: '12px' }}
                                                         style={{ fontSize: '12px' }}
                                                         onChange={val => {
@@ -505,7 +514,7 @@ export default function FlowMind() {
                                                 )}
                                             </div>
                                             <div style={{ width: '100px' }}>
-                                                <input className="modern-input" placeholder="缩写键 (可选)"
+                                                <input className="modern-input" placeholder={entry.trigger_key ? "缩写词 (必填)" : "无缩写 (需前缀)"}
                                                     value={entry.keyword || ''} readOnly={isReadOnly || !entry.trigger_key}
                                                     disabled={!entry.trigger_key}
                                                     onChange={e => {
@@ -515,7 +524,7 @@ export default function FlowMind() {
                                                     }} style={{ padding: '0 8px', height: '34px', width: '100%', fontSize: '12px', opacity: (!entry.trigger_key) ? 0.5 : 1 }} />
                                             </div>
                                             <div style={{ flex: 1 }}>
-                                                <input className="modern-input" placeholder="输入替换上屏的内容 (若未设置触发键或缩写键，仍然支持智能候选模式)"
+                                                <input className="modern-input" placeholder="输入替换上屏的内容 (若不设前缀和缩写，则完全依赖于智能推荐模式)"
                                                     value={entry.content} readOnly={isReadOnly}
                                                     onChange={e => {
                                                         const newEntries = [...editingDict.entries];
@@ -581,6 +590,38 @@ export default function FlowMind() {
                             <button onClick={confirmDelete} className="btn-primary" style={{ padding: '8px 16px', fontSize: '14px', background: '#ef4444', backgroundBlendMode: 'normal' }}>
                                 确认删除
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom Alert Dialog */}
+            {alertDialog.isOpen && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(3px)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    zIndex: 1000,
+                    animation: 'fadeIn 0.2s ease-out'
+                }}>
+                    <div className="glass-panel" style={{
+                        width: '360px',
+                        background: 'var(--color-bg-base)',
+                        padding: '24px',
+                        boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                        display: 'flex', flexDirection: 'column', gap: '20px',
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ padding: '10px', background: 'rgba(239,160,0,0.1)', borderRadius: '100px', color: '#f59e0b' }}>
+                                <AlertCircle size={24} />
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>提示</h3>
+                                <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'var(--color-text-muted)', lineHeight: 1.4 }}>{alertDialog.message}</p>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                            <button onClick={() => setAlertDialog({ isOpen: false, message: "" })} className="btn-primary" style={{ padding: '8px 20px', fontSize: '14px', borderRadius: 'var(--radius-md)' }}>确定</button>
                         </div>
                     </div>
                 </div>

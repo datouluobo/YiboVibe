@@ -15,9 +15,7 @@ pub struct BackupManifest {
 }
 
 pub fn get_data_dir() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-    path.push("YiboFlow");
-    path
+    crate::local_auth::get_active_user_dir()
 }
 
 pub fn export_config(dest_path: &str) -> Result<(), String> {
@@ -124,10 +122,9 @@ pub fn import_config(src_path: &str) -> Result<(), String> {
     }
 
     // Reload singletons by calling force reload
-    if let Ok(mut cfg) = crate::config::GLOBAL_CONFIG.write() {
-        *cfg = crate::config::AppConfig::load_or_default();
-    }
-    crate::rules::force_reload_from_disk();
+    crate::config::reload();
+    crate::rules::reload();
+    crate::dictionary::reload();
 
     info!("Configuration imported successfully from: {}", src_path);
     Ok(())

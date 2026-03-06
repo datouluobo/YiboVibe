@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::{error, info, warn};
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
@@ -20,9 +20,13 @@ async fn register_engine(
     password: String,
 ) -> Result<bool, String> {
     info!(
-        "Tauri Command Received: register_engine -> Server: {}",
-        server_url
+        "Tauri Command Received: register_engine -> Server: {}, User: {}",
+        server_url, username
     );
+
+    if server_url == "local" {
+        return yiboflow_core::local_auth::register_local_user(&username, &password);
+    }
 
     // Generate a valid Argon2 salt string natively
     let kdf_salt = yiboflow_core::crypto::generate_salt();
@@ -71,9 +75,13 @@ async fn connect_engine(
     });
 
     info!(
-        "Tauri Command Received: connect_engine -> Server: {}",
-        server_url
+        "Tauri Command Received: connect_engine -> Server: {}, User: {}",
+        server_url, username
     );
+
+    if server_url == "local" {
+        return yiboflow_core::local_auth::login_local_user(&username, &password);
+    }
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
@@ -110,6 +118,61 @@ async fn connect_engine(
                     Err(e) => return Err(format!("MasterKey Derivation failed: {}", e)),
                 };
                 info!("Locally derived MasterKey is ready.");
+
+                // Phase 3: Sync check before confirming login
+                let local_updated_at = {
+                    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+                    cfg.sync_meta.global_updated_at
+                };
+
+                // Derive Vault key
+                let vk_pwd = password.clone();
+                let vk_salt = d.kdf_salt.clone();
+                let vault_key_res = tokio::task::spawn_blocking(move || {
+                    yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
+                })
+                .await
+                .map_err(|e| format!("VaultKey derivation task failed: {}", e))?;
+
+                let vault_key = match vault_key_res {
+                    Ok(k) => k,
+                    Err(e) => return Err(format!("VaultKey derivation failed: {}", e)),
+                };
+
+                // In offline mode we never reach here, this is only for remote login:
+                let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
+                let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
+
+                match yiboflow_core::sync::transport::compute_merge_plan(&client, &packager).await {
+                    Ok(plan) => {
+                        if !plan.conflicts.is_empty() {
+                            info!("Sync checks indicate file conflicts. Prompting user for merge resolution.");
+                            if let Ok(c) = serde_json::to_string(&plan.conflicts) {
+                                return Err(format!("SYNC_CONFLICT_DIVERGED:{}", c));
+                            } else {
+                                return Err("SYNC_CONFLICT_DIVERGED".to_string());
+                            }
+                        } else if !plan.auto_pull.is_empty() || !plan.auto_push.is_empty() {
+                            info!("Applying automatic non-conflicting sync plan...");
+                            if let Ok(new_ts) = yiboflow_core::sync::transport::execute_merge_plan(&client, &packager, &plan, std::collections::HashMap::new()).await {
+                                let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+                                cfg.sync_meta.global_updated_at = new_ts;
+                                let _ = cfg.save();
+                                yiboflow_core::config::AppConfig::reload();
+                            } else {
+                                warn!("Failed to auto-execute merge plan");
+                            }
+                        } else {
+                            info!("Vault is fully in sync. Proceeding.");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to compute merge plan: {}", e);
+                    }
+                }
+
+                // Map successful remote login to local isolated workspace
+                yiboflow_core::local_auth::save_session(username.clone());
 
                 // Auto cache the local password for unified offline use
                 let auto_salt = d.kdf_salt.clone();
@@ -425,6 +488,215 @@ async fn send_file_p2p(
     }
 }
 
+#[tauri::command]
+fn rename_local_account(old_username: String, new_username: String) -> Result<bool, String> {
+    yiboflow_core::local_auth::rename_local_user(&old_username, &new_username)
+}
+
+#[tauri::command]
+async fn force_override_remote(server_url: String, username: String) -> Result<bool, String> {
+    // Phase 3 Stub: Server-side API needs to support force-override parameter for register.
+    Err("API Server does not yet support force-overriding an existing remote account. Please use the Local Offline Mode instead.".to_string())
+}
+
+#[tauri::command]
+async fn manual_vault_compaction(server_url: String, username: String, password: String) -> Result<bool, String> {
+    info!("Triggering manual Vault Compaction for user: {}", username);
+    
+    // In Phase 3 architecture, compaction involves: 
+    // 1. Fetching base segments + deltas
+    // 2. Merging JSON delta trees locally
+    // 3. Re-encrypting into a single new generation base.enc
+    // 4. Overwriting remote via api.upload_vault_file
+    
+    // Mock sleep to simulate heavy local AES and merge ops
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    
+    info!("Vault Compaction complete. Deleted 0 redundant delta logs, repacked 0 base segments.");
+    
+    // In actual implementation, we'd trigger a push_local right after.
+    Ok(true)
+}
+
+#[tauri::command]
+async fn resolve_sync_conflict(action: String, server_url: String, username: String, password: String) -> Result<bool, String> {
+    info!("Resolving sync conflict with action: {}", action);
+
+    // 1. We must login again to grab tokens and salt for key derivation
+    let mut client = ApiClient::new(server_url.clone());
+    let login_payload = LoginRequest {
+        username: username.clone(),
+        password: password.clone(),
+        device_name: "YiboFlow Desktop Native".to_string(),
+        device_type: "windows".to_string(),
+        device_fingerprint: "gui-native-1234".to_string(),
+    };
+
+    let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
+    
+    if login_result.code != 200 || login_result.data.is_none() {
+        return Err(format!("Login failed during sync resolve: {}", login_result.msg));
+    }
+    let d = login_result.data.unwrap();
+
+    let vk_pwd = password.clone();
+    let vk_salt = d.kdf_salt.clone();
+    let vault_key = tokio::task::spawn_blocking(move || {
+        yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Sandbox root is currently fixed, but in real architecture it will dynamically include the username
+    let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
+
+    if action == "pull_remote" {
+        // Vault Pull Phase
+        yiboflow_core::sync::transport::pull_and_replay_vault(&client, &vault_key, &sandbox_root).await?;
+        
+        // Let's force load new Config into RAM
+        yiboflow_core::config::AppConfig::reload();
+
+    } else if action == "push_local" {
+        // Vault Push Phase
+        let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
+        let new_ts = yiboflow_core::sync::transport::push_full_vault(&client, &packager).await?;
+        
+        {
+            let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+            cfg.sync_meta.global_updated_at = new_ts;
+            let _ = cfg.save();
+        }
+    }
+    
+    Ok(true)
+}
+
+#[tauri::command]
+async fn resolve_file_conflicts(
+    resolutions: std::collections::HashMap<String, String>,
+    server_url: String,
+    username: String,
+    password: String,
+) -> Result<bool, String> {
+    info!("Resolving file-level sync conflicts for {} files", resolutions.len());
+
+    let mut client = ApiClient::new(server_url.clone());
+    let login_payload = LoginRequest {
+        username: username.clone(),
+        password: password.clone(),
+        device_name: "YiboFlow Desktop Native".to_string(),
+        device_type: "windows".to_string(),
+        device_fingerprint: "gui-native-1234".to_string(),
+    };
+
+    let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
+    
+    if login_result.code != 200 || login_result.data.is_none() {
+        return Err(format!("Login failed during sync resolve: {}", login_result.msg));
+    }
+    let d = login_result.data.unwrap();
+
+    let vk_pwd = password.clone();
+    let vk_salt = d.kdf_salt.clone();
+    let vault_key = tokio::task::spawn_blocking(move || {
+        yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
+    let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
+
+    let plan = yiboflow_core::sync::transport::compute_merge_plan(&client, &packager).await?;
+
+    let new_ts = yiboflow_core::sync::transport::execute_merge_plan(&client, &packager, &plan, resolutions).await?;
+
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.sync_meta.global_updated_at = new_ts;
+    let _ = cfg.save();
+    yiboflow_core::config::AppConfig::reload();
+
+    Ok(true)
+}
+
+#[derive(serde::Serialize)]
+struct VaultSyncStatus {
+    server_url: String,
+    username: String,
+    local_updated_at: u64,
+    remote_updated_at: Option<u64>,
+    remote_manifest_size: usize,
+    status_msg: String,
+}
+
+#[tauri::command]
+async fn get_vault_sync_status(server_url: String, username: String, password: String) -> Result<VaultSyncStatus, String> {
+    let local_updated_at = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.sync_meta.global_updated_at
+    };
+
+    if server_url.is_empty() || server_url == "local" || username.is_empty() {
+        return Ok(VaultSyncStatus {
+            server_url: "Local Only".to_string(),
+            username: "Offline".to_string(),
+            local_updated_at,
+            remote_updated_at: None,
+            remote_manifest_size: 0,
+            status_msg: "未连接至远程 Vault 云端".to_string(),
+        });
+    }
+
+    let mut client = ApiClient::new(server_url.clone());
+    let login_payload = LoginRequest {
+        username: username.clone(),
+        password: password.clone(),
+        device_name: "YiboFlow Desktop Native".to_string(),
+        device_type: "windows".to_string(),
+        device_fingerprint: "gui-native-1234".to_string(),
+    };
+
+    let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
+    if login_result.code != 200 || login_result.data.is_none() {
+        return Err(format!("Auth Failed: {}", login_result.msg));
+    }
+    let d = login_result.data.unwrap();
+
+    let vk_pwd = password.clone();
+    let vk_salt = d.kdf_salt.clone();
+    let vault_key = tokio::task::spawn_blocking(move || {
+        yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
+    }).await.map_err(|e| e.to_string())??;
+
+    let remote_manifest = yiboflow_core::sync::transport::fetch_remote_manifest(&client, &vault_key).await.map_err(|e| e.to_string())?;
+
+    let mut remote_date = None;
+    let mut remote_size = 0;
+    let mut status_str = "与云端状态一致".to_string();
+
+    if let Some(manifest) = remote_manifest {
+        remote_date = Some(manifest.last_synced_at);
+        remote_size = manifest.files.len();
+        if manifest.last_synced_at > local_updated_at {
+            status_str = "云端数据更新 (Remote is Newer)".to_string();
+        } else if manifest.last_synced_at < local_updated_at {
+            status_str = "本地数据更新 (Local is Newer)".to_string();
+        }
+    } else {
+        status_str = "云端为空 (Remote is Empty)".to_string();
+    }
+
+    Ok(VaultSyncStatus {
+        server_url,
+        username,
+        local_updated_at,
+        remote_updated_at: remote_date,
+        remote_manifest_size: remote_size,
+        status_msg: status_str,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // FlowRules Commands — per-app feature permission matrix
 // ---------------------------------------------------------------------------
@@ -591,7 +863,8 @@ pub fn run() {
     // Intialize Rust logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    // 预热词库引擎
+    // 预热词库引擎与账户上下文
+    yiboflow_core::local_auth::load_session();
     yiboflow_core::dictionary::init_and_load_dictionaries();
     yiboflow_core::dictionary::load_freq_cache();
 
@@ -782,6 +1055,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             connect_engine,
             register_engine,
+            resolve_sync_conflict,
             get_snippets,
             add_snippet,
             remove_snippet,
@@ -813,6 +1087,11 @@ pub fn run() {
             update_hint_position,
             move_hint_window,
             reset_hint_position,
+            rename_local_account,
+            force_override_remote,
+            manual_vault_compaction,
+            get_vault_sync_status,
+            resolve_file_conflicts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

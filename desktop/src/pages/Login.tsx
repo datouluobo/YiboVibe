@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Lock, User, Server, ChevronDown } from "lucide-react";
+import { Lock, User, Server, ChevronDown, RefreshCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -52,6 +52,10 @@ export default function Login() {
     const [errorMsg, setErrorMsg] = useState("");
     const [isRegistering, setIsRegistering] = useState(false);
     const [successMsg, setSuccessMsg] = useState("");
+    const [showConflictModal, setShowConflictModal] = useState(false);
+    const [showSyncConflictModal, setShowSyncConflictModal] = useState<{ isOpen: boolean, files: string[] }>({ isOpen: false, files: [] });
+    const [conflictResolutions, setConflictResolutions] = useState<Record<string, 'keep_local' | 'take_remote'>>({});
+    const [renameValue, setRenameValue] = useState("");
 
     const updateHistory = (url: string) => {
         const updated = [url, ...urlHistory.filter(h => h !== url)].slice(0, 5);
@@ -104,7 +108,23 @@ export default function Login() {
                 }
             }
         } catch (error) {
-            setErrorMsg(String(error));
+            const errStr = String(error);
+            if (isRegistering && (errStr.includes("err") || errStr.toLowerCase().includes("exist") || errStr.includes("409"))) {
+                setShowConflictModal(true);
+            } else if (!isRegistering && errStr.includes("SYNC_CONFLICT_DIVERGED:")) {
+                try {
+                    const jsonPart = errStr.split("SYNC_CONFLICT_DIVERGED:")[1];
+                    const files = JSON.parse(jsonPart);
+                    const initialResolutions: Record<string, 'keep_local' | 'take_remote'> = {};
+                    files.forEach((f: string) => initialResolutions[f] = 'keep_local');
+                    setConflictResolutions(initialResolutions);
+                    setShowSyncConflictModal({ isOpen: true, files });
+                } catch {
+                    setErrorMsg("Failed to parse conflict metadata: " + errStr);
+                }
+            } else {
+                setErrorMsg(errStr);
+            }
         } finally {
             setLoading(false);
         }
@@ -148,25 +168,29 @@ export default function Login() {
                             <Server size={18} style={{ position: "absolute", left: 14, top: 12, color: "#8E8E93", zIndex: 2 }} />
                             <input
                                 id="serverUrl"
-                                type="url"
+                                type="text"
                                 className="modern-input"
                                 style={{ paddingLeft: 40, paddingRight: 40 }}
                                 placeholder="e.g. http://127.0.0.1:8080"
-                                value={serverUrl}
-                                onChange={(e) => setServerUrl(e.target.value)}
-                                onFocus={() => urlHistory.length > 0 && setShowHistory(true)}
+                                value={serverUrl === 'local' ? t('login.local_mode_label') : serverUrl}
+                                onChange={(e) => {
+                                    if (e.target.value !== t('login.local_mode_label')) {
+                                        setServerUrl(e.target.value);
+                                    }
+                                }}
+                                onFocus={() => setShowHistory(true)}
                                 required
                             />
 
                             <div
                                 style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: "pointer", color: "#8E8E93" }}
-                                onClick={() => urlHistory.length > 0 && setShowHistory(!showHistory)}
+                                onClick={() => setShowHistory(!showHistory)}
                             >
                                 <ChevronDown size={18} style={{ transform: showHistory ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                             </div>
 
                             <AnimatePresence>
-                                {showHistory && urlHistory.length > 0 && (
+                                {showHistory && (
                                     <motion.div
                                         initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}
                                         style={{
@@ -182,7 +206,30 @@ export default function Login() {
                                             boxShadow: "var(--shadow-glass)",
                                             overflow: "hidden"
                                         }}>
-                                        {urlHistory.map(histUrl => (
+                                        <div
+                                            style={{
+                                                padding: "12px 14px",
+                                                cursor: "pointer",
+                                                color: "var(--color-text-main)",
+                                                borderBottom: "1px solid var(--color-glass-border)",
+                                                fontSize: "13px",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: "8px",
+                                                fontWeight: 500
+                                            }}
+                                            onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "var(--color-glass-bg)" })}
+                                            onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "transparent" })}
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => {
+                                                setServerUrl('local');
+                                                setShowHistory(false);
+                                            }}
+                                        >
+                                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#30d158" }}></div>
+                                            {t('login.local_mode_label')}
+                                        </div>
+                                        {urlHistory.filter(h => h !== 'local').map(histUrl => (
                                             <div
                                                 key={histUrl}
                                                 style={{
@@ -287,6 +334,156 @@ export default function Login() {
                     </div>
                 </form>
             </motion.div>
+
+            {/* Conflict Resolution Modal */}
+            <AnimatePresence>
+                {showConflictModal && (
+                    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            style={{ background: "var(--color-surface-elevated)", padding: 24, borderRadius: 12, width: 440, boxShadow: "var(--shadow-glass)" }}
+                        >
+                            <h3 style={{ marginTop: 0, color: "var(--color-text-main)" }}>⚠️ {t('login.conflict_title')}</h3>
+                            <p style={{ color: "var(--color-text-muted)", fontSize: 13, lineHeight: 1.5 }}>
+                                {t('login.conflict_desc')}
+                            </p>
+
+                            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24 }}>
+                                <button className="btn-primary" onClick={() => {
+                                    setIsRegistering(false); // Switch to login
+                                    setShowConflictModal(false);
+                                }}>{t('login.conflict_merge')}</button>
+
+                                <div style={{ display: "flex", gap: 8 }}>
+                                    <input
+                                        type="text"
+                                        className="modern-input"
+                                        placeholder={t('login.rename_placeholder')}
+                                        value={renameValue}
+                                        onChange={e => setRenameValue(e.target.value)}
+                                        style={{ flex: 1 }}
+                                    />
+                                    <button className="btn-outline" disabled={!renameValue || renameValue === username} onClick={async () => {
+                                        try {
+                                            const success = await invoke<boolean>("rename_local_account", {
+                                                oldUsername: username,
+                                                newUsername: renameValue
+                                            });
+                                            if (success) {
+                                                setUsername(renameValue);
+                                                setShowConflictModal(false);
+                                                setSuccessMsg("Local account renamed successfully! Try initializing again.");
+                                                localStorage.setItem('yiboflow_username', renameValue);
+                                            }
+                                        } catch (e) {
+                                            setErrorMsg("Rename failed: " + String(e));
+                                            setShowConflictModal(false);
+                                        }
+                                    }}>{t('login.conflict_rename')}</button>
+                                </div>
+
+                                <button className="btn-outline" style={{ color: "#E81123", borderColor: "rgba(232,17,35,0.2)" }} onClick={async () => {
+                                    try {
+                                        await invoke("force_override_remote", {
+                                            serverUrl,
+                                            username
+                                        });
+                                    } catch (e) {
+                                        setErrorMsg("Override failed: " + String(e));
+                                        setShowConflictModal(false);
+                                    }
+                                }}>{t('login.conflict_override')}</button>
+                            </div>
+
+                            <button className="btn-ghost" style={{ marginTop: 16, width: "100%", fontSize: 13, color: "var(--color-text-muted)" }} onClick={() => setShowConflictModal(false)}>
+                                {t('login.conflict_cancel')}
+                            </button>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Sync Conflict Modal */}
+            {/* Sync Conflict Modal */}
+            <AnimatePresence>
+                {showSyncConflictModal.isOpen && (
+                    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            style={{ background: "var(--color-surface-elevated)", padding: 24, borderRadius: 12, width: 480, boxShadow: "var(--shadow-glass)" }}
+                        >
+                            <h3 style={{ marginTop: 0, color: "var(--color-text-main)", display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <RefreshCcw size={20} color="var(--color-danger)" />
+                                数据同步冲突
+                            </h3>
+                            <p style={{ color: "var(--color-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: '20px' }}>
+                                您的本机数据与云端数据发生了部分文件级别冲突（核心文件双端均被修改过）。请逐一选择保留哪个版本的数据：
+                            </p>
+
+                            <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 300, overflowY: 'auto', marginBottom: 20 }}>
+                                {showSyncConflictModal.files.map(file => (
+                                    <div key={file} style={{ background: "var(--color-bg-base)", padding: '12px', borderRadius: '8px', border: '1px solid var(--color-glass-border)' }}>
+                                        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 8 }}>📄 {file}</div>
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <button
+                                                className={conflictResolutions[file] === 'keep_local' ? 'btn-primary' : 'btn-outline'}
+                                                style={{ flex: 1, padding: '6px', fontSize: 13 }}
+                                                onClick={() => setConflictResolutions(prev => ({ ...prev, [file]: 'keep_local' }))}
+                                            >
+                                                保留本机数据
+                                            </button>
+                                            <button
+                                                className={conflictResolutions[file] === 'take_remote' ? 'btn-primary' : 'btn-outline'}
+                                                style={{ flex: 1, padding: '6px', fontSize: 13 }}
+                                                onClick={() => setConflictResolutions(prev => ({ ...prev, [file]: 'take_remote' }))}
+                                            >
+                                                使用云端数据
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <button className="btn-primary" style={{ width: "100%", background: "var(--color-danger)", border: "none" }} onClick={async () => {
+                                setLoading(true);
+                                setShowSyncConflictModal({ isOpen: false, files: [] });
+                                try {
+                                    await invoke("resolve_file_conflicts", {
+                                        resolutions: conflictResolutions,
+                                        serverUrl,
+                                        username,
+                                        password
+                                    });
+                                    // Once resolved successfully, navigate through
+                                    localStorage.setItem('yiboflow_server_url', serverUrl);
+                                    localStorage.setItem('yiboflow_username', username);
+                                    localStorage.setItem('yiboflow_connected_at', new Date().toISOString());
+                                    if (rememberPwd) {
+                                        localStorage.setItem('yiboflow_remember_pwd', 'true');
+                                        localStorage.setItem('yiboflow_saved_pwd', btoa(password));
+                                    }
+                                    updateHistory(serverUrl);
+                                    setLoading(false);
+                                    navigate("/app");
+                                } catch (e) {
+                                    setErrorMsg("合并冲突执行失败: " + String(e));
+                                    setLoading(false);
+                                }
+                            }}>
+                                🚀 确认合并计划并覆盖
+                            </button>
+
+                            <button className="btn-ghost" style={{ marginTop: 12, width: "100%", fontSize: 13, color: "var(--color-text-muted)" }} onClick={() => setShowSyncConflictModal({ isOpen: false, files: [] })}>
+                                取消登录
+                            </button>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

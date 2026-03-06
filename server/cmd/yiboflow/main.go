@@ -43,6 +43,8 @@ func main() {
 	go hub.Run()
 
 	r := gin.Default()
+	r.UseRawPath = true
+	r.UnescapePathValues = false
 
 	// Base API route
 	api := r.Group("/api/v1")
@@ -50,7 +52,7 @@ func main() {
 		api.GET("/ping", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"message": "pong",
-				"version": "v1.3",
+				"version": "v1.4",
 			})
 		})
 
@@ -90,6 +92,16 @@ func main() {
 
 			// Query online devices
 			protectedGrp.GET("/online", handler.GetOnlineDevices)
+		}
+
+		// Vault Advanced Sync Endpoint (Match client: /api/v1/vault/)
+		vaultGrp := api.Group("/vault")
+		if config.DB != nil {
+			vaultGrp.Use(middleware.JWTAuth())
+		}
+		{
+			vaultGrp.GET("/:filename", handler.DownloadVaultFile)
+			vaultGrp.PUT("/:filename", handler.UploadVaultFile)
 		}
 	}
 

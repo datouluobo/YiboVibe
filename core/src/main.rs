@@ -9,6 +9,8 @@ mod p2p;
 mod backup;
 mod dictionary;
 mod smart_router;
+mod local_auth;
+mod sync;
 
 use log::{error, info};
 use std::time::Duration;

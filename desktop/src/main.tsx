@@ -9,6 +9,11 @@ import HintWindow from "./pages/HintWindow";
 const savedTheme = localStorage.getItem('yiboflow_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
 
+// Disable the default browser right-click context menu globally to enforce native app immersion
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+});
+
 const isHintOverlay = window.location.hash === '#/hint';
 
 if (isHintOverlay) {

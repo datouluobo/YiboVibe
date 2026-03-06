@@ -92,4 +92,38 @@ impl ApiClient {
         let result = res.json().await?;
         Ok(result)
     }
+
+    /// Download a raw encrypted vault file (like manifest.enc)
+    pub async fn download_vault_file(&self, filename: &str) -> Result<Vec<u8>, String> {
+        let url = format!("{}/api/v1/vault/{}", self.base_url, filename);
+        let mut req = self.client.get(&url);
+        if let Some(ref tk) = self.access_token {
+            req = req.header("Authorization", format!("Bearer {}", tk));
+        }
+        let res = req.send().await.map_err(|e| e.to_string())?;
+        if res.status().is_success() {
+            let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+            Ok(bytes.to_vec())
+        } else if res.status() == reqwest::StatusCode::NOT_FOUND {
+            // Treat 404 as returning an empty object to initialize
+            Err("NOT_FOUND".to_string())
+        } else {
+            Err(format!("Server returned {}", res.status()))
+        }
+    }
+
+    /// Upload a raw encrypted vault file (like config.enc or a delta slice)
+    pub async fn upload_vault_file(&self, filename: &str, payload: Vec<u8>) -> Result<(), String> {
+        let url = format!("{}/api/v1/vault/{}", self.base_url, filename);
+        let mut req = self.client.put(&url).body(payload);
+        if let Some(ref tk) = self.access_token {
+            req = req.header("Authorization", format!("Bearer {}", tk));
+        }
+        let res = req.send().await.map_err(|e| e.to_string())?;
+        if res.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("Upload failed: Server returned {}", res.status()))
+        }
+    }
 }

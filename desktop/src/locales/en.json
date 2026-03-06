@@ -33,7 +33,15 @@
         "server_url": "Server URL",
         "msg_logging_in": "Initializing Engine...",
         "msg_connecting": "Deriving Keys...",
-        "remember_pwd": "Remember Password (Local only)"
+        "remember_pwd": "Remember Password (Local only)",
+        "local_mode_label": "[Local Offline Mode]",
+        "conflict_title": "Remote Account Conflict",
+        "conflict_desc": "An account with this username already exists on the server. Choose an action:",
+        "conflict_merge": "Verify & Merge Sync (Enter Remote Password)",
+        "conflict_rename": "Rename Local Account",
+        "conflict_override": "Force Override Remote (Danger)",
+        "conflict_cancel": "Cancel",
+        "rename_placeholder": "Enter new local username"
     },
     "dashboard": {
         "tab_sync": "Dashboard",

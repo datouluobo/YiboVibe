@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub hint_fixed_x: i32,
     #[serde(default = "default_neg_one")]
     pub hint_fixed_y: i32,
+    #[serde(default)]
+    pub sync_meta: crate::sync::SyncMeta,
 }
 
 fn default_min_chars() -> usize { 2 }
@@ -59,13 +61,15 @@ fn default_empty_snippet_hashmap() -> HashMap<String, SnippetValue> { HashMap::n
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
-        let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-        path.push("YiboFlow");
-        if !path.exists() {
-            let _ = fs::create_dir_all(&path);
-        }
+        let mut path = crate::local_auth::get_active_user_dir();
         path.push("config.json");
         path
+    }
+
+    pub fn reload() {
+        if let Ok(mut lock) = GLOBAL_CONFIG.write() {
+            *lock = Self::load_or_default();
+        }
     }
 
     pub fn load_or_default() -> Self {
@@ -117,14 +121,21 @@ impl AppConfig {
             flowhint_accept_key: 0x09,
             hint_fixed_x: -1,
             hint_fixed_y: -1,
+            sync_meta: crate::sync::SyncMeta::default(),
         };
         cfg.save();
         cfg
     }
 
     pub fn save(&self) {
+        // Automatically bump the timestamp on save if sync is enabled locally
+        let mut to_save = self.clone();
+        if to_save.is_sync_enabled {
+            to_save.sync_meta.global_updated_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        }
+
         let path = Self::config_path();
-        match serde_json::to_string_pretty(self) {
+        match serde_json::to_string_pretty(&to_save) {
             Ok(json) => {
                 if let Err(e) = fs::write(path, json) {
                     error!("Failed to save config: {}", e);
@@ -228,4 +239,8 @@ pub fn remove_blocked_app(app_name: String) -> Result<(), String> {
     cfg.blocked_apps.retain(|a| a != &sanitized_app_name);
     cfg.save();
     Ok(())
+}
+
+pub fn reload() {
+    AppConfig::reload();
 }
