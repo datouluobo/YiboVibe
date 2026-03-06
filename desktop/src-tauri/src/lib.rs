@@ -532,7 +532,7 @@ async fn force_override_remote(server_url: String, username: String) -> Result<b
 }
 
 #[tauri::command]
-async fn manual_vault_compaction(server_url: String, username: String, password: String) -> Result<bool, String> {
+async fn manual_vault_compaction(_server_url: String, username: String, _password: String) -> Result<bool, String> {
     info!("Triggering manual Vault Compaction for user: {}", username);
     
     // In Phase 3 architecture, compaction involves: 
@@ -904,7 +904,11 @@ pub fn run() {
     yiboflow_core::hook_manager::start_global_hook();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_denylist(&["hint", "writer"])
+                .build()
+        )
         .manage(AppState {
             is_connected: Mutex::new(false),
             ws_tx: Mutex::new(None),
@@ -1102,12 +1106,15 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             let writer_hwnd = {
-                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, ShowWindow, SW_HIDE, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER};
                 let raw_hwnd = writer_win.hwnd().unwrap();
                 let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
                 unsafe {
                     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
                     SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
+                    // Force hide and move off-screen at startup
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    let _ = SetWindowPos(hwnd, None, -9999, -9999, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
                 }
                 hwnd
             };

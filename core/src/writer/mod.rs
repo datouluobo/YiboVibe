@@ -15,6 +15,7 @@ lazy_static::lazy_static! {
     pub static ref LAST_HOTKEY_TRIGGER_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 }
 
+#[allow(dead_code)]
 pub fn set_writer_tx(tx: std::sync::mpsc::Sender<WriterEvent>) {
     *WRITER_TX.lock().unwrap() = Some(tx);
 }

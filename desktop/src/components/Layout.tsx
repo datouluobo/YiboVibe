@@ -38,7 +38,7 @@ export default function Layout() {
             id: "input",
             items: [
                 { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
-                { id: "flowwriter", path: "/app/flowwriter", icon: PenTool, labelKey: "nav.flowwriter", tooltipKey: "nav.tooltip_flowwriter", disabled: true },
+                { id: "flowwriter", path: "/app/flowwriter", icon: PenTool, labelKey: "nav.flowwriter", tooltipKey: "nav.tooltip_flowwriter" },
                 { id: "flowpredict", path: "/app/flowpredict", icon: BrainCircuit, labelKey: "nav.flowpredict", tooltipKey: "nav.tooltip_flowpredict", disabled: true },
             ]
         },
