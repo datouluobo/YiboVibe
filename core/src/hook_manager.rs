@@ -278,8 +278,26 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         *last_trigger = Some(std::time::Instant::now());
                     }
                     
-                    std::thread::spawn(|| {
+                    // Get cursor position for popup placement
+                    let mut cx = 0i32;
+                    let mut cy = 0i32;
+                    unsafe {
+                        use windows::Win32::Foundation::POINT;
+                        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+                        let mut pt = POINT::default();
+                        if GetCursorPos(&mut pt).is_ok() {
+                            cx = pt.x;
+                            cy = pt.y;
+                        }
+                    }
+                    
+                    // Simulate Ctrl+C to copy selected text
+                    std::thread::spawn(move || {
                         use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VIRTUAL_KEY};
+                        
+                        // Brief sleep to let modifier keys release from the hotkey combo
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        
                         unsafe {
                             let mut inputs: Vec<INPUT> = Vec::new();
                             
@@ -307,6 +325,21 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                             
                             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
                         }
+                        
+                        // Wait for clipboard to update, then read and send
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        
+                        let text = if let Ok(mut cb) = arboard::Clipboard::new() {
+                            cb.get_text().unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+                        
+                        info!("FlowWriter: sending TextSelected with {} chars at ({}, {})", text.len(), cx, cy);
+                        crate::writer::send_writer_event(crate::writer::WriterEvent::TextSelected {
+                            text,
+                            x: cx, y: cy,
+                        });
                     });
                     
                     return LRESULT(1);

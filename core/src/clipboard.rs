@@ -124,34 +124,15 @@ impl ClipboardMonitor {
                     if should_dispatch {
                         let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
                         
-                        // Check if this was a simulated copy from hotkey
-                        let mut was_hotkey = false;
-                        if let Ok(mut last_trigger) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock()
-                            && let Some(t) = *last_trigger
-                                && t.elapsed().as_millis() < 500 {
-                                    was_hotkey = true;
-                                    *last_trigger = None; // clear it
-                                }
+                        // FlowWriter clipboard trigger (copy-based)
+                        if config.flowwriter.trigger_copy {
+                            // Check if this was NOT a hotkey-triggered copy (hotkey path handles itself)
+                            let was_hotkey = if let Ok(t) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock() {
+                                t.map_or(false, |t| t.elapsed().as_millis() < 1000)
+                            } else { false };
 
-                        if true {
-                            if was_hotkey && config.flowwriter.trigger_hotkey {
-                                let mut cx = -1;
-                                let mut cy = -1;
-                                #[cfg(target_os = "windows")]
-                                unsafe {
-                                    use windows::Win32::Foundation::POINT;
-                                    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                                    let mut pt = POINT::default();
-                                    if GetCursorPos(&mut pt).is_ok() {
-                                        cx = pt.x;
-                                        cy = pt.y;
-                                    }
-                                }
-                                crate::writer::send_writer_event(crate::writer::WriterEvent::TextSelected {
-                                    text: current_text.clone(),
-                                    x: cx, y: cy,
-                                });
-                            } else if config.flowwriter.trigger_copy {
+                            if !was_hotkey {
+                                info!("FlowWriter: clipboard copy trigger, sending TextCopied ({} chars)", current_text.len());
                                 crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
                                     text: current_text.clone(),
                                 });
