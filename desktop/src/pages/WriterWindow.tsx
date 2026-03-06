@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -18,6 +18,25 @@ export default function WriterWindow() {
     const [output, setOutput] = useState("");
     const [error, setError] = useState("");
     const [customPrompts, setCustomPrompts] = useState<any[]>([]);
+
+    const handleDismiss = useCallback(async () => {
+        try {
+            await invoke("dismiss_writer_window");
+        } catch (e) {
+            console.error(e);
+        }
+    }, []);
+
+    // Global keyboard shortcuts (ESC to close)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                handleDismiss();
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [handleDismiss]);
 
     useEffect(() => {
         let unlistenStreamChunk: UnlistenFn;
@@ -106,28 +125,30 @@ export default function WriterWindow() {
         }
     };
 
-    const handleDismiss = async () => {
-        try {
-            await invoke("dismiss_writer_window");
-        } catch (e) {
-            console.error(e);
-        }
+    const handleBack = () => {
+        setOutput("");
+        setError("");
+        setIsProcessing(false);
     };
 
     return (
         <div className="writer-overlay">
             <div className="writer-container">
-                {/* Drag handle — same as FlowHint */}
+                {/* Drag handle */}
                 <div
                     className="writer-drag-handle"
-                    onMouseDown={() => getCurrentWindow().startDragging()}
-                    style={{ position: 'relative' }}
+                    onMouseDown={(e) => {
+                        // Prevent dragging if clicking button
+                        if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+                        getCurrentWindow().startDragging();
+                    }}
                 >
                     <div className="writer-drag-pill" />
                     <button
                         className="writer-close-btn"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={handleDismiss}
+                        title="关闭 (Esc)"
                     >✕</button>
                 </div>
 
@@ -139,8 +160,8 @@ export default function WriterWindow() {
                             : payloadText || t('flowwriter.waiting_for_text', '等待文本输入...')}
                     </div>
 
-                    {/* Action buttons */}
-                    {!isProcessing && output === "" && (
+                    {/* Action buttons list (Home View) */}
+                    {!isProcessing && output === "" && !error && (
                         <div className="writer-actions">
                             <button onClick={() => handleAction("Polish")}>✨ 润色</button>
                             <button onClick={() => handleAction("Expand", "1.5")}>📝 扩写</button>
@@ -157,9 +178,14 @@ export default function WriterWindow() {
                         </div>
                     )}
 
-                    {/* Output area */}
+                    {/* Result View */}
                     {(isProcessing || output || error) && (
                         <div className="writer-output-section">
+                            <div className="writer-result-header">
+                                <button className="writer-back-btn" onClick={handleBack}>← 返回</button>
+                                {isProcessing && <span className="writer-status-tag">生成中...</span>}
+                            </div>
+
                             {error && <div className="writer-error">{error}</div>}
 
                             <div className="writer-result">
@@ -169,7 +195,7 @@ export default function WriterWindow() {
 
                             {!isProcessing && !error && output && (
                                 <div className="writer-output-footer">
-                                    <button className="writer-btn-secondary" onClick={() => setOutput("")}>放弃</button>
+                                    <button className="writer-btn-secondary" onClick={handleBack}>放弃</button>
                                     <button className="writer-btn-primary" onClick={handleApply}>替换/插入</button>
                                 </div>
                             )}
@@ -177,10 +203,10 @@ export default function WriterWindow() {
                     )}
                 </div>
 
-                {/* Footer — matches FlowHint */}
+                {/* Footer bar */}
                 <div className="writer-footer">
-                    <span>Esc 关闭</span>
-                    <span style={{ color: '#5E6AD2' }}>YiboFlow Midas</span>
+                    <span>Esc 关闭 / ← 返回</span>
+                    <span style={{ color: '#5E6AD2', fontWeight: 600 }}>妙笔 FlowWriter</span>
                 </div>
             </div>
         </div>

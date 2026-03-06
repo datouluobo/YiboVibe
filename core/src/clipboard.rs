@@ -168,8 +168,8 @@ impl ClipboardMonitor {
     }
 
     async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>) {
-        let preview = if plaintext.len() > 15 {
-            format!("{}...", &plaintext[..15])
+        let preview = if plaintext.chars().count() > 15 {
+            format!("{}...", plaintext.chars().take(15).collect::<String>())
         } else {
             plaintext.to_string()
         };
