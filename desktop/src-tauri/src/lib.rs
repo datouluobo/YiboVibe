@@ -339,7 +339,7 @@ fn get_flowwriter_config() -> Result<yiboflow_core::config::FlowWriterConfig, St
 fn update_flowwriter_config(config: yiboflow_core::config::FlowWriterConfig) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
     cfg.flowwriter = config;
-    yiboflow_core::config::save_config_inner(&cfg);
+    cfg.save();
     Ok(())
 }
 
