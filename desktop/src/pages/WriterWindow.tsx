@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from 'react-markdown';
 import "./WriterWindow.css";
@@ -116,9 +117,9 @@ export default function WriterWindow() {
     return (
         <div className="writer-overlay">
             <div className="writer-container">
-                <div className="writer-header drag-region" data-tauri-drag-region>
+                <div className="writer-header" onMouseDown={() => getCurrentWindow().startDragging()}>
                     <span>YiboFlow Midas</span>
-                    <button className="writer-close-btn" onClick={handleDismiss}>✕</button>
+                    <button className="writer-close-btn" onMouseDown={(e) => e.stopPropagation()} onClick={handleDismiss}>✕</button>
                 </div>
 
                 <div className="writer-input-section">
