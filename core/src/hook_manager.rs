@@ -216,10 +216,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
         let key_code = kb_struct.vkCode;
 
-        let (snippets_enabled, _, autofill_enabled, _, _) = crate::config::get_settings();
-        if !snippets_enabled && !autofill_enabled {
-            return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
-        }
+
 
         let hwnd = unsafe { GetForegroundWindow() };
 
@@ -266,8 +263,8 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         } else { true };
 
         // Combine global toggle with per-app permission
-        let snippets_active = snippets_enabled && snap_allowed;
-        let autofill_active = autofill_enabled && hint_allowed;
+        let snippets_active = snap_allowed;
+        let autofill_active = hint_allowed;
 
         if !snippets_active && !autofill_active {
             KEY_BUFFER.lock().unwrap().clear();

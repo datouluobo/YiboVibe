@@ -11,6 +11,7 @@ mod dictionary;
 mod smart_router;
 mod local_auth;
 mod sync;
+mod ai;
 
 use log::{error, info};
 use std::time::Duration;

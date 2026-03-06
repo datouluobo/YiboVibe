@@ -321,37 +321,7 @@ pub fn toggle_default_feature(feature: Feature) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Migration: blocked_apps → FlowRules
-// ---------------------------------------------------------------------------
 
-/// 将旧版 blocked_apps 列表迁移为 FlowRules 矩阵条目
-/// 每个 blocked app 变为一条"全功能关闭"的覆写规则
-pub fn migrate_from_blocked_apps(blocked_apps: &[String]) {
-    if blocked_apps.is_empty() {
-        return;
-    }
-    let mut cfg = RULES_CONFIG.write().unwrap();
-    for app in blocked_apps {
-        let key = app.trim().to_lowercase();
-        if cfg.app_overrides.iter().any(|r| r.process.trim().to_lowercase() == key) {
-            continue; // 已有规则，跳过
-        }
-        cfg.app_overrides.push(AppRule {
-            process: key.clone(),
-            display_name: key.clone(),
-            flowsnap: false,
-            flowhint: false,
-            flowhint_dicts: vec![],
-            flowwriter: false,
-            flowpredict: false,
-            flowsync: false,
-        });
-    }
-    drop(cfg);
-    persist_and_rebuild();
-    info!("Migrated {} blocked_apps into FlowRules overrides.", blocked_apps.len());
-}
 
 /// 重新从磁盘加载配置，覆盖当前内存（用于导入备份后刷新）
 pub fn force_reload_from_disk() {

@@ -103,38 +103,7 @@ pub fn get_freq(content: &str) -> u32 {
     cache.get(content).copied().unwrap_or(0)
 }
 
-// 供 config.rs 迁移旧版 FlowSnap 配置调用
-pub fn migrate_legacy_config(config: &mut crate::config::AppConfig) {
-    let mut entries = Vec::new();
 
-    for (k, v) in &config.snippets {
-        let contents = match v {
-            crate::config::SnippetValue::Single(s) => vec![s.clone()],
-            crate::config::SnippetValue::Multi(vec) => vec.clone(),
-        };
-        for content in contents {
-            entries.push(SmartEntry {
-                trigger_key: Some(k.clone()),
-                keyword: None,
-                content,
-            });
-        }
-    }
-
-    if !entries.is_empty() {
-        let migrated_dict = SmartDictionary {
-            id: "migrated_snippets".to_string(),
-            name: "已迁移的 FlowSnap 词条".to_string(),
-            description: "旧版本 FlowSnap 的备份词条".to_string(),
-            version: "1.0".to_string(),
-            author: "System".to_string(),
-            min_trigger_chars: 2,
-            entries,
-            dict_type: "custom".to_string(),
-        };
-        let _ = save_dictionary(migrated_dict);
-    }
-}
 
 /// 首次初始化并加载所有词库
 pub fn init_and_load_dictionaries() {

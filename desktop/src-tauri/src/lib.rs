@@ -292,82 +292,41 @@ async fn connect_engine(
     Err(api_err)
 }
 
-#[tauri::command]
-fn get_snippets() -> Result<(std::collections::HashMap<String, String>, std::collections::HashMap<String, String>), String> {
-    let (mut multi_snippets, folders) = yiboflow_core::config::get_snippets();
-    let mut single_snippets = std::collections::HashMap::new();
-    for (k, v) in multi_snippets {
-        if let Some(first) = v.into_iter().next() {
-            single_snippets.insert(k, first);
-        }
-    }
-    Ok((single_snippets, folders))
-}
-
-#[tauri::command]
-fn add_snippet(trigger: String, replacement: String, folder: Option<String>) -> Result<(), String> {
-    yiboflow_core::config::add_snippet(trigger, replacement, folder)
-}
-
-#[tauri::command]
-fn remove_snippet(trigger: String) -> Result<(), String> {
-    yiboflow_core::config::remove_snippet(trigger)
-}
-
-#[tauri::command]
-fn get_blocked_apps() -> Result<Vec<String>, String> {
-    Ok(yiboflow_core::config::get_blocked_apps())
-}
-
-#[tauri::command]
-fn get_autofills() -> Result<std::collections::HashMap<String, String>, String> {
-    Ok(yiboflow_core::config::get_autofills())
-}
-
-#[tauri::command]
-fn add_autofill(trigger: String, candidate: String) -> Result<(), String> {
-    yiboflow_core::config::add_autofill(trigger, candidate)
-}
-
-#[tauri::command]
-fn remove_autofill(trigger: String) -> Result<(), String> {
-    yiboflow_core::config::remove_autofill(trigger)
-}
-
-#[tauri::command]
-fn add_blocked_app(app_name: String) -> Result<(), String> {
-    yiboflow_core::config::add_blocked_app(app_name)
-}
-
-#[tauri::command]
-fn remove_blocked_app(app_name: String) -> Result<(), String> {
-    yiboflow_core::config::remove_blocked_app(app_name)
-}
-
 #[derive(serde::Serialize)]
 struct SettingsPayload {
-    is_smartlib_enabled: bool,
     is_sync_enabled: bool,
-    is_autofill_enabled: bool,
     flowhint_min_chars: usize,
     flowhint_accept_key: u32,
 }
 
 #[tauri::command]
 fn get_settings() -> Result<SettingsPayload, String> {
-    let (is_smartlib_enabled, is_sync_enabled, is_autofill_enabled, flowhint_min_chars, flowhint_accept_key) = yiboflow_core::config::get_settings();
+    let (is_sync_enabled, flowhint_min_chars, flowhint_accept_key) = yiboflow_core::config::get_settings();
     Ok(SettingsPayload {
-        is_smartlib_enabled,
         is_sync_enabled,
-        is_autofill_enabled,
         flowhint_min_chars,
         flowhint_accept_key,
     })
 }
 
 #[tauri::command]
-fn update_settings(is_smartlib_enabled: bool, is_sync_enabled: bool, is_autofill_enabled: bool, flowhint_min_chars: usize, flowhint_accept_key: u32) -> Result<(), String> {
-    yiboflow_core::config::update_settings(is_smartlib_enabled, is_sync_enabled, is_autofill_enabled, flowhint_min_chars, flowhint_accept_key)
+fn update_settings(is_sync_enabled: bool, flowhint_min_chars: usize, flowhint_accept_key: u32) -> Result<(), String> {
+    yiboflow_core::config::update_settings(is_sync_enabled, flowhint_min_chars, flowhint_accept_key)
+}
+
+#[tauri::command]
+fn get_custom_prompts() -> Result<yiboflow_core::ai::prompt::CustomPromptsConfig, String> {
+    Ok(yiboflow_core::ai::prompt::get_custom_prompts_config())
+}
+
+#[tauri::command]
+fn add_custom_prompt(prompt: yiboflow_core::ai::prompt::CustomPromptTemplate) -> Result<(), String> {
+    yiboflow_core::ai::prompt::add_custom_prompt(prompt)
+}
+
+#[tauri::command]
+fn remove_custom_prompt(id: String) -> Result<(), String> {
+    yiboflow_core::ai::prompt::remove_custom_prompt(&id)
 }
 
 #[tauri::command]
@@ -375,8 +334,8 @@ fn diagnose_flowhint() -> Result<String, String> {
     let mut report = String::new();
 
     // 1. Config
-    let (snap_en, _sync, autofill_en, _, _) = yiboflow_core::config::get_settings();
-    report.push_str(&format!("[Config] snippets_enabled={}, autofill_enabled={}\n", snap_en, autofill_en));
+    let (_sync, _, _) = yiboflow_core::config::get_settings();
+    report.push_str(&format!("[Config] sync={}\n", _sync));
 
     // 2. Rules default
     let rules = yiboflow_core::rules::get_rules();
@@ -1056,15 +1015,9 @@ pub fn run() {
             connect_engine,
             register_engine,
             resolve_sync_conflict,
-            get_snippets,
-            add_snippet,
-            remove_snippet,
-            get_autofills,
-            add_autofill,
-            remove_autofill,
-            get_blocked_apps,
-            add_blocked_app,
-            remove_blocked_app,
+            get_custom_prompts,
+            add_custom_prompt,
+            remove_custom_prompt,
             get_settings,
             update_settings,
             send_file_p2p,
