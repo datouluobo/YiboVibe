@@ -63,7 +63,7 @@ impl Default for FlowWriterConfig {
             trigger_selection: true,
             trigger_copy: false,
             trigger_hotkey: true,
-            hotkey: "Ctrl+Shift+R".to_string(),
+            hotkey: "Alt+Q".to_string(),
             preview_dismiss_on_blur: true,
             default_search_engine: "Google".to_string(),
             custom_search_engines: Vec::new(),
