@@ -12,3 +12,4 @@ pub mod smart_router;
 pub mod local_auth;
 pub mod sync;
 pub mod ai;
+pub mod writer;

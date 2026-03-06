@@ -12,7 +12,7 @@ mod smart_router;
 mod local_auth;
 mod sync;
 mod ai;
-
+mod writer;
 use log::{error, info};
 use std::time::Duration;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};

@@ -122,8 +122,43 @@ impl ClipboardMonitor {
                     };
 
                     if should_dispatch {
-                        let (is_sync_enabled, _, _) = crate::config::get_settings();
-                        if is_sync_enabled {
+                        let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
+                        
+                        // Check if this was a simulated copy from hotkey
+                        let mut was_hotkey = false;
+                        if let Ok(mut last_trigger) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock()
+                            && let Some(t) = *last_trigger
+                                && t.elapsed().as_millis() < 500 {
+                                    was_hotkey = true;
+                                    *last_trigger = None; // clear it
+                                }
+
+                        if true {
+                            if was_hotkey && config.flowwriter.trigger_hotkey {
+                                let mut cx = -1;
+                                let mut cy = -1;
+                                #[cfg(target_os = "windows")]
+                                unsafe {
+                                    use windows::Win32::Foundation::POINT;
+                                    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+                                    let mut pt = POINT::default();
+                                    if GetCursorPos(&mut pt).is_ok() {
+                                        cx = pt.x;
+                                        cy = pt.y;
+                                    }
+                                }
+                                crate::writer::send_writer_event(crate::writer::WriterEvent::TextSelected {
+                                    text: current_text.clone(),
+                                    x: cx, y: cy,
+                                });
+                            } else if config.flowwriter.trigger_copy {
+                                crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
+                                    text: current_text.clone(),
+                                });
+                            }
+                        }
+
+                        if config.is_sync_enabled {
                             Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
                         }
                     }

@@ -985,12 +985,12 @@ pub fn run() {
                                 }
                                 HintEvent::Hide => {
                                     unsafe {
-                                        ShowWindow(hint_hwnd, SW_HIDE);
+                                        let _ = ShowWindow(hint_hwnd, SW_HIDE);
                                     }
                                 }
                                 HintEvent::MoveWindow { x, y } => {
                                     unsafe {
-                                        SetWindowPos(
+                                        let _ = SetWindowPos(
                                             hint_hwnd,
                                             None,
                                             *x, *y,
@@ -1006,6 +1006,127 @@ pub fn run() {
 
                     // Always emit event to frontend for content updates
                     let _ = app_handle.emit("hint-event", event);
+                }
+            });
+
+            // --- Writer Window Setup ---
+            let writer_win = tauri::WebviewWindowBuilder::new(
+                app,
+                "writer",
+                tauri::WebviewUrl::App("/#/writer".into()),
+            )
+            .title("FlowWriter")
+            .inner_size(400.0, 450.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .visible(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(true)
+            .build()
+            .unwrap();
+
+            #[cfg(target_os = "windows")]
+            let writer_hwnd = {
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
+                let raw_hwnd = writer_win.hwnd().unwrap();
+                let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
+                unsafe {
+                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
+                }
+                hwnd
+            };
+
+            let (writer_tx, writer_rx) = std::sync::mpsc::channel();
+            yiboflow_core::writer::set_writer_tx(writer_tx);
+            let app_handle_writer = app.handle().clone();
+            
+            #[cfg(target_os = "windows")]
+            let writer_hwnd_raw = writer_hwnd.0 as isize;
+            
+            std::thread::spawn(move || {
+                use yiboflow_core::writer::WriterEvent;
+                while let Ok(event) = writer_rx.recv() {
+                    let ev_clone = event.clone();
+                    let app_handle_clone = app_handle_writer.clone();
+                    
+                    let _ = app_handle_clone.run_on_main_thread(move || {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let writer_hwnd = windows::Win32::Foundation::HWND(writer_hwnd_raw as *mut _);
+                            use windows::Win32::UI::WindowsAndMessaging::{
+                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
+                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                            };
+                            
+                            match &ev_clone {
+                                WriterEvent::TextSelected { text: _, x, y } => {
+                                    // Default offset if not found
+                                    let mut pos_x = *x;
+                                    let mut pos_y = *y;
+                                    
+                                    if pos_x == -1 || pos_y == -1 {
+                                        use windows::Win32::Foundation::POINT;
+                                        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+                                        let mut pt = POINT::default();
+                                        unsafe {
+                                            if GetCursorPos(&mut pt).is_ok() {
+                                                pos_x = pt.x;
+                                                pos_y = pt.y;
+                                            }
+                                        }
+                                    }
+                                    
+                                    pos_x += 10;
+                                    pos_y += 10;
+                                    
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            writer_hwnd,
+                                            Some(HWND_TOPMOST),
+                                            pos_x, pos_y,
+                                            450, 450, // width 450, height 450
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                        );
+                                        let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
+                                    }
+                                }
+                                WriterEvent::TextCopied { .. } => {
+                                    // We show writer window near cursor
+                                    use windows::Win32::Foundation::POINT;
+                                    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+                                    let mut pos_x = 0;
+                                    let mut pos_y = 0;
+                                    unsafe {
+                                        let mut pt = POINT::default();
+                                        if GetCursorPos(&mut pt).is_ok() {
+                                            pos_x = pt.x + 10;
+                                            pos_y = pt.y + 10;
+                                        }
+                                    }
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            writer_hwnd,
+                                            Some(HWND_TOPMOST),
+                                            pos_x, pos_y,
+                                            450, 450,
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                        );
+                                        let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
+                                    }
+                                }
+                                WriterEvent::Hide => {
+                                    unsafe {
+                                        let _ = ShowWindow(writer_hwnd, SW_HIDE);
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    let _ = app_handle_writer.emit("writer-event", event);
                 }
             });
 

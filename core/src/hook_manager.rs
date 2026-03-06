@@ -251,6 +251,68 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         let hint_allowed = if !active_exe.is_empty() {
             crate::rules::is_feature_enabled(&active_exe, crate::rules::Feature::FlowHint)
         } else { true };
+        let writer_allowed = if !active_exe.is_empty() {
+            crate::rules::is_feature_enabled(&active_exe, crate::rules::Feature::FlowWriter)
+        } else { true };
+
+        // FlowWriter Hotkey trigger logic
+        if writer_allowed {
+            let (is_hotkey, hk_str) = {
+                let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
+                (cfg.flowwriter.trigger_hotkey, cfg.flowwriter.hotkey.clone())
+            };
+
+            if is_hotkey {
+                let (req_ctrl, req_alt, req_shift, req_win, req_key) = parse_hotkey(&hk_str);
+                
+                use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
+                let is_ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000 != 0;
+                let is_alt = unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } as u16 & 0x8000 != 0;
+                let is_shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000 != 0;
+                let is_win = unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000 != 0 || unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000 != 0;
+                
+                if key_code == req_key && is_ctrl == req_ctrl && is_alt == req_alt && is_shift == req_shift && is_win == req_win {
+                    info!("FlowWriter Hotkey Triggered!");
+                    
+                    if let Ok(mut last_trigger) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock() {
+                        *last_trigger = Some(std::time::Instant::now());
+                    }
+                    
+                    std::thread::spawn(|| {
+                        use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VIRTUAL_KEY};
+                        unsafe {
+                            let mut inputs: Vec<INPUT> = Vec::new();
+                            
+                            let mut kd_ctrl = INPUT::default();
+                            kd_ctrl.r#type = INPUT_KEYBOARD;
+                            kd_ctrl.Anonymous.ki.wVk = VK_CONTROL;
+                            inputs.push(kd_ctrl);
+                            
+                            let mut kd_c = INPUT::default();
+                            kd_c.r#type = INPUT_KEYBOARD;
+                            kd_c.Anonymous.ki.wVk = VIRTUAL_KEY(0x43); // 'C'
+                            inputs.push(kd_c);
+                            
+                            let mut ku_c = INPUT::default();
+                            ku_c.r#type = INPUT_KEYBOARD;
+                            ku_c.Anonymous.ki.wVk = VIRTUAL_KEY(0x43);
+                            ku_c.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                            inputs.push(ku_c);
+                            
+                            let mut ku_ctrl = INPUT::default();
+                            ku_ctrl.r#type = INPUT_KEYBOARD;
+                            ku_ctrl.Anonymous.ki.wVk = VK_CONTROL;
+                            ku_ctrl.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                            inputs.push(ku_ctrl);
+                            
+                            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                        }
+                    });
+                    
+                    return LRESULT(1);
+                }
+            }
+        }
 
         // Combine global toggle with per-app permission
         let snippets_active = snap_allowed;
@@ -593,6 +655,32 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
     // Pass the control to next hook chain
     unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
+}
+
+fn parse_hotkey(hk: &str) -> (bool, bool, bool, bool, u32) {
+    let mut ctrl = false; let mut alt = false; let mut shift = false; let mut win = false;
+    let mut key = 0;
+    for p in hk.split('+') {
+        let p_upper = p.trim().to_uppercase();
+        match p_upper.as_str() {
+            "CTRL" => ctrl = true,
+            "ALT" => alt = true,
+            "SHIFT" => shift = true,
+            "WIN" => win = true,
+            _ => {
+                if p_upper.len() == 1 {
+                    key = p_upper.chars().next().unwrap() as u32;
+                } else if p_upper.eq("ENTER") {
+                    key = 0x0D;
+                } else if p_upper.eq("ESC") {
+                    key = 0x1B;
+                } else if p_upper.eq("SPACE") {
+                    key = 0x20;
+                }
+            }
+        }
+    }
+    (ctrl, alt, shift, win, key)
 }
 
 /// Plan B: paste text via clipboard without any backspace deletion
