@@ -66,10 +66,8 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn new(config: AiEngineConfig) -> Self {
-        // Fallback value for timeout_ms to avoid panic if configured to 0
-        let ms = if config.timeout_ms == 0 { 30000 } else { config.timeout_ms };
         let client = Client::builder()
-            .timeout(Duration::from_millis(ms))
+            .connect_timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| Client::new());
         Self { http_client: client, config }
@@ -131,7 +129,7 @@ impl AiClient {
             root_url = format!("{}/models", root_url); // basic heuristic
         }
 
-        let mut request = self.http_client.get(&root_url);
+        let mut request = self.http_client.get(&root_url).timeout(Duration::from_millis(1500));
         if !endpoint.api_key.is_empty() {
             request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
         }
@@ -153,7 +151,7 @@ impl AiClient {
         ChatCompletionRequest {
             model: endpoint.model.clone(),
             messages,
-            temperature: Some(0.7),
+            temperature: Some(0.3),
             max_tokens: Some(2048),
             stream: Some(false),
         }
@@ -218,6 +216,8 @@ impl AiClient {
         if !url.ends_with("/chat/completions") && !url.contains("generativelanguage") {
             url = format!("{}/chat/completions", url.trim_end_matches('/'));
         }
+
+        info!("AI Stream Request -> URL: {}, Model: {}, Messages: {}", url, req_body.model, req_body.messages.len());
 
         let mut request = self.http_client.post(&url).json(&req_body);
         if !endpoint.api_key.is_empty() {

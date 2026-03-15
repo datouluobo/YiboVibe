@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
-import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages, Save, UploadCloud, DownloadCloud, ServerCog, AlertTriangle, AlertCircle } from "lucide-react";
+import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages, Save, UploadCloud, DownloadCloud, ServerCog, AlertTriangle, AlertCircle, BrainCircuit, Plus, Trash2, Key, Link2, Box } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 
@@ -9,10 +9,51 @@ export default function Settings() {
     const [currentTheme, setCurrentTheme] = useState("dark");
     const [currentLang, setCurrentLang] = useState(i18n.language || "zh");
 
+    const [endpoints, setEndpoints] = useState<any[]>([]);
+
     useEffect(() => {
         const theme = localStorage.getItem('yiboflow_theme') || 'dark';
         setCurrentTheme(theme);
+
+        invoke("get_app_config").then((cfg: any) => {
+            if (cfg && cfg.ai_engine && cfg.ai_engine.endpoints) {
+                setEndpoints(cfg.ai_engine.endpoints);
+            }
+        }).catch(console.error);
     }, []);
+
+    const handleSaveEndpoints = async (newEndpoints: any[]) => {
+        setEndpoints(newEndpoints);
+        try {
+            await invoke("update_ai_endpoints", { endpoints: newEndpoints });
+        } catch (e) {
+            setAlertDialog({ isOpen: true, message: "保存AI配置失败: " + e, type: "error" });
+        }
+    };
+
+    const handleAddEndpoint = () => {
+        const list = [...endpoints, {
+            provider: "OllamaLAN",
+            base_url: "http://localhost:11434/v1",
+            api_key: "",
+            model: "qwen3:0.6b",
+            is_enabled: true,
+            priority: endpoints.length + 1
+        }];
+        handleSaveEndpoints(list);
+    };
+
+    const handleRemoveEndpoint = (idx: number) => {
+        const list = [...endpoints];
+        list.splice(idx, 1);
+        handleSaveEndpoints(list);
+    };
+
+    const handleUpdateEndpoint = (idx: number, field: string, value: any) => {
+        const list = [...endpoints];
+        list[idx][field] = value;
+        handleSaveEndpoints(list);
+    };
 
     const [syncLoading, setSyncLoading] = useState(false);
 
@@ -222,6 +263,79 @@ export default function Settings() {
                             </div>
                         );
                     })}
+                </div>
+            </div>
+
+            {/* AI Engine Settings */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <div>
+                        <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <BrainCircuit size={20} color="var(--color-primary)" /> AI 引擎节点路由
+                        </h3>
+                        <p style={{ color: 'var(--color-text-muted)', margin: 0, fontSize: '14px' }}>动态路由多个模型节点，优先调用高优先级且就绪的节点。</p>
+                    </div>
+                    <button onClick={handleAddEndpoint} className="btn-ghost" style={{ padding: '6px 12px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}>
+                        <Plus size={16} /> 新增节点
+                    </button>
+                </div>
+
+                <datalist id="preset_base_urls">
+                    <option value="http://localhost:11434/v1">本地 Ollama (默认)</option>
+                    <option value="http://192.168.1.88:11434/v1">局域网 NAS (Ollama)</option>
+                    <option value="https://lisibo.top:98/v1">广域网 NAS (外网穿透)</option>
+                    <option value="https://api.deepseek.com/v1">DeepSeek 官方</option>
+                </datalist>
+                <datalist id="preset_models">
+                    <option value="qwen3:0.6b">qwen3:0.6b (本地极速)</option>
+                    <option value="gemma3:270m">gemma3:270m (本地极速)</option>
+                    <option value="deepseek-chat">deepseek-chat</option>
+                    <option value="deepseek-reasoner">deepseek-reasoner</option>
+                </datalist>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {endpoints.map((ep, idx) => (
+                        <div key={idx} style={{
+                            background: 'var(--color-surface-elevated)', border: '1px solid var(--color-border)',
+                            borderRadius: 'var(--radius-md)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px',
+                            opacity: ep.is_enabled ? 1 : 0.6
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 600 }}>
+                                        <input type="checkbox" checked={ep.is_enabled} onChange={(e) => handleUpdateEndpoint(idx, 'is_enabled', e.target.checked)} />
+                                        节点 {idx + 1}
+                                    </label>
+                                    <span style={{ fontSize: '12px', color: 'var(--color-text-dim)', background: 'var(--color-bg-base)', padding: '2px 8px', borderRadius: '100px', border: '1px solid var(--color-border)' }}>
+                                        优先级: <input type="number" value={ep.priority} onChange={(e) => handleUpdateEndpoint(idx, 'priority', parseInt(e.target.value) || 0)} style={{ width: '40px', background: 'transparent', border: 'none', color: 'inherit', textAlign: 'center' }} />
+                                    </span>
+                                </div>
+                                <button onClick={() => handleRemoveEndpoint(idx)} className="btn-ghost" style={{ padding: '4px', color: 'var(--color-danger)', opacity: 0.8 }}>
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}><Link2 size={12} /> 接口地址 (Base URL)</span>
+                                    <input list="preset_base_urls" value={ep.base_url} onChange={(e) => handleUpdateEndpoint(idx, 'base_url', e.target.value)} style={{ padding: '8px 12px', borderRadius: '6px', background: 'var(--color-bg-base)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', fontSize: '13px' }} placeholder="如 http://localhost:11434/v1" />
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}><Box size={12} /> 模型名称 (Model)</span>
+                                    <input list="preset_models" value={ep.model} onChange={(e) => handleUpdateEndpoint(idx, 'model', e.target.value)} style={{ padding: '8px 12px', borderRadius: '6px', background: 'var(--color-bg-base)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', fontSize: '13px' }} placeholder="如 qwen3:0.6b" />
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}><Key size={12} /> API Key (可选)</span>
+                                    <input type="password" value={ep.api_key} onChange={(e) => handleUpdateEndpoint(idx, 'api_key', e.target.value)} style={{ padding: '8px 12px', borderRadius: '6px', background: 'var(--color-bg-base)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', fontSize: '13px' }} placeholder="默认不需要" />
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {endpoints.length === 0 && (
+                        <div style={{ textAlign: 'center', padding: '32px', color: 'var(--color-text-dim)', fontSize: '13.5px', border: '1px dashed var(--color-border)', borderRadius: 'var(--radius-md)' }}>
+                            尚无任何 AI 节点配置，请手动新增
+                        </div>
+                    )}
                 </div>
             </div>
 

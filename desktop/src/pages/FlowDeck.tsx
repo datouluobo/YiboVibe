@@ -51,6 +51,7 @@ export default function FlowDeck() {
 
     const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
     const [editDeviceName, setEditDeviceName] = useState("");
+    const [appConfig, setAppConfig] = useState<any>(null);
 
     const handleSaveDeviceName = (id: string) => {
         if (!editDeviceName.trim()) {
@@ -64,6 +65,8 @@ export default function FlowDeck() {
     };
 
     useEffect(() => {
+        invoke("get_app_config").then((config) => setAppConfig(config)).catch(console.error);
+
         const fetchStatus = async () => {
             const serverUrl = localStorage.getItem('yiboflow_server_url') || "";
             const username = localStorage.getItem('yiboflow_username') || "";
@@ -217,19 +220,26 @@ export default function FlowDeck() {
                         <div style={{ fontSize: '12.5px' }}>☁️ DeepSeek</div>
                         <StatusBadge status="warn" label="未配置" />
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
-                        <div style={{ fontSize: '12.5px' }}>🏠 本机 Ollama</div>
-                        <StatusBadge status="error" label={t('flowdeck.ai_not_detected')} />
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
-                        <div style={{ fontSize: '12.5px' }}>🏢 NAS 自建</div>
-                        <StatusBadge status="error" label={t('flowdeck.ai_offline')} />
-                    </div>
+                    {/* Render dynamically fetched AI endpoints */}
+                    {appConfig?.ai_engine.endpoints.map((ep: any, idx: number) => {
+                        const isMain = ep.base_url.includes('192.168.1.88');
+                        const isCloud = ep.base_url.includes('lisibo.top');
+                        const label = isMain ? '🏠 本机 Ollama' : (isCloud ? '🏢 NAS 自建' : '🌐 AI 节点');
+
+                        return (
+                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                                <div style={{ fontSize: '12.5px' }}>{label}
+                                    <span style={{ color: 'var(--color-text-muted)', fontSize: '10px', marginLeft: '6px' }}>[{ep.model}]</span>
+                                </div>
+                                <StatusBadge status={ep.is_enabled ? "ok" : "warn"} label={ep.is_enabled ? "已就绪" : "已禁用"} />
+                            </div>
+                        )
+                    })}
                     <div style={{
                         marginTop: '6px', padding: '8px 10px', fontSize: '11px',
                         background: 'var(--color-glass-bg)', borderRadius: '6px', color: 'var(--color-text-dim)'
                     }}>
-                        {t('flowdeck.ai_active_label')}：—（请在偏好中配置 AI 引擎）
+                        {t('flowdeck.ai_active_label')}：{appConfig?.ai_engine.endpoints[0]?.model || '—（请在偏好中配置）'}
                     </div>
                 </SectionCard>
             </div>

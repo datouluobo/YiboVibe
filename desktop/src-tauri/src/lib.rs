@@ -320,6 +320,21 @@ fn get_custom_prompts() -> Result<yiboflow_core::ai::prompt::CustomPromptsConfig
 }
 
 #[tauri::command]
+fn get_app_config() -> Result<yiboflow_core::config::AppConfig, String> {
+    Ok(yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().clone())
+}
+
+#[tauri::command]
+fn update_ai_endpoints(endpoints: Vec<yiboflow_core::config::AiEndpoint>) -> Result<(), String> {
+    let mut config = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().clone();
+    config.ai_engine.endpoints = endpoints;
+    config.save();
+    let mut lock = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    lock.ai_engine.endpoints = config.ai_engine.endpoints.clone();
+    Ok(())
+}
+
+#[tauri::command]
 fn add_custom_prompt(prompt: yiboflow_core::ai::prompt::CustomPromptTemplate) -> Result<(), String> {
     yiboflow_core::ai::prompt::add_custom_prompt(prompt)
 }
@@ -366,6 +381,13 @@ async fn stream_ai_writer(
     let client = yiboflow_core::ai::client::AiClient::new(cfg);
     let msgs = yiboflow_core::ai::prompt::build_messages(&prompt_action, &user_input);
 
+    log::info!("=== FlowWriter AI Request ===");
+    log::info!("Action: {}", action);
+    log::info!("User Input ({} chars): {:?}", user_input.len(), &user_input[..user_input.len().min(200)]);
+    for (i, m) in msgs.iter().enumerate() {
+        log::info!("Message[{}] role={} content({} chars)={:?}", i, m.role, m.content.len(), &m.content[..m.content.len().min(200)]);
+    }
+
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     
     tokio::spawn(async move {
@@ -394,6 +416,20 @@ fn dismiss_writer_window() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn move_writer_window(x: i32, y: i32) -> Result<(), String> {
+    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::MoveWindow { x, y });
+    Ok(())
+}
+
+#[tauri::command]
+fn update_writer_position(x: i32, y: i32) {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.writer_fixed_x = x;
+    cfg.writer_fixed_y = y;
+    let _ = cfg.save();
+}
+
+#[tauri::command]
 fn paste_writer_text(text: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     yiboflow_core::hook_manager::paste_text_only(&text);
@@ -401,6 +437,7 @@ fn paste_writer_text(text: String) -> Result<(), String> {
     yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
     Ok(())
 }
+
 
 #[tauri::command]
 fn diagnose_flowhint() -> Result<String, String> {
@@ -526,7 +563,7 @@ fn rename_local_account(old_username: String, new_username: String) -> Result<bo
 }
 
 #[tauri::command]
-async fn force_override_remote(server_url: String, username: String) -> Result<bool, String> {
+async fn force_override_remote(_server_url: String, _username: String) -> Result<bool, String> {
     // Phase 3 Stub: Server-side API needs to support force-override parameter for register.
     Err("API Server does not yet support force-overriding an existing remote account. Please use the Local Offline Mode instead.".to_string())
 }
@@ -1057,7 +1094,7 @@ pub fn run() {
                                             outer_width, outer_height,
                                             SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                         );
-                                        ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
+                                        let _ = ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
                                     }
                                 }
                                 HintEvent::Hide => {
@@ -1094,13 +1131,13 @@ pub fn run() {
             )
             .title("FlowWriter")
             .inner_size(400.0, 450.0)
-            .resizable(false)
+            .resizable(true)
             .decorations(false)
             .transparent(true)
             .visible(false)
             .always_on_top(true)
             .skip_taskbar(true)
-            .shadow(true)
+            .shadow(false)
             .build()
             .unwrap();
 
@@ -1111,6 +1148,8 @@ pub fn run() {
                 let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
                 unsafe {
                     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                    // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
+                    // SAME as HintWindow — prevents activation on click, fixes drag "fly away"
                     SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
                     // Force hide and move off-screen at startup
                     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -1138,12 +1177,11 @@ pub fn run() {
                             let writer_hwnd = windows::Win32::Foundation::HWND(writer_hwnd_raw as *mut _);
                             use windows::Win32::UI::WindowsAndMessaging::{
                                 ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
-                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOSIZE, SWP_NOZORDER,
                             };
                             
                             match &ev_clone {
                                 WriterEvent::TextSelected { text: _, x, y } => {
-                                    // Default offset if not found
                                     let mut pos_x = *x;
                                     let mut pos_y = *y;
                                     
@@ -1167,14 +1205,14 @@ pub fn run() {
                                             writer_hwnd,
                                             Some(HWND_TOPMOST),
                                             pos_x, pos_y,
-                                            450, 450, // width 450, height 450
+                                            450, 450,
                                             SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                         );
                                         let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
                                     }
+                                    yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 WriterEvent::TextCopied { .. } => {
-                                    // We show writer window near cursor
                                     use windows::Win32::Foundation::POINT;
                                     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
                                     let mut pos_x = 0;
@@ -1196,16 +1234,30 @@ pub fn run() {
                                         );
                                         let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
                                     }
+                                    yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 WriterEvent::Hide => {
                                     unsafe {
                                         let _ = ShowWindow(writer_hwnd, SW_HIDE);
+                                    }
+                                    yiboflow_core::writer::WRITER_VISIBLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                WriterEvent::MoveWindow { x, y } => {
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            writer_hwnd,
+                                            None,
+                                            *x, *y,
+                                            0, 0,
+                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                                        );
                                     }
                                 }
                             }
                         }
                     });
 
+                    log::info!("Emitting writer-event to frontend: {:?}", event);
                     let _ = app_handle_writer.emit("writer-event", event);
                 }
             });
@@ -1217,6 +1269,8 @@ pub fn run() {
             register_engine,
             resolve_sync_conflict,
             get_custom_prompts,
+            get_app_config,
+            update_ai_endpoints,
             add_custom_prompt,
             remove_custom_prompt,
             stream_ai_writer,
@@ -1246,6 +1300,8 @@ pub fn run() {
             update_hint_position,
             move_hint_window,
             reset_hint_position,
+            move_writer_window,
+            update_writer_position,
             rename_local_account,
             force_override_remote,
             manual_vault_compaction,

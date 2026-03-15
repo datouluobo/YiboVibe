@@ -219,18 +219,21 @@ pub fn is_all_disabled(process_name: &str) -> bool {
 /// 获取某个进程专属绑定的 FlowHint 词库 ID 列表
 pub fn get_app_flowhint_dicts(process_name: &str) -> Vec<String> {
     let cache = RULES_CACHE.read().unwrap();
-    if let Some(rule) = cache.app_map.get(process_name)
-        && !rule.flowhint_dicts.is_empty() {
+    let is_enabled = if let Some(rule) = cache.app_map.get(process_name) {
+        if !rule.flowhint_dicts.is_empty() && rule.flowhint {
             return rule.flowhint_dicts.clone();
         }
-    
-    let dict_cache = crate::dictionary::DICT_CACHE.read().unwrap();
-    dict_cache.keys().cloned().collect()
-}
+        rule.flowhint
+    } else {
+        cache.default.flowhint
+    };
 
-// ---------------------------------------------------------------------------
-// CRUD API（被 Tauri 命令调用）
-// ---------------------------------------------------------------------------
+    if is_enabled {
+        let dict_cache = crate::dictionary::DICT_CACHE.read().unwrap();
+        return dict_cache.keys().cloned().collect();
+    }
+    Vec::new()
+}
 
 /// 获取完整规则配置（序列化到前端）
 pub fn get_rules() -> FlowRulesConfig {

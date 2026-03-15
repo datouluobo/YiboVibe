@@ -1,18 +1,33 @@
-use crate::dictionary::DICT_CACHE;
 use std::collections::HashMap;
+use std::sync::RwLock;
+use lazy_static::lazy_static;
 
-/// FlowSnap 引擎所需的匹配表
-/// key = "trigger_key + keyword" (如 "#git")
-/// value = Vec<content>（支持 1:N）
+lazy_static! {
+    static ref SNAP_TABLE_CACHE: RwLock<Option<HashMap<String, Vec<String>>>> = RwLock::new(None);
+}
+
+/// Invalidates the snap table cache (call this when dictionaries change)
+pub fn invalidate_snap_cache() {
+    let mut cache = SNAP_TABLE_CACHE.write().unwrap();
+    *cache = None;
+}
+
 pub fn build_snap_table() -> HashMap<String, Vec<String>> {
-    let cache = DICT_CACHE.read().unwrap();
+    // Check cache first
+    {
+        let cache = SNAP_TABLE_CACHE.read().unwrap();
+        if let Some(ref table) = *cache {
+            return table.clone();
+        }
+    }
+
+    // Otherwise build it
+    let dict_cache = crate::dictionary::DICT_CACHE.read().unwrap();
     let mut table: HashMap<String, Vec<String>> = HashMap::new();
 
-    // 假设所有的 dict_ids 都要作为 snap table (也可以过滤 enabled)
-    for dict in cache.values() {
+    for dict in dict_cache.values() {
         for entry in &dict.entries {
             if let (Some(tk), Some(kw)) = (&entry.trigger_key, &entry.keyword) {
-                // Skip entries with empty trigger_key or keyword
                 if !tk.is_empty() && !kw.is_empty() {
                     let full_trigger = format!("{}{}", tk, kw);
                     table.entry(full_trigger).or_default().push(entry.content.clone());
@@ -20,17 +35,20 @@ pub fn build_snap_table() -> HashMap<String, Vec<String>> {
             }
         }
     }
-    log::info!("[FlowSnap] snap_table 已构建: {} 个触发器", table.len());
-    for (trigger, contents) in &table {
-        log::info!("[FlowSnap]   触发器='{}' → {} 个替换", trigger, contents.len());
-    }
+    
+    log::debug!("[FlowSnap] snap_table 已构建: {} 个触发器", table.len());
+    
+    // Save to cache
+    let mut cache = SNAP_TABLE_CACHE.write().unwrap();
+    *cache = Some(table.clone());
+    
     table
 }
 
 /// FlowHint 引擎所需的全量 content 列表
 /// 此方法根据传入的开启的词库 ID，聚合所有词条的内容用于前缀匹配
 pub fn build_hint_entries(dict_ids: &[String]) -> Vec<String> {
-    let cache = DICT_CACHE.read().unwrap();
+    let cache = crate::dictionary::DICT_CACHE.read().unwrap();
     let mut entries = Vec::new();
 
     for id in dict_ids {

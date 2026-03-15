@@ -15,8 +15,7 @@ body,
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 2px;
-    /* Small gap to show shadow better */
+    padding: 0;
 }
 
 .writer-container {
@@ -33,7 +32,6 @@ body,
     user-select: none;
     -webkit-user-select: none;
     overflow: hidden;
-    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 /* Drag handle bar — matches FlowHint style */
@@ -102,12 +100,21 @@ body,
     color: rgba(255, 255, 255, 0.45);
     border: 1px solid rgba(255, 255, 255, 0.06);
     word-break: break-all;
-    max-height: 70px;
+    min-height: 40px;
+    flex: 1;
     overflow-y: auto;
     line-height: 1.5;
     scrollbar-width: thin;
     scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
-    flex-shrink: 0;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+.writer-input-snippet.compact {
+    flex: 0 0 auto;
+    max-height: 80px;
 }
 
 .writer-actions {

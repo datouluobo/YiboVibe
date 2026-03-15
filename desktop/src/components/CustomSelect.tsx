@@ -59,81 +59,94 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({ options, value, onCh
     }, []);
 
     const dropdownContent = isOpen && rect && (
-        <div
-            className="custom-select-portal-dropdown"
-            style={{
-                position: 'fixed',
-                top: rect.bottom + 8,
-                left: rect.left,
-                width: rect.width,
-                background: 'var(--color-glass-bg)',
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                border: '1px solid var(--color-glass-border)',
-                borderRadius: 'var(--radius-md)',
-                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
-                zIndex: 99999,
-                maxHeight: '300px',
-                overflowY: 'auto',
-                animation: 'fadeInUp 0.2s ease-out'
-            }}
-        >
-            {options.map((option) => (
+        (() => {
+            const dropdownHeight = Math.min(options.length * 40 + 16, 300);
+            const spaceBelow = window.innerHeight - rect.bottom;
+            const spaceAbove = rect.top;
+            const openUpward = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
+            
+            return (
                 <div
-                    key={option.val}
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onChange(option.val);
-                        setIsOpen(false);
-                    }}
-                    className="custom-select-option"
+                    className="custom-select-portal-dropdown"
                     style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 16px',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s',
-                        fontSize: '14px',
-                        color: option.val === value ? 'var(--color-primary)' : 'var(--color-text-main)',
-                        background: option.val === value ? 'var(--color-primary-glow)' : 'transparent',
-                        fontWeight: option.val === value ? 600 : 400
-                    }}
-                    onMouseEnter={(e) => {
-                        if (option.val !== value) {
-                            e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
-                        }
-                    }}
-                    onMouseLeave={(e) => {
-                        if (option.val !== value) {
-                            e.currentTarget.style.background = 'transparent';
-                        }
+                        position: 'fixed',
+                        top: openUpward ? rect.top - dropdownHeight - 8 : rect.bottom + 8,
+                        left: rect.left,
+                        width: rect.width,
+                        background: 'var(--color-bg-base)', // Fixed background for better readability
+                        backdropFilter: 'blur(25px)',
+                        WebkitBackdropFilter: 'blur(25px)',
+                        border: '1px solid var(--color-glass-border)',
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: '0 15px 35px -5px rgba(0, 0, 0, 0.6), 0 10px 15px -10px rgba(0, 0, 0, 0.6)',
+                        zIndex: 999999, // Ensure it's above modals
+                        maxHeight: `${dropdownHeight}px`,
+                        overflowY: 'auto',
+                        animation: openUpward ? 'fadeInDown 0.2s ease-out' : 'fadeInUp 0.2s ease-out'
                     }}
                 >
-                    {option.label}
-                    {option.val === value && <Check size={14} />}
+                    {options.map((option) => (
+                        <div
+                            key={option.val}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onChange(option.val);
+                                setIsOpen(false);
+                            }}
+                            className="custom-select-option"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '10px 16px',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s',
+                                fontSize: '14px',
+                                color: option.val === value ? 'var(--color-primary)' : 'var(--color-text-main)',
+                                background: option.val === value ? 'var(--color-primary-glow)' : 'transparent',
+                                fontWeight: option.val === value ? 600 : 400
+                            }}
+                            onMouseEnter={(e) => {
+                                if (option.val !== value) {
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (option.val !== value) {
+                                    e.currentTarget.style.background = 'transparent';
+                                }
+                            }}
+                        >
+                            {option.label}
+                            {option.val === value && <Check size={14} />}
+                        </div>
+                    ))}
+                    <style>{`
+                        @keyframes fadeInUp {
+                            from { opacity: 0; transform: translateY(10px); }
+                            to { opacity: 1; transform: translateY(0); }
+                        }
+                        @keyframes fadeInDown {
+                            from { opacity: 0; transform: translateY(-10px); }
+                            to { opacity: 1; transform: translateY(0); }
+                        }
+                        .custom-select-portal-dropdown::-webkit-scrollbar {
+                            width: 6px;
+                        }
+                        .custom-select-portal-dropdown::-webkit-scrollbar-track {
+                            background: transparent;
+                        }
+                        .custom-select-portal-dropdown::-webkit-scrollbar-thumb {
+                            background: var(--color-border);
+                            border-radius: 10px;
+                        }
+                        .custom-select-portal-dropdown::-webkit-scrollbar-thumb:hover {
+                            background: var(--color-primary);
+                        }
+                    `}</style>
                 </div>
-            ))}
-            <style>{`
-                @keyframes fadeInUp {
-                    from { opacity: 0; transform: translateY(10px); }
-                    to { opacity: 1; transform: translateY(0); }
-                }
-                .custom-select-portal-dropdown::-webkit-scrollbar {
-                    width: 6px;
-                }
-                .custom-select-portal-dropdown::-webkit-scrollbar-track {
-                    background: transparent;
-                }
-                .custom-select-portal-dropdown::-webkit-scrollbar-thumb {
-                    background: var(--color-border);
-                    border-radius: 10px;
-                }
-                .custom-select-portal-dropdown::-webkit-scrollbar-thumb:hover {
-                    background: var(--color-text-muted);
-                }
-            `}</style>
-        </div>
+            );
+        })()
     );
 
     return (

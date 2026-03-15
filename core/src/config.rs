@@ -89,6 +89,10 @@ pub struct AppConfig {
     pub hint_fixed_x: i32,
     #[serde(default = "default_neg_one")]
     pub hint_fixed_y: i32,
+    #[serde(default = "default_neg_one")]
+    pub writer_fixed_x: i32,
+    #[serde(default = "default_neg_one")]
+    pub writer_fixed_y: i32,
     #[serde(default)]
     pub sync_meta: crate::sync::SyncMeta,
     #[serde(default)]
@@ -122,7 +126,30 @@ impl AppConfig {
         if path.exists() {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Self>(&content) {
-                    Ok(config) => return config,
+                    Ok(mut config) => {
+                        if config.ai_engine.endpoints.is_empty() {
+                            config.ai_engine.endpoints = vec![
+                                AiEndpoint {
+                                    provider: AiProvider::OllamaLAN,
+                                    base_url: "http://192.168.1.88:11434/v1".to_string(),
+                                    api_key: "".to_string(),
+                                    model: "qwen3:0.6b".to_string(),
+                                    is_enabled: true,
+                                    priority: 1,
+                                },
+                                AiEndpoint {
+                                    provider: AiProvider::OllamaLAN,
+                                    base_url: "https://lisibo.top:98/v1".to_string(),
+                                    api_key: "".to_string(),
+                                    model: "gemma3:270m".to_string(),
+                                    is_enabled: true,
+                                    priority: 2,
+                                },
+                            ];
+                            config.save();
+                        }
+                        return config;
+                    },
                     Err(e) => error!("Failed to parse config: {}", e),
                 },
                 Err(e) => error!("Failed to read config file: {}", e),
@@ -138,8 +165,31 @@ impl AppConfig {
             flowhint_accept_key: 0x09,
             hint_fixed_x: -1,
             hint_fixed_y: -1,
+            writer_fixed_x: -1,
+            writer_fixed_y: -1,
             sync_meta: crate::sync::SyncMeta::default(),
-            ai_engine: AiEngineConfig::default(),
+            ai_engine: AiEngineConfig {
+                endpoints: vec![
+                    AiEndpoint {
+                        provider: AiProvider::OllamaLAN,
+                        base_url: "http://192.168.1.88:11434/v1".to_string(),
+                        api_key: "".to_string(),
+                        model: "qwen3:0.6b".to_string(),
+                        is_enabled: true,
+                        priority: 1,
+                    },
+                    AiEndpoint {
+                        provider: AiProvider::OllamaLAN,
+                        base_url: "https://lisibo.top:98/v1".to_string(), // In case it's proxied through the same port remotely
+                        api_key: "".to_string(),
+                        model: "gemma3:270m".to_string(),
+                        is_enabled: true,
+                        priority: 2,
+                    },
+                ],
+                auto_mode: true,
+                timeout_ms: 30000,
+            },
             flowwriter: FlowWriterConfig::default(),
         };
         cfg.save();

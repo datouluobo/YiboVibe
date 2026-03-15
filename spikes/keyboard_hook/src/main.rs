@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 // Global handle to unhook cleanly on exit (though not strictly required for this test)
-static mut HHOOK_HANDLE: HHOOK = HHOOK(null_mut());
+static mut HHOOK_HANDLE: HHOOK = HHOOK(0);
 
 /// Our global LowLevelKeyboardProc
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

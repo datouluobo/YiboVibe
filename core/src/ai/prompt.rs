@@ -89,25 +89,21 @@ pub fn remove_custom_prompt(id: &str) -> Result<(), String> {
 pub fn build_messages(action: &PromptAction, user_input: &str) -> Vec<ChatMessage> {
     let system_message = match action {
         PromptAction::Polish => 
-            "你是一个专业的文本编辑引擎。请优化以下文本的措辞、修正语法错误，整体提升可读性，但必须保持原意不变。直接返回润色后的文本，不要输出任何其他的解释或对话标签。".to_string(),
+            "你是一个纯粹的文本处理引擎。请润色以下文本，修正语法错误，提升可读性。你必须绝对遵守以下规则：1. 仅输出润色后的文本。2. 绝对不能有任何开场白或结尾语（例如“好的”、“没问题”、“优化后的返回文本是”）。3. 不要解释你的修改。4. 不要使用 markdown 标签包裹返回内容。直接开始输出内容：".to_string(),
         PromptAction::Expand { ratio } => 
-            format!("你是一个能够发散思维的扩写引擎。请将下文扩写为原来的 {} 倍左右。在保持整体主题和逻辑的前提下，补充更丰富的细节、背景或论据。直接输出扩写后的文本，不要带有其它赘述。", ratio),
+            format!("你是一个发散扩写引擎。将文本扩写约为 {} 倍。必须绝对遵循：1. 仅输出扩写结果。2. 不能有任何寒暄、废话、解释。3. 直接开始内容，不要用 markdown。", ratio),
         PromptAction::Condense { ratio } => {
-            let desc = if ratio == "one_sentence" {
-                "一句话总结".to_string()
-            } else {
-                format!("原来的 {}", ratio)
-            };
-            format!("你是一个精练的文本压缩引擎。请剔除以下文本的冗余信息，将其缩写至{}，但必须保留所有的核心要点和关键信息。直接输出缩写后的内容。", desc)
+            let desc = if ratio == "one_sentence" { "一句话总结".to_string() } else { format!("原来的 {}", ratio) };
+            format!("你是一个文本压缩引擎。请缩写至{}。必须绝对遵循：1. 仅输出截短后的内容。2. 绝对不能有任何开场白、结尾语。3. 不要做任何解释。直接输出：", desc)
         },
         PromptAction::Summarize => 
-            "你是一个要点提取引擎。请提取以下文本的核心要点，以简洁的无序条目（Bullet Points）形式列出。直接输出要点，无需开场白。".to_string(),
+            "请提取核心要点，用简单的无序列表格式。你必须绝对遵守：1. 不能有“好的”、“这是总结”等废话。2. 仅输出结果：".to_string(),
         PromptAction::Style { style } => 
-            format!("你是一个深谙各种文风的作家。请将以下文本无缝改写为“{}”风格，确保语气和用词贴合该风格，但是不要改变客观信息和原意。直接返回风格转换后的文本。", style),
+            format!("将文本改写为“{}”风格。绝对遵循：1. 不要解释。2. 不要寒暄。3. 仅输出改写完成的纯文本：", style),
         PromptAction::Translate { target_lang } => 
-            format!("你是一个精准度极高的多语言翻译引擎。请将以下文本翻译成“{}”。注意保持原文的语气、格式和专业术语的准确性。直接返回翻译后的内容，不要进行解释。", target_lang),
+            format!("将文本翻译为“{}”。绝对遵循：1. 仅输出翻译后的文本。2. 不能解释你的翻译。3. 不要任何寒暄：", target_lang),
         PromptAction::Explain => 
-            "你是一个知识渊博的分析助理。请详细解释以下内容（可能是代码、学术概念或由于语境不全而不容易理解的话语），用易懂的人类语言提供背景、含义及相关的要点补充。".to_string(),
+            "分析并解释以下内容。直接开始解释，不要有“好的，我将解释”等无意义废话，直接切入正题：".to_string(),
         PromptAction::Custom { template_id } => {
             let cfg = CUSTOM_PROMPTS.read().unwrap();
             if let Some(p) = cfg.custom_prompts.iter().find(|p| p.id == *template_id) {
@@ -118,14 +114,20 @@ pub fn build_messages(action: &PromptAction, user_input: &str) -> Vec<ChatMessag
         }
     };
 
+    // Small models (Qwen 0.5B, Gemma 270M etc.) do NOT understand multi-role
+    // conversations well. We merge the system instruction + user text into a
+    // single user message with explicit structural markers so the model cannot
+    // mistake the user text for a chat request.
+    let combined = format!(
+        "<instruction>\n{}\n</instruction>\n\n<input>\n{}\n</input>\n\n<output>\n",
+        system_message,
+        user_input
+    );
+
     vec![
         ChatMessage {
-            role: "system".to_string(),
-            content: system_message,
-        },
-        ChatMessage {
             role: "user".to_string(),
-            content: user_input.to_string(),
+            content: combined,
         },
     ]
 }

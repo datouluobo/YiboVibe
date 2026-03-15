@@ -1,4 +1,4 @@
-import React from "react";
+
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
@@ -24,7 +24,5 @@ if (isHintOverlay || isWriterOverlay) {
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    {isHintOverlay ? <HintWindow /> : (isWriterOverlay ? <WriterWindow /> : <App />)}
-  </React.StrictMode>,
+  isHintOverlay ? <HintWindow /> : (isWriterOverlay ? <WriterWindow /> : <App />)
 );

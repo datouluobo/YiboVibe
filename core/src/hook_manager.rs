@@ -15,7 +15,6 @@ use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, 
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput,
-    VK_OEM_2,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -24,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum HintSource {
     FlowHint,
     FlowSnapMulti,
@@ -119,25 +118,27 @@ pub fn dismiss_hint() {
 // Caret Coordinate Fetcher
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "windows")]
-unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> { unsafe {
+unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> {
     use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::ClientToScreen;
 
-    let thread_id = windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, None);
-    let mut gui_info = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    if GetGUIThreadInfo(thread_id, &mut gui_info).is_ok()
-        && gui_info.hwndCaret.0 != 0 {
-            let mut pt = POINT { x: gui_info.rcCaret.left, y: gui_info.rcCaret.bottom };
-            if ClientToScreen(gui_info.hwndCaret, &mut pt).as_bool() {
-                return Some((pt.x, pt.y));
+    unsafe {
+        let thread_id = windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, None);
+        let mut gui_info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if GetGUIThreadInfo(thread_id, &mut gui_info).is_ok()
+            && gui_info.hwndCaret.0 != 0 {
+                let mut pt = POINT { x: gui_info.rcCaret.left, y: gui_info.rcCaret.bottom };
+                if ClientToScreen(gui_info.hwndCaret, &mut pt).as_bool() {
+                    return Some((pt.x, pt.y));
+                }
             }
-        }
-    None
-}}
+        None
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct HintState {
@@ -298,8 +299,24 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         // Brief sleep to let modifier keys release from the hotkey combo
                         std::thread::sleep(std::time::Duration::from_millis(50));
                         
+                        // Clear clipboard first
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            let _ = cb.clear();
+                        }
+
                         unsafe {
                             let mut inputs: Vec<INPUT> = Vec::new();
+
+                            // Force-release common modifier keys that were part of the hotkey
+                            // so they don't corrupt the Ctrl+C injection (e.g., turning it into Alt+Ctrl+C)
+                            use windows::Win32::UI::Input::KeyboardAndMouse::{VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
+                            for &vk in &[VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, VK_CONTROL] {
+                                let mut ku = INPUT::default();
+                                ku.r#type = INPUT_KEYBOARD;
+                                ku.Anonymous.ki.wVk = vk;
+                                ku.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                                inputs.push(ku);
+                            }
                             
                             let mut kd_ctrl = INPUT::default();
                             kd_ctrl.r#type = INPUT_KEYBOARD;
@@ -326,14 +343,19 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
                         }
                         
-                        // Wait for clipboard to update, then read and send
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                        
-                        let text = if let Ok(mut cb) = arboard::Clipboard::new() {
-                            cb.get_text().unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+                        // Wait/poll for clipboard to update up to ~750ms
+                        let mut text = String::new();
+                        for _ in 0..15 {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                if let Ok(t) = cb.get_text() {
+                                    if !t.trim().is_empty() {
+                                        text = t;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         
                         info!("FlowWriter: sending TextSelected with {} chars at ({}, {})", text.len(), cx, cy);
                         crate::writer::send_writer_event(crate::writer::WriterEvent::TextSelected {
@@ -354,6 +376,15 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         if !snippets_active && !autofill_active {
             KEY_BUFFER.lock().unwrap().clear();
             return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
+        }
+
+        // ESC to dismiss FlowWriter (global hook, no window focus needed)
+        if key_code == 0x1B {
+            use std::sync::atomic::Ordering;
+            if crate::writer::WRITER_VISIBLE.load(Ordering::Relaxed) {
+                crate::writer::send_writer_event(crate::writer::WriterEvent::Hide);
+                return LRESULT(1);
+            }
         }
 
         let mut hint_state = CURRENT_HINT.lock().unwrap();
@@ -457,83 +488,76 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             }
         }
 
+        let is_shift = unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
+            (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0
+        };
+
         if (0x41..=0x5A).contains(&key_code) && !is_ime_chinese_mode {
             if let Some(ch) = std::char::from_u32(key_code + 32) { // Lowercase a-z
                 let mut buf = KEY_BUFFER.lock().unwrap();
                 buf.push(ch);
                 if buf.len() > 50 { buf.remove(0); }
                 buf_changed = true;
-                swallowed_char = true; // Potentially swallow if it completes a FlowSnap
-            }
-        } else if (0x30..=0x39).contains(&key_code) {
-            if let Some(ch) = std::char::from_u32(key_code) { // 0-9
-                KEY_BUFFER.lock().unwrap().push(ch);
-                buf_changed = true;
                 swallowed_char = true;
             }
+        } else if (0x30..=0x39).contains(&key_code) {
+            let ch = if is_shift {
+                match key_code {
+                    0x31 => '!', 0x32 => '@', 0x33 => '#', 0x34 => '$', 0x35 => '%',
+                    0x36 => '^', 0x37 => '&', 0x38 => '*', 0x39 => '(', 0x30 => ')',
+                    _ => std::char::from_u32(key_code).unwrap_or(' '),
+                }
+            } else {
+                std::char::from_u32(key_code).unwrap_or(' ')
+            };
+            KEY_BUFFER.lock().unwrap().push(ch);
+            buf_changed = true;
+            swallowed_char = true;
         } else if (0x60..=0x69).contains(&key_code) {
             if let Some(ch) = std::char::from_u32(key_code - 0x60 + 0x30) { // Numpad 0-9
                 KEY_BUFFER.lock().unwrap().push(ch);
                 buf_changed = true;
                 swallowed_char = true;
             }
-        } else if key_code == VK_OEM_2.0 as u32 || key_code == 0x6F { // / (slash)
-            KEY_BUFFER.lock().unwrap().push('/');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xBA { // VK_OEM_1 = ; (semicolon)
-            KEY_BUFFER.lock().unwrap().push(';');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xBC { // VK_OEM_COMMA = , (comma)
-            KEY_BUFFER.lock().unwrap().push(',');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xBE { // VK_OEM_PERIOD = . (period)
-            KEY_BUFFER.lock().unwrap().push('.');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xDE { // VK_OEM_7 = ' (single quote)
-            KEY_BUFFER.lock().unwrap().push('\'');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xC0 { // VK_OEM_3 = ` (backtick)
-            KEY_BUFFER.lock().unwrap().push('`');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xDB { // VK_OEM_4 = [ (left bracket)
-            KEY_BUFFER.lock().unwrap().push('[');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xDD { // VK_OEM_6 = ] (right bracket)
-            KEY_BUFFER.lock().unwrap().push(']');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xBB { // VK_OEM_PLUS = = (equals)
-            KEY_BUFFER.lock().unwrap().push('=');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0xBD { // VK_OEM_MINUS = - (minus/hyphen)
-            KEY_BUFFER.lock().unwrap().push('-');
-            buf_changed = true;
-            swallowed_char = true;
-        } else if key_code == 0x08 { // Backspace
-            if KEY_BUFFER.lock().unwrap().pop().is_some() {
+        } else {
+            let ch = match key_code {
+                0xBF | 0x6F => Some(if is_shift { '?' } else { '/' }), // VK_OEM_2 / Numpad Divide
+                0xBA => Some(if is_shift { ':' } else { ';' }),       // VK_OEM_1
+                0xBC => Some(if is_shift { '<' } else { ',' }),       // VK_OEM_COMMA
+                0xBE => Some(if is_shift { '>' } else { '.' }),       // VK_OEM_PERIOD
+                0xDE => Some(if is_shift { '"' } else { '\'' }),      // VK_OEM_7
+                0xC0 => Some(if is_shift { '~' } else { '`' }),       // VK_OEM_3
+                0xDB => Some(if is_shift { '{' } else { '[' }),       // VK_OEM_4
+                0xDD => Some(if is_shift { '}' } else { ']' }),       // VK_OEM_6
+                0xBB => Some(if is_shift { '+' } else { '=' }),       // VK_OEM_PLUS
+                0xBD => Some(if is_shift { '_' } else { '-' }),       // VK_OEM_MINUS
+                0xDC => Some(if is_shift { '|' } else { '\\' }),      // VK_OEM_5
+                _ => None,
+            };
+
+            if let Some(c) = ch {
+                KEY_BUFFER.lock().unwrap().push(c);
                 buf_changed = true;
-            }
-        } else if key_code == 0x20 { // Space: add to buffer for multi-word matching (e.g. "git init")
-            let mut buf_lock = KEY_BUFFER.lock().unwrap();
-            buf_lock.push(' ');
-            if buf_lock.len() > 50 { buf_lock.remove(0); }
-            buf_changed = true;
-        } else if key_code == 0x0D { // Enter: clear buffer
-            let mut buf_lock = KEY_BUFFER.lock().unwrap();
-            if !buf_lock.is_empty() {
-                buf_lock.clear();
-            }
-            if hint_state.is_active {
-                hint_state.is_active = false;
-                send_hint_event(HintEvent::Hide);
+                swallowed_char = true;
+            } else if key_code == 0x08 { // Backspace
+                if KEY_BUFFER.lock().unwrap().pop().is_some() {
+                    buf_changed = true;
+                }
+            } else if key_code == 0x20 { // Space
+                let mut buf_lock = KEY_BUFFER.lock().unwrap();
+                buf_lock.push(' ');
+                if buf_lock.len() > 50 { buf_lock.remove(0); }
+                buf_changed = true;
+            } else if key_code == 0x0D { // Enter: clear buffer
+                let mut buf_lock = KEY_BUFFER.lock().unwrap();
+                if !buf_lock.is_empty() {
+                    buf_lock.clear();
+                }
+                if hint_state.is_active {
+                    hint_state.is_active = false;
+                    send_hint_event(HintEvent::Hide);
+                }
             }
         }
 
@@ -578,7 +602,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     let trigger_len = trigger.chars().count();
                     // Swallow the last char (LRESULT(1)), so we need N-1 backspaces
                     let bs_count = if swallowed_char { trigger_len.saturating_sub(1) } else { trigger_len };
-                    info!("[HOOK] FlowSnap 匹配成功! buf='{}', trigger='{}', bs_count={}, swallowed={}, replacements={:?}", 
+                    log::debug!("[HOOK] FlowSnap 匹配成功! buf='{}', trigger='{}', bs_count={}, swallowed={}, replacements={:?}", 
                           buf, trigger, bs_count, swallowed_char, matched_replacements);
 
                     if matched_replacements.len() == 1 {
@@ -665,7 +689,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                                 } }
                             }
 
-                            info!("FlowHint Match Show: {:?}", cands);
+                            log::debug!("FlowHint Match Show: {:?}", cands);
 
                             send_hint_event(HintEvent::Show {
                                 candidates: cands,
