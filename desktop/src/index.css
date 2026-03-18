@@ -17,8 +17,8 @@
   --color-border: #2A2A2D;
   --color-border-focus: #4F5588;
 
-  --color-glass-bg: rgba(20, 20, 22, 0.65);
-  --color-glass-border: rgba(255, 255, 255, 0.08);
+  --color-glass-bg: #141416;
+  --color-glass-border: rgba(255, 255, 255, 0.12);
 
   --font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif;
 
@@ -89,8 +89,8 @@
   --color-text-muted: #EBEBF599;
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-focus: rgba(10, 132, 255, 0.5);
-  --color-glass-bg: rgba(44, 44, 46, 0.85);
-  --color-glass-border: rgba(255, 255, 255, 0.05);
+  --color-glass-bg: #2C2C2E;
+  --color-glass-border: rgba(255, 255, 255, 0.1);
   --shadow-glow: none;
   --shadow-glass: 0 10px 30px rgba(0, 0, 0, 0.5);
   --radius-sm: 10px;
@@ -110,7 +110,7 @@
   --color-text-muted: #00AAAA;
   --color-border: #004444;
   --color-border-focus: #00FFFF;
-  --color-glass-bg: rgba(10, 10, 31, 0.8);
+  --color-glass-bg: #0A0A1F;
   --color-glass-border: #004444;
   --shadow-glow: 0 0 20px rgba(0, 255, 255, 0.4);
   --shadow-glass: 0 0 15px rgba(0, 255, 255, 0.15);
@@ -159,9 +159,6 @@ body {
 /* Glassmorphic Panel Utility */
 .glass-panel {
   background: var(--color-glass-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--color-glass-border);
   box-shadow: var(--shadow-glass);
   border-radius: var(--radius-lg);
 }
@@ -268,4 +265,13 @@ select.custom-select {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.9; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.pulse-dot {
+  animation: pulse 1.5s infinite ease-in-out;
 }

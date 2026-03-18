@@ -157,20 +157,21 @@ export default function HintWindow() {
         }}>
             {/* INNER CARD: Actual UI bounds */}
             <div style={{
-                background: 'rgba(25, 25, 30, 0.92)',
-                backdropFilter: 'blur(16px)',
-                WebkitBackdropFilter: 'blur(16px)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '12px',
+                opacity: 1,
+                pointerEvents: 'auto',
+                background: '#FFFFFF',
+                border: '1px solid rgba(0, 0, 0, 0.1)',
+                borderRadius: 'var(--radius-md, 12px)',
                 padding: '6px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '2px',
-                color: '#fff',
-                fontFamily: 'Inter, system-ui, Avenir, Helvetica, Arial, sans-serif',
+                color: '#1a1a1a',
+                fontFamily: 'var(--font-family, Inter, sans-serif)',
                 userSelect: 'none',
                 overflow: 'hidden',
                 flexGrow: 1, // dynamically fills the padded area
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
             }}>
 
                 {/* Drag handle bar */}
@@ -189,8 +190,9 @@ export default function HintWindow() {
                     <div style={{
                         width: '36px',
                         height: '4px',
-                        background: 'rgba(255, 255, 255, 0.18)',
-                        borderRadius: '2px'
+                        background: 'rgba(0, 0, 0, 0.12)',
+                        borderRadius: '2px',
+                        opacity: 0.5
                     }} />
                 </div>
 
@@ -199,7 +201,7 @@ export default function HintWindow() {
                     overflowY: 'auto',
                     maxHeight: `${8 * 35}px`, // max 8 visible items
                     scrollbarWidth: 'thin',
-                    scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+                    scrollbarColor: 'rgba(0,0,0,0.1) transparent',
                 }}>
                     {candidates.map((cand, idx) => (
                         <div
@@ -212,10 +214,10 @@ export default function HintWindow() {
                             }}
                             style={{
                                 padding: '7px 10px',
-                                borderRadius: '6px',
-                                background: idx === selectedIndex ? 'rgba(94, 106, 210, 0.25)' : 'transparent',
-                                borderLeft: idx === selectedIndex ? '3px solid #5E6AD2' : '3px solid transparent',
-                                color: idx === selectedIndex ? '#fff' : 'rgba(255, 255, 255, 0.7)',
+                                borderRadius: 'var(--radius-sm, 6px)',
+                                background: idx === selectedIndex ? 'rgba(94, 106, 210, 0.12)' : 'transparent',
+                                borderLeft: idx === selectedIndex ? '3px solid var(--color-primary, #5E6AD2)' : '3px solid transparent',
+                                color: idx === selectedIndex ? '#1a1a1a' : '#666',
                                 fontSize: '13px',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -226,18 +228,18 @@ export default function HintWindow() {
                             }}
                             onMouseEnter={(e) => {
                                 e.currentTarget.style.background = idx === selectedIndex
-                                    ? 'rgba(94, 106, 210, 0.35)'
-                                    : 'rgba(255, 255, 255, 0.06)';
+                                    ? 'var(--color-primary-glow)'
+                                    : 'var(--color-surface-elevated)';
                             }}
                             onMouseLeave={(e) => {
                                 e.currentTarget.style.background = idx === selectedIndex
-                                    ? 'rgba(94, 106, 210, 0.25)'
+                                    ? 'var(--color-primary-glow)'
                                     : 'transparent';
                             }}
                         >
                             <span style={{
                                 fontSize: '10px',
-                                color: idx === selectedIndex ? '#5E6AD2' : 'rgba(255, 255, 255, 0.25)',
+                                color: idx === selectedIndex ? 'var(--color-primary, #5E6AD2)' : 'var(--color-text-muted)',
                                 width: '14px',
                                 textAlign: 'right',
                                 fontWeight: 600,
@@ -259,18 +261,18 @@ export default function HintWindow() {
                 <div style={{
                     marginTop: '4px',
                     paddingTop: '5px',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                    borderTop: '1px solid rgba(0, 0, 0, 0.06)',
                     display: 'flex',
                     justifyContent: 'space-between',
                     fontSize: '10px',
-                    color: 'rgba(255, 255, 255, 0.25)',
+                    color: 'rgba(0, 0, 0, 0.35)',
                     paddingLeft: '6px',
                     paddingRight: '6px',
                     paddingBottom: '2px',
                     flexShrink: 0,
                 }}>
                     <span>↑↓ 切换</span>
-                    <span style={{ color: '#5E6AD2' }}>Tab 确认</span>
+                    <span style={{ color: 'var(--color-primary, #5E6AD2)', fontWeight: 600 }}>Tab 确认</span>
                     <span
                         onClick={() => invoke("reset_hint_position")}
                         style={{ color: '#E53E3E', cursor: 'pointer' }}

@@ -86,14 +86,35 @@ function AddAppModal({ onClose, onAdd }: {
     const [displayName, setDisplayName] = useState("");
     const [picking, setPicking] = useState(false);
 
+    useEffect(() => {
+        if (!picking) return;
+        
+        let unlisten: any;
+        const setupListener = async () => {
+            const { listen } = await import("@tauri-apps/api/event");
+            unlisten = await listen<string | null>("app-picked", (event) => {
+                const exe = event.payload;
+                if (exe) {
+                    setProcess(exe);
+                    setDisplayName(prev => prev || exe.replace(/\.exe$/i, ""));
+                }
+                setPicking(false);
+            });
+        };
+        
+        setupListener();
+        return () => { if (unlisten) unlisten(); };
+    }, [picking]);
+
     const pickFromCursor = async () => {
         setPicking(true);
         try {
-            const exe: string = await invoke("get_window_under_cursor");
-            setProcess(exe);
-            if (!displayName) setDisplayName(exe.replace(/\.exe$/i, ""));
-        } catch { /* ignore */ }
-        setPicking(false);
+            await invoke("start_app_picker");
+            // Backend will emit "app-picked" after user clicks
+        } catch (e) {
+            console.error("Picker failed:", e);
+            setPicking(false);
+        }
     };
 
     return (
@@ -176,6 +197,30 @@ function AddAppModal({ onClose, onAdd }: {
                     </button>
                 </div>
             </div>
+
+            {/* Picking Mode Overlay */}
+            {picking && (
+                <div style={{
+                    position: 'fixed', inset: 0, 
+                    background: 'rgba(0,0,0,0.2)', 
+                    backdropFilter: 'blur(1px)',
+                    zIndex: 10000,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    pointerEvents: 'none', // Allow clicks to pass through to the OS
+                }}>
+                    <div className="glass-panel" style={{
+                        padding: '12px 24px', borderRadius: '100px',
+                        background: 'var(--color-primary)', color: '#fff',
+                        boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+                        fontSize: '14px', fontWeight: 600,
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        animation: 'pulse 1.5s infinite'
+                    }}>
+                        <Crosshair size={18} />
+                        请点击目标窗口以拾取进程...
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

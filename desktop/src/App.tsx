@@ -12,6 +12,8 @@ import FlowSync from "./pages/FlowSync";
 import FlowDrop from "./pages/FlowDrop";
 import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
+import HintWindow from "./pages/HintWindow";
+import WriterWindow from "./pages/WriterWindow";
 import "./App.css";
 
 function App() {
@@ -77,6 +79,8 @@ function App() {
               <Route path="flowrules" element={<FlowRules />} />
               <Route path="settings" element={<Settings />} />
             </Route>
+            <Route path="/hint" element={<HintWindow />} />
+            <Route path="/writer" element={<WriterWindow />} />
           </Routes>
         </div>
       </div>

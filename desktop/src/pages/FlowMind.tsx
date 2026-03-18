@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle } from "lucide-react";
+import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle, GripVertical, Languages } from "lucide-react";
 import { useState, useEffect } from "react";
+import { Reorder } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { CustomSelect } from "../components/CustomSelect";
 
@@ -8,6 +9,7 @@ interface SmartEntry {
     trigger_key: string | null;
     keyword: string | null;
     content: string;
+    _id?: string;
 }
 
 interface SmartDictionary {
@@ -46,16 +48,18 @@ export default function FlowMind() {
         { val: ";", label: "; (分号)" },
         { val: ",", label: ", (逗号)" },
         { val: ".", label: ". (句号)" },
-        { val: "'", label: "' (单引号)" },
         { val: "`", label: "` (反引号)" },
+        { val: "'", label: "' (单引号)" },
         { val: "[", label: "[ (左方括号)" },
         { val: "]", label: "] (右方括号)" },
         { val: "=", label: "= (等号)" },
         { val: "-", label: "- (减号)" },
+        { val: "\\", label: "\\ (反斜杠)" },
         { val: "@", label: "@ (艾特)" },
         { val: "#", label: "# (井号)" },
         { val: "$", label: "$ (美圆)" },
         { val: "%", label: "% (百分号)" },
+        { val: "^", label: "^ (脱字符)" },
         { val: "&", label: "& (和号)" },
         { val: "*", label: "* (星号)" },
         { val: "+", label: "+ (加号)" },
@@ -69,7 +73,6 @@ export default function FlowMind() {
         { val: "{", label: "{ (左花括号)" },
         { val: "}", label: "} (右花括号)" },
         { val: "|", label: "| (竖线)" },
-        { val: "\\", label: "\\ (反斜杠)" },
         { val: "~", label: "~ (波浪号)" },
         { val: "_", label: "_ (下划线)" },
     ];
@@ -100,8 +103,10 @@ export default function FlowMind() {
 
     const loadData = async () => {
         try {
+            const rules: any = await invoke("get_flow_rules");
+            setEngineOn(rules.default.flowhint);
+
             const settings: any = await invoke("get_settings");
-            setEngineOn(settings.is_smartlib_enabled);
             setMinChars(settings.flowhint_min_chars);
             setAcceptKey(settings.flowhint_accept_key);
 
@@ -129,7 +134,18 @@ export default function FlowMind() {
                 setConflictWarning("");
             }
 
+            const order = settings.dictionary_order || [];
             processed.sort((a, b) => {
+                const idxA = order.indexOf(a.id);
+                const idxB = order.indexOf(b.id);
+                
+                // If both are in the saved order, follow it
+                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                // If only one is in the saved order, it comes first
+                if (idxA !== -1) return -1;
+                if (idxB !== -1) return 1;
+                
+                // Fallback: Builtin first, then name
                 if (a.dict_type === 'builtin' && b.dict_type === 'custom') return -1;
                 if (a.dict_type === 'custom' && b.dict_type === 'builtin') return 1;
                 return a.name.localeCompare(b.name);
@@ -143,14 +159,7 @@ export default function FlowMind() {
 
     const toggleEngine = async () => {
         try {
-            const settings: any = await invoke("get_settings");
-            await invoke("update_settings", {
-                isSmartlibEnabled: !engineOn,
-                isSyncEnabled: settings.is_sync_enabled,
-                isAutofillEnabled: settings.is_autofill_enabled,
-                flowhintMinChars: settings.flowhint_min_chars,
-                flowhintAcceptKey: settings.flowhint_accept_key,
-            });
+            await invoke("toggle_default_feature", { feature: "flowhint" });
             setEngineOn(!engineOn);
         } catch (e) {
             console.error("Failed to toggle FlowMind engine:", e);
@@ -162,9 +171,12 @@ export default function FlowMind() {
         try {
             const settings: any = await invoke("get_settings");
             await invoke("update_settings", {
-                ...settings,
-                isSmartlibEnabled: settings.is_smartlib_enabled,
+                isSyncEnabled: settings.is_sync_enabled,
                 flowhintMinChars: val,
+                flowhintAcceptKey: settings.flowhint_accept_key,
+                hintWindow: settings.hint_window,
+                writerWindow: settings.writer_window,
+                isWindowConfigUnified: settings.is_window_config_unified
             });
         } catch (e) {
             console.error(e);
@@ -176,13 +188,26 @@ export default function FlowMind() {
         try {
             const settings: any = await invoke("get_settings");
             await invoke("update_settings", {
-                ...settings,
-                isSmartlibEnabled: settings.is_smartlib_enabled,
+                isSyncEnabled: settings.is_sync_enabled,
                 flowhintAcceptKey: val,
+                flowhintMinChars: settings.flowhint_min_chars,
+                hintWindow: settings.hint_window,
+                writerWindow: settings.writer_window,
+                isWindowConfigUnified: settings.is_window_config_unified
             });
             await loadData();
         } catch (e) {
             console.error(e);
+        }
+    };
+
+    const handleReorderDicts = async (newDicts: SmartDictionary[]) => {
+        setDicts(newDicts);
+        try {
+            const order = newDicts.map(d => d.id);
+            await invoke("set_dictionary_order", { order });
+        } catch (e) {
+            console.error("Failed to save dictionary order:", e);
         }
     };
 
@@ -211,7 +236,10 @@ export default function FlowMind() {
     };
 
     const openEditModal = (dict: SmartDictionary, readOnly: boolean) => {
-        setEditingDict(JSON.parse(JSON.stringify(dict)));
+        // Add random IDs to entries for stable DND keys
+        const d = JSON.parse(JSON.stringify(dict));
+        d.entries = d.entries.map((e: any) => ({ ...e, _id: crypto.randomUUID() }));
+        setEditingDict(d);
         setIsReadOnly(readOnly);
         setIsModalOpen(true);
     };
@@ -254,7 +282,14 @@ export default function FlowMind() {
                     return;
                 }
             }
-            await invoke("save_dictionary", { dict: editingDict });
+            // Strip temporary _id before saving to Rust
+            const dictToSave = JSON.parse(JSON.stringify(editingDict));
+            dictToSave.entries = dictToSave.entries.map((e: any) => {
+                const { _id, ...rest } = e;
+                return rest;
+            });
+
+            await invoke("save_dictionary", { dict: dictToSave });
             setIsModalOpen(false);
             await loadData();
         } catch (e) {
@@ -373,18 +408,22 @@ export default function FlowMind() {
                     </div>
                 </div>
 
-                <div style={{ padding: '12px' }}>
+                <Reorder.Group axis="y" values={dicts} onReorder={handleReorderDicts} style={{ padding: '12px', listStyleType: 'none', margin: 0 }}>
                     {dicts.length === 0 && <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>暂无词库</div>}
                     {dicts.map(d => (
-                        <div key={d.id} className="dict-row" style={{
+                        <Reorder.Item key={d.id} value={d} className="dict-row" style={{
                             padding: '16px',
                             display: 'flex', alignItems: 'center', gap: '12px',
                             borderBottom: '1px solid var(--color-glass-border)',
                             transition: 'background 0.2s',
+                            background: 'transparent'
                         }}
                             onMouseEnter={(e) => e.currentTarget.style.background = 'var(--color-surface-elevated)'}
                             onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                         >
+                            <div style={{ padding: '0 4px', cursor: 'grab', color: 'var(--color-text-muted)' }}>
+                                <GripVertical size={16} />
+                            </div>
                             <div style={{ flex: 1 }}>
                                 <div style={{ fontWeight: 600, fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     {d.name}
@@ -404,8 +443,8 @@ export default function FlowMind() {
 
                             <div style={{ display: 'flex', gap: '8px' }}>
                                 {d.dict_type === 'builtin' ? (
-                                    <button onClick={() => openEditModal(d, true)} className="btn-ghost" style={{ padding: '6px' }} title="查看">
-                                        <Eye size={16} />
+                                    <button onClick={() => openEditModal(d, false)} className="btn-ghost" style={{ padding: '6px' }} title="编辑">
+                                        <Edit size={16} />
                                     </button>
                                 ) : (
                                     <>
@@ -418,15 +457,25 @@ export default function FlowMind() {
                                     </>
                                 )}
                             </div>
-                        </div>
+                        </Reorder.Item>
                     ))}
-                </div>
+                </Reorder.Group>
             </div>
 
             <div className="glass-panel" style={{ padding: '20px', marginTop: '20px', borderRadius: 'var(--radius-lg)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>🔍 引擎诊断</h3>
                     <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                            onClick={async () => {
+                                await invoke("reset_hint_position");
+                                alert("已重置所有悬浮窗坐标与偏移量，请尝试打字查看！");
+                            }}
+                            className="btn-ghost"
+                            style={{ padding: '6px 16px', fontSize: '12px', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
+                        >
+                            🔄 恢复所有窗口位置
+                        </button>
                         <button onClick={async () => { try { await invoke("dismiss_hint_window"); } catch { } }} className="btn-ghost" style={{ padding: '6px 16px', fontSize: '12px', color: '#ef4444' }}>
                             关闭候选窗
                         </button>
@@ -499,16 +548,21 @@ export default function FlowMind() {
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                                     <h4 style={{ margin: 0, fontSize: '14px' }}>词条配置 ({editingDict.entries.length})</h4>
                                     {!isReadOnly && (
-                                        <button onClick={() => setEditingDict({ ...editingDict, entries: [{ trigger_key: '', keyword: '', content: '' }, ...editingDict.entries] })}
+                                        <button onClick={() => setEditingDict({ ...editingDict, entries: [{ trigger_key: '', keyword: '', content: '', _id: crypto.randomUUID() }, ...editingDict.entries] })}
                                             className="btn-ghost" style={{ padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                             <Plus size={14} /> 新增词条
                                         </button>
                                     )}
                                 </div>
 
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <Reorder.Group axis="y" values={editingDict.entries} onReorder={(newEntries) => setEditingDict({ ...editingDict, entries: newEntries })} style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyleType: 'none', margin: 0, padding: 0 }}>
                                     {editingDict.entries.map((entry, idx) => (
-                                        <div key={idx} style={{ display: 'flex', gap: '8px', background: 'var(--color-surface)', padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)' }}>
+                                        <Reorder.Item key={entry._id} value={entry} style={{ display: 'flex', gap: '8px', background: 'var(--color-surface)', padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)', cursor: 'default' }}>
+                                            {!isReadOnly && (
+                                                <div style={{ display: 'flex', alignItems: 'center', cursor: 'grab', color: 'var(--color-text-muted)', paddingRight: '4px' }}>
+                                                    <GripVertical size={16} />
+                                                </div>
+                                            )}
                                             <div style={{ width: '135px' }}>
                                                 {isReadOnly ? (
                                                     <input className="modern-input" placeholder="无触发前缀"
@@ -561,10 +615,10 @@ export default function FlowMind() {
                                                     <Trash2 size={16} />
                                                 </button>
                                             )}
-                                        </div>
+                                        </Reorder.Item>
                                     ))}
                                     {editingDict.entries.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>暂无条目，请点击上方按钮添加。</div>}
-                                </div>
+                                </Reorder.Group>
                             </div>
                         </div>
 

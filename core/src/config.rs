@@ -40,6 +40,27 @@ pub struct AiEngineConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct WindowConfig {
+    pub pos_type: i32, // 0: Follow, 1: Fixed
+    pub fixed_x: i32,
+    pub fixed_y: i32,
+    pub offset_x: i32,
+    pub offset_y: i32,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            pos_type: 0,
+            fixed_x: -1,
+            fixed_y: -1,
+            offset_x: 0,
+            offset_y: 0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SearchEngine {
     pub name: String,
     pub template_url: String,
@@ -85,25 +106,25 @@ pub struct AppConfig {
     pub flowhint_min_chars: usize,
     #[serde(default = "default_tab_key")]
     pub flowhint_accept_key: u32,
-    #[serde(default = "default_neg_one")]
-    pub hint_fixed_x: i32,
-    #[serde(default = "default_neg_one")]
-    pub hint_fixed_y: i32,
-    #[serde(default = "default_neg_one")]
-    pub writer_fixed_x: i32,
-    #[serde(default = "default_neg_one")]
-    pub writer_fixed_y: i32,
+    #[serde(default)]
+    pub hint_window: WindowConfig,
+    #[serde(default)]
+    pub writer_window: WindowConfig,
     #[serde(default)]
     pub sync_meta: crate::sync::SyncMeta,
     #[serde(default)]
     pub ai_engine: AiEngineConfig,
     #[serde(default)]
     pub flowwriter: FlowWriterConfig,
+    #[serde(default)]
+    pub is_window_config_unified: bool,
+    #[serde(default)]
+    pub dictionary_order: Vec<String>,
 }
 
 fn default_min_chars() -> usize { 2 }
 fn default_tab_key() -> u32 { 0x09 }
-fn default_neg_one() -> i32 { -1 }
+
 
 fn default_true() -> bool { true }
 fn default_empty_string() -> String { String::new() }
@@ -133,7 +154,7 @@ impl AppConfig {
                                     provider: AiProvider::OllamaLAN,
                                     base_url: "http://192.168.1.88:11434/v1".to_string(),
                                     api_key: "".to_string(),
-                                    model: "qwen3:0.6b".to_string(),
+                                    model: "".to_string(), // Leave empty to force fetch
                                     is_enabled: true,
                                     priority: 1,
                                 },
@@ -141,7 +162,7 @@ impl AppConfig {
                                     provider: AiProvider::OllamaLAN,
                                     base_url: "https://lisibo.top:98/v1".to_string(),
                                     api_key: "".to_string(),
-                                    model: "gemma3:270m".to_string(),
+                                    model: "".to_string(),
                                     is_enabled: true,
                                     priority: 2,
                                 },
@@ -163,26 +184,24 @@ impl AppConfig {
             local_kdf_salt: default_empty_string(),
             flowhint_min_chars: 2,
             flowhint_accept_key: 0x09,
-            hint_fixed_x: -1,
-            hint_fixed_y: -1,
-            writer_fixed_x: -1,
-            writer_fixed_y: -1,
+            hint_window: WindowConfig::default(),
+            writer_window: WindowConfig::default(),
             sync_meta: crate::sync::SyncMeta::default(),
             ai_engine: AiEngineConfig {
                 endpoints: vec![
                     AiEndpoint {
                         provider: AiProvider::OllamaLAN,
-                        base_url: "http://192.168.1.88:11434/v1".to_string(),
+                        base_url: "http://127.0.0.1:11434/v1".to_string(),
                         api_key: "".to_string(),
-                        model: "qwen3:0.6b".to_string(),
+                        model: "".to_string(),
                         is_enabled: true,
                         priority: 1,
                     },
                     AiEndpoint {
                         provider: AiProvider::OllamaLAN,
-                        base_url: "https://lisibo.top:98/v1".to_string(), // In case it's proxied through the same port remotely
+                        base_url: "http://localhost:11434/v1".to_string(),
                         api_key: "".to_string(),
-                        model: "gemma3:270m".to_string(),
+                        model: "".to_string(),
                         is_enabled: true,
                         priority: 2,
                     },
@@ -191,6 +210,8 @@ impl AppConfig {
                 timeout_ms: 30000,
             },
             flowwriter: FlowWriterConfig::default(),
+            is_window_config_unified: false,
+            dictionary_order: Vec::new(),
         };
         cfg.save();
         cfg
@@ -220,11 +241,28 @@ pub fn get_settings() -> (bool, usize, u32) {
     (cfg.is_sync_enabled, cfg.flowhint_min_chars, cfg.flowhint_accept_key)
 }
 
-pub fn update_settings(is_sync_enabled: bool, flowhint_min_chars: usize, flowhint_accept_key: u32) -> Result<(), String> {
+pub fn update_settings(
+    is_sync_enabled: bool,
+    flowhint_min_chars: usize,
+    flowhint_accept_key: u32,
+    hint_window: WindowConfig,
+    writer_window: WindowConfig,
+    is_window_config_unified: bool,
+) -> Result<(), String> {
     let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
     cfg.flowhint_accept_key = flowhint_accept_key;
+    cfg.hint_window = hint_window;
+    cfg.writer_window = writer_window;
+    cfg.is_window_config_unified = is_window_config_unified;
+    cfg.save();
+    Ok(())
+}
+
+pub fn set_dictionary_order(order: Vec<String>) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.dictionary_order = order;
     cfg.save();
     Ok(())
 }

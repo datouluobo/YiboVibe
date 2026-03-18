@@ -24,6 +24,7 @@ export default function Layout() {
         localStorage.removeItem('yiboflow_server_url');
         localStorage.removeItem('yiboflow_username');
         localStorage.removeItem('yiboflow_connected_at');
+        localStorage.removeItem('yiboflow_auto_login'); // Disable auto-login on explicit logout
         navigate("/");
     };
 

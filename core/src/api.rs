@@ -41,10 +41,12 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(base_url: String) -> Self {
+        use std::time::Duration;
         Self {
             base_url,
             client: Client::builder()
                 .danger_accept_invalid_certs(true)
+                .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             access_token: None,

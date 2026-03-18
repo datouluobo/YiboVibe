@@ -34,6 +34,7 @@
         "msg_logging_in": "Initializing Engine...",
         "msg_connecting": "Deriving Keys...",
         "remember_pwd": "Remember Password (Local only)",
+        "auto_login": "Auto Login (Requires remembered pwd)",
         "local_mode_label": "[Local Offline Mode]",
         "conflict_title": "Remote Account Conflict",
         "conflict_desc": "An account with this username already exists on the server. Choose an action:",

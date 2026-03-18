@@ -15,14 +15,32 @@ document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
 });
 
-const isHintOverlay = window.location.hash === '#/hint';
-const isWriterOverlay = window.location.hash === '#/writer';
+// Sync theme across windows via Tauri events
+import("@tauri-apps/api/event").then(({ listen }) => {
+  listen<string>("theme-changed", (event) => {
+    document.documentElement.setAttribute('data-theme', event.payload);
+  });
+});
+
+const isHintOverlay = window.location.hash.includes('#/hint');
+const isWriterOverlay = window.location.hash.includes('#/writer');
+
+console.log("Rendering attempt:", { hash: window.location.hash, isHintOverlay, isWriterOverlay });
 
 if (isHintOverlay || isWriterOverlay) {
   document.body.style.background = 'transparent';
+  document.body.style.backgroundImage = 'none';
   document.documentElement.style.background = 'transparent';
 }
 
+import { HashRouter } from "react-router-dom";
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  isHintOverlay ? <HintWindow /> : (isWriterOverlay ? <WriterWindow /> : <App />)
+  isHintOverlay ? (
+    <HashRouter><HintWindow /></HashRouter>
+  ) : isWriterOverlay ? (
+    <HashRouter><WriterWindow /></HashRouter>
+  ) : (
+    <App />
+  )
 );

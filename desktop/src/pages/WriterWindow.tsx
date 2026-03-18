@@ -227,19 +227,21 @@ export default function WriterWindow() {
                     </div>
 
                     {!isProcessing && output === "" && !error && (
-                        <div className="writer-actions">
-                            <button onClick={() => handleAction("Polish")}>✨ 润色</button>
-                            <button onClick={() => handleAction("Expand", "1.5")}>📝 扩写</button>
-                            <button onClick={() => handleAction("Condense", "50%")}>✂️ 缩写</button>
-                            <button onClick={() => handleAction("Summarize")}>📌 总结</button>
-                            <button onClick={() => handleAction("Translate", "English")}>🌐 译为英文</button>
-                            <button onClick={() => handleAction("Explain")}>💡 解释</button>
+                        <div className="writer-actions-container">
+                            <div className="writer-actions">
+                                <button onClick={() => handleAction("Polish")}>✨ 润色</button>
+                                <button onClick={() => handleAction("Expand", "1.5")}>📝 扩写</button>
+                                <button onClick={() => handleAction("Condense", "50%")}>✂️ 缩写</button>
+                                <button onClick={() => handleAction("Summarize")}>📌 总结</button>
+                                <button onClick={() => handleAction("Translate", "English")}>🌐 译为英文</button>
+                                <button onClick={() => handleAction("Explain")}>💡 解释</button>
 
-                            {customPrompts.map(p => (
-                                <button key={p.id} onClick={() => handleAction("Custom", p.id)}>
-                                    {p.icon} {p.name}
-                                </button>
-                            ))}
+                                {customPrompts.map(p => (
+                                    <button key={p.id} onClick={() => handleAction("Custom", p.id)}>
+                                        {p.icon} {p.name}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
 
@@ -266,7 +268,7 @@ export default function WriterWindow() {
 
                 <div className="writer-footer">
                     <span>Esc 关闭 / ← 返回</span>
-                    <span style={{ color: '#5E6AD2', fontWeight: 600 }}>妙笔 FlowWriter</span>
+                    <span style={{ color: 'var(--color-primary, #5E6AD2)', fontWeight: 600 }}>妙笔 FlowWriter</span>
                 </div>
             </div>
         </div>

@@ -36,6 +36,7 @@ function SectionCard({ title, icon, children }: { title: string; icon: React.Rea
 export default function FlowDeck() {
     const { t } = useTranslation();
     const [vaultStatus, setVaultStatus] = useState<any>(null);
+    const [retryCount, setRetryCount] = useState(0);
 
     // Mocked cluster devices (In future this would be synced via the vault/NAS hub)
     const [devices, setDevices] = useState(() => {
@@ -71,7 +72,15 @@ export default function FlowDeck() {
             const serverUrl = localStorage.getItem('yiboflow_server_url') || "";
             const username = localStorage.getItem('yiboflow_username') || "";
             const savedPwdB64 = localStorage.getItem('yiboflow_saved_pwd') || "";
-            if (!serverUrl || serverUrl === 'local' || !username || !savedPwdB64) {
+            
+            if (!serverUrl || serverUrl === 'local' || !username) {
+                return;
+            }
+            
+            setVaultStatus(null); // Enter detecting state
+            
+            if (!savedPwdB64) {
+                setVaultStatus({ error: "MASTER_PWD_UNSAVED" });
                 return;
             }
             try {
@@ -80,10 +89,12 @@ export default function FlowDeck() {
                 setVaultStatus(info);
             } catch (e) {
                 console.error("Failed to fetch vault status:", e);
+                setVaultStatus({ error: String(e) });
             }
         };
+
         fetchStatus();
-    }, []);
+    }, [retryCount]);
 
     // Helper to determine if conflict exists based on status messages or logic. 
     // Wait, the new logic doesn't expose diverged via status_msg... Actually `get_vault_sync_status` just returns timestamps.
@@ -111,35 +122,47 @@ export default function FlowDeck() {
             {isRemote && (
                 <div className="glass-panel" style={{
                     marginBottom: '20px', padding: '16px 20px', borderRadius: 'var(--radius-lg)',
-                    borderLeft: vaultStatus ? '4px solid #22c55e' : '4px solid var(--color-glass-border)',
-                    background: vaultStatus ? 'rgba(34, 197, 94, 0.05)' : 'var(--color-bg-base)',
+                    borderLeft: (vaultStatus && !vaultStatus.error) ? '4px solid #22c55e' : (vaultStatus?.error ? '4px solid #ef4444' : '4px solid var(--color-glass-border)'),
+                    background: (vaultStatus && !vaultStatus.error) ? 'rgba(34, 197, 94, 0.05)' : (vaultStatus?.error ? 'rgba(239, 68, 68, 0.03)' : 'var(--color-bg-base)'),
                     minHeight: '74px',
                     display: 'flex', flexDirection: 'column', justifyContent: 'center'
                 }}>
                     {vaultStatus ? (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <div style={{ background: '#22c55e', color: '#fff', padding: '4px', borderRadius: '50%', display: 'flex' }}>
-                                        <CheckCircle size={16} />
-                                    </div>
-                                    <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--color-text-main)' }}>
-                                        多端协同互联：Vault 已成功同步
-                                    </span>
-                                    <span style={{ fontSize: '12.5px', color: 'var(--color-text-dim)', marginLeft: '8px', background: 'var(--color-surface-elevated)', padding: '2px 8px', borderRadius: '100px', border: '1px solid var(--color-glass-border)' }}>
-                                        云节点：{vaultStatus.server_url}
-                                    </span>
+                        vaultStatus.error ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <div style={{ background: '#ef4444', color: '#fff', padding: '4px', borderRadius: '50%', display: 'flex' }}>
+                                    <XCircle size={16} />
                                 </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '12.5px', color: 'var(--color-text-dim)', paddingLeft: '34px' }}>
-                                    <div>通行身份：{vaultStatus.username}</div>
-                                    <div>云数据块量级：{vaultStatus.remote_manifest_size} Blocks</div>
-                                    <div>全局时基锚点：{vaultStatus.remote_updated_at ? new Date(vaultStatus.remote_updated_at * 1000).toLocaleString() : '无数据'}</div>
+                                <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--color-text-main)' }}>
+                                    {vaultStatus.error === "MASTER_PWD_UNSAVED" ? "同步状态受限：由于未记住密码，无法侦测云端库" : `云端库探测失败：${vaultStatus.error}`}
+                                </span>
+                                <button className="btn-ghost" style={{ fontSize: '12px', padding: '4px 8px', color: 'var(--color-primary)' }} onClick={() => setRetryCount(c => c + 1)}>立即重探测</button>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div style={{ background: '#22c55e', color: '#fff', padding: '4px', borderRadius: '50%', display: 'flex' }}>
+                                            <CheckCircle size={16} />
+                                        </div>
+                                        <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--color-text-main)' }}>
+                                            多端协同互联：Vault 已成功同步
+                                        </span>
+                                        <span style={{ fontSize: '12.5px', color: 'var(--color-text-dim)', marginLeft: '8px', background: 'var(--color-surface-elevated)', padding: '2px 8px', borderRadius: '100px', border: '1px solid var(--color-glass-border)' }}>
+                                            云节点：{vaultStatus.server_url}
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '12.5px', color: 'var(--color-text-dim)', paddingLeft: '34px' }}>
+                                        <div>通行身份：{vaultStatus.username}</div>
+                                        <div>云数据块量级：{vaultStatus.remote_manifest_size} Blocks</div>
+                                        <div>全局时基锚点：{vaultStatus.remote_updated_at ? new Date(vaultStatus.remote_updated_at * 1000).toLocaleString() : '无数据'}</div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        )
                     ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <div style={{ background: 'var(--color-glass-border)', padding: '4px', borderRadius: '50%', display: 'flex', width: 24, height: 24 }} />
+                            <div className="pulse-dot" style={{ background: 'var(--color-glass-border)', padding: '4px', borderRadius: '50%', display: 'flex', width: 24, height: 24 }} />
                             <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--color-text-dim)' }}>
                                 引擎正在侦测云端库...
                             </span>
@@ -151,9 +174,18 @@ export default function FlowDeck() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 {/* Network sync */}
                 <SectionCard title="云端同步通道" icon={<Globe size={15} />}>
-                    <StatusBadge status={isRemote ? "ok" : "warn"} label={isRemote ? "NAS Hub 已连接" : "本地隔离模式"} />
-                    <StatusBadge status={isRemote ? "ok" : "warn"} label={isRemote ? "WebSocket 活跃" : "无远程通讯"} />
-                    <StatusBadge status={isRemote ? "ok" : "warn"} label={isRemote ? "HTTPS 信道安全" : "单机直连安全"} />
+                    <StatusBadge 
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : (vaultStatus?.error ? "error" : "warn")} 
+                        label={isRemote ? "NAS Hub 对接中" : "本地隔离模式"} 
+                    />
+                    <StatusBadge 
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"} 
+                        label={isRemote ? "WebSocket 执行中" : "无远程通讯"} 
+                    />
+                    <StatusBadge 
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"} 
+                        label={isRemote ? "HTTPS 安全信道" : "单机直连安全"} 
+                    />
                 </SectionCard>
 
                 {/* Engine Core */}

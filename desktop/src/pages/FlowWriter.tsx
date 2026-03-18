@@ -317,6 +317,7 @@ export default function FlowWriter() {
                             </div>
                         </div>
                     </div>
+
                 </div>
 
                 {/* Intelligent Prompts Section */}

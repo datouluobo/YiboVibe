@@ -55,6 +55,26 @@ pub struct ChatCompletionResponse {
     pub choices: Vec<ChatCompletionChoice>,
 }
 
+#[derive(Deserialize)]
+struct OpenAiModel {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModel {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct OllamaModelsResponse {
+    models: Vec<OllamaModel>,
+}
+
 lazy_static::lazy_static! {
     static ref ACTIVE_ENDPOINT: Arc<RwLock<Option<AiEndpoint>>> = Arc::new(RwLock::new(None));
 }
@@ -67,6 +87,8 @@ pub struct AiClient {
 impl AiClient {
     pub fn new(config: AiEngineConfig) -> Self {
         let client = Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .danger_accept_invalid_certs(true) // 关键：允许 NAS 的自签名或过期证书
             .connect_timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| Client::new());
@@ -119,24 +141,103 @@ impl AiClient {
 
     pub async fn probe(&self, endpoint: &AiEndpoint) -> Result<u64, AiError> {
         let start = std::time::Instant::now();
-        // Light probe: try to hit base_url /models
-        let mut root_url = endpoint.base_url.clone();
-        if root_url.ends_with("/chat/completions") {
-            root_url = root_url.replace("/chat/completions", "/models");
-        } else if root_url.ends_with("/v1") {
-            root_url = format!("{}/models", root_url);
-        } else {
-            root_url = format!("{}/models", root_url); // basic heuristic
+        
+        let base_url = endpoint.base_url.trim_end_matches('/');
+        let mut probe_urls = Vec::new();
+
+        probe_urls.push(format!("{}/models", base_url));
+        probe_urls.push(format!("{}/api/tags", base_url));
+        probe_urls.push(format!("{}/api/version", base_url));
+        probe_urls.push(base_url.to_string());
+
+        if base_url.contains("/v1") {
+            let stripped = base_url.replace("/v1", "");
+            let s = stripped.trim_end_matches('/');
+            if !s.is_empty() {
+                probe_urls.push(format!("{}/models", s));
+                probe_urls.push(format!("{}/api/tags", s));
+                probe_urls.push(format!("{}/api/version", s));
+                probe_urls.push(s.to_string());
+            }
         }
 
-        let mut request = self.http_client.get(&root_url).timeout(Duration::from_millis(1500));
-        if !endpoint.api_key.is_empty() {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
+        let mut last_status = None;
+
+        for url in probe_urls {
+            let request = if endpoint.api_key.is_empty() {
+                self.http_client.get(&url)
+            } else {
+                self.http_client.get(&url).header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key))
+            };
+
+            match request.timeout(Duration::from_millis(2500)).send().await {
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() || status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+                        return Ok(start.elapsed().as_millis() as u64);
+                    }
+                    last_status = Some(status);
+                }
+                Err(_) => continue,
+            }
         }
 
-        let _res = request.send().await?;
-        // Any response (even 401 unauth) proves connectivity
-        Ok(start.elapsed().as_millis() as u64)
+        if let Some(status) = last_status {
+            return Err(AiError::Api(format!("HTTP {} (服务器回复了但路径不对，请检查网关配置)", status)));
+        }
+
+        Err(AiError::NoEndpoint)
+    }
+
+    pub async fn list_models(&self, endpoint: &AiEndpoint) -> Result<Vec<String>, AiError> {
+        let base_url = endpoint.base_url.trim_end_matches('/');
+        let mut try_urls = Vec::new();
+
+        // 构造候选路径池
+        try_urls.push(format!("{}/models", base_url));
+        try_urls.push(format!("{}/api/tags", base_url));
+        
+        if base_url.contains("/v1") {
+            let s = base_url.replace("/v1", "").trim_end_matches('/').to_string();
+            if !s.is_empty() {
+                try_urls.push(format!("{}/models", s));
+                try_urls.push(format!("{}/api/tags", s));
+            }
+        }
+
+        for url in try_urls {
+            info!("Fetching models from: {}", url);
+            let mut request = self.http_client.get(&url).timeout(Duration::from_secs(6));
+            if !endpoint.api_key.is_empty() {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
+            }
+
+            match request.send().await {
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() {
+                        if let Ok(text) = res.text().await {
+                            // Try A: OpenAI
+                            if let Ok(data) = serde_json::from_str::<OpenAiModelsResponse>(&text) {
+                                let m: Vec<_> = data.data.into_iter().map(|it| it.id).collect();
+                                if !m.is_empty() { return Ok(m); }
+                            }
+                            // Try B: Ollama
+                            if let Ok(data) = serde_json::from_str::<OllamaModelsResponse>(&text) {
+                                let m: Vec<_> = data.models.into_iter().map(|it| it.name).collect();
+                                if !m.is_empty() { return Ok(m); }
+                            }
+                            info!("Model list response was empty or unrecognized: {}", text);
+                        }
+                    } else {
+                        warn!("Fetch models failed: HTTP {}", status);
+                    }
+                }
+                Err(e) => warn!("Request error to {}: {}", url, e),
+            }
+        }
+
+        Err(AiError::Api("未检测到模型。如果刚重装了 Ollama，请先执行 ollama pull 下载模型。".into()))
     }
 
     pub async fn invalidate_active_endpoint() {

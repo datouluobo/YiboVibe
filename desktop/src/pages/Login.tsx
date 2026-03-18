@@ -42,6 +42,7 @@ export default function Login() {
 
     const [username, setUsername] = useState(() => localStorage.getItem('yiboflow_username') || "admin");
     const [rememberPwd, setRememberPwd] = useState(() => localStorage.getItem('yiboflow_remember_pwd') === 'true');
+    const [autoLogin, setAutoLogin] = useState(() => localStorage.getItem('yiboflow_auto_login') === 'true');
     const [password, setPassword] = useState(() => {
         if (localStorage.getItem('yiboflow_remember_pwd') === 'true') {
             try { return atob(localStorage.getItem('yiboflow_saved_pwd') || ""); } catch { return ""; }
@@ -56,6 +57,19 @@ export default function Login() {
     const [showSyncConflictModal, setShowSyncConflictModal] = useState<{ isOpen: boolean, files: string[] }>({ isOpen: false, files: [] });
     const [conflictResolutions, setConflictResolutions] = useState<Record<string, 'keep_local' | 'take_remote'>>({});
     const [renameValue, setRenameValue] = useState("");
+
+    useEffect(() => {
+        // Auto-login on mount if enabled
+        const shouldAuto = localStorage.getItem('yiboflow_auto_login') === 'true';
+        if (shouldAuto && username && password && !isRegistering) {
+            // Briefly wait to ensure translations/context are ready if needed
+            const timer = setTimeout(() => {
+                const fakeEvent = { preventDefault: () => { } } as React.FormEvent;
+                handleAuth(fakeEvent);
+            }, 300);
+            return () => clearTimeout(timer);
+        }
+    }, []); // Only run once on mount
 
     const updateHistory = (url: string) => {
         const updated = [url, ...urlHistory.filter(h => h !== url)].slice(0, 5);
@@ -97,9 +111,15 @@ export default function Login() {
                     if (rememberPwd) {
                         localStorage.setItem('yiboflow_remember_pwd', 'true');
                         localStorage.setItem('yiboflow_saved_pwd', btoa(password));
+                        if (autoLogin) {
+                            localStorage.setItem('yiboflow_auto_login', 'true');
+                        } else {
+                            localStorage.removeItem('yiboflow_auto_login');
+                        }
                     } else {
                         localStorage.removeItem('yiboflow_remember_pwd');
                         localStorage.removeItem('yiboflow_saved_pwd');
+                        localStorage.removeItem('yiboflow_auto_login');
                     }
                     updateHistory(serverUrl);
                     navigate("/app");
@@ -295,17 +315,40 @@ export default function Login() {
                     </div>
 
                     {!isRegistering && (
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "12px", marginBottom: "4px" }}>
-                            <input
-                                type="checkbox"
-                                id="rememberPwd"
-                                checked={rememberPwd}
-                                onChange={(e) => setRememberPwd(e.target.checked)}
-                                style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "var(--color-primary)" }}
-                            />
-                            <label htmlFor="rememberPwd" style={{ fontSize: "13px", color: "var(--color-text-muted)", cursor: "pointer", userSelect: "none" }}>
-                                {t('login.remember_pwd')}
-                            </label>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "12px", marginBottom: "4px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <input
+                                    type="checkbox"
+                                    id="rememberPwd"
+                                    checked={rememberPwd}
+                                    onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setRememberPwd(checked);
+                                        if (!checked) setAutoLogin(false); // Constraint: No remember -> No auto
+                                    }}
+                                    style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "var(--color-primary)" }}
+                                />
+                                <label htmlFor="rememberPwd" style={{ fontSize: "13px", color: "var(--color-text-muted)", cursor: "pointer", userSelect: "none" }}>
+                                    {t('login.remember_pwd')}
+                                </label>
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <input
+                                    type="checkbox"
+                                    id="autoLogin"
+                                    checked={autoLogin}
+                                    onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setAutoLogin(checked);
+                                        if (checked) setRememberPwd(true); // Constraint: Auto login implies Remember pwd
+                                    }}
+                                    style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "var(--color-primary)" }}
+                                />
+                                <label htmlFor="autoLogin" style={{ fontSize: "13px", color: "var(--color-text-muted)", cursor: "pointer", userSelect: "none" }}>
+                                    {t('login.auto_login')}
+                                </label>
+                            </div>
                         </div>
                     )}
 

@@ -34,6 +34,7 @@
         "msg_logging_in": "正在唤醒核心引擎...",
         "msg_connecting": "正在派生加密密钥...",
         "remember_pwd": "记住密码 (仅本设备有效且不会同步)",
+        "auto_login": "自动登录 (需已记住密码)",
         "local_mode_label": "【本地脱机模式】 (Local Offline)",
         "conflict_title": "发现同名云端账号",
         "conflict_desc": "服务器上已存在此用户名的账号。请选择后续操作：",
