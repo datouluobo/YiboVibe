@@ -89,35 +89,31 @@ pub fn remove_custom_prompt(id: &str) -> Result<(), String> {
 pub fn build_messages(action: &PromptAction, user_input: &str) -> Vec<ChatMessage> {
     let system_message = match action {
         PromptAction::Polish => 
-            "你是一个纯粹的文本处理引擎。请润色以下文本，修正语法错误，提升可读性。你必须绝对遵守以下规则：1. 仅输出润色后的文本。2. 绝对不能有任何开场白或结尾语（例如“好的”、“没问题”、“优化后的返回文本是”）。3. 不要解释你的修改。4. 不要使用 markdown 标签包裹返回内容。直接开始输出内容：".to_string(),
+            "你是一个专业的文本润色专家。请对文本进行润色，修正语法错误，提升可读性。规则：1. 直接输出润色后的结果。2. 绝对禁止输出任何开场白、结尾语或解释。".to_string(),
         PromptAction::Expand { ratio } => 
-            format!("你是一个发散扩写引擎。将文本扩写约为 {} 倍。必须绝对遵循：1. 仅输出扩写结果。2. 不能有任何寒暄、废话、解释。3. 直接开始内容，不要用 markdown。", ratio),
+            format!("你是一个发散扩写专家。请将文本扩写约为原来的 {} 倍。规则：1. 直接输出结果。2. 禁止废话。", ratio),
         PromptAction::Condense { ratio } => {
-            let desc = if ratio == "one_sentence" { "一句话总结".to_string() } else { format!("原来的 {}", ratio) };
-            format!("你是一个文本压缩引擎。请缩写至{}。必须绝对遵循：1. 仅输出截短后的内容。2. 绝对不能有任何开场白、结尾语。3. 不要做任何解释。直接输出：", desc)
+            let desc = if ratio == "one_sentence" { "一句话精炼" } else { ratio };
+            format!("你是一个文本精简专家。请将文本压缩至{}。规则：1. 直接输出结果。2. 禁止解释。", desc)
         },
         PromptAction::Summarize => 
-            "请提取核心要点，用简单的无序列表格式。你必须绝对遵守：1. 不能有“好的”、“这是总结”等废话。2. 仅输出结果：".to_string(),
+            "你是一个专业的文本总结专家。请提取核心要义。规则：1. 如果内容较长，请分条列出要点；如果内容较短，请归纳总结。2. 直接输出结果。3. 禁止任何废话说明。".to_string(),
         PromptAction::Style { style } => 
-            format!("将文本改写为“{}”风格。绝对遵循：1. 不要解释。2. 不要寒暄。3. 仅输出改写完成的纯文本：", style),
+            format!("你是一个文风改写专家。请将文本改写为“{}”风格。要求：直接输出结果，禁止任何解释说明。", style),
         PromptAction::Translate { target_lang } => 
-            format!("将文本翻译为“{}”。绝对遵循：1. 仅输出翻译后的文本。2. 不能解释你的翻译。3. 不要任何寒暄：", target_lang),
+            format!("你是一个精准的翻译专家。请将以下文本精准翻译为“{}”。要求：直接输出结果，保持语气自然、内容真实。", target_lang),
         PromptAction::Explain => 
-            "分析并解释以下内容。直接开始解释，不要有“好的，我将解释”等无意义废话，直接切入正题：".to_string(),
+            "你是一个知识渊博的专业助手。请分析并解释以下内容。要求：直接开始解释，严禁任何形式的客套话或前置废话。".to_string(),
         PromptAction::Custom { template_id } => {
             let cfg = CUSTOM_PROMPTS.read().unwrap();
-            if let Some(p) = cfg.custom_prompts.iter().find(|p| p.id == *template_id) {
-                p.system_message.clone()
-            } else {
-                "你是一个AI助理，请处理以下文本。".to_string() // Fallback
-            }
+            cfg.custom_prompts.iter()
+                .find(|p| p.id == *template_id)
+                .map(|p| p.system_message.clone())
+                .unwrap_or_else(|| "你是一个AI助理，请处理以下文本。".to_string())
         }
     };
 
-    // Small models (Qwen 0.5B, Gemma 270M etc.) do NOT understand multi-role
-    // conversations well. We merge the system instruction + user text into a
-    // single user message with explicit structural markers so the model cannot
-    // mistake the user text for a chat request.
+    // 极致兼容方案：合并为单条 User 消息
     let combined = format!(
         "<instruction>\n{}\n</instruction>\n\n<input>\n{}\n</input>\n\n<output>\n",
         system_message,

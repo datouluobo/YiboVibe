@@ -529,11 +529,11 @@ fn update_writer_position(app: tauri::AppHandle, x: i32, y: i32) {
         // Follow mode: update relative offsets
         let anchor = LAST_WRITER_ANCHOR.lock().unwrap();
         cfg.writer_window.offset_x = x - anchor.0;
-        cfg.writer_window.offset_y = anchor.1 - y; 
+        cfg.writer_window.offset_y = y - anchor.1; 
         
         if cfg.is_window_config_unified {
             cfg.hint_window.offset_x = cfg.writer_window.offset_x;
-            cfg.hint_window.offset_y = -cfg.writer_window.offset_y; // Writer offset_y is "up", Hint is "down"
+            cfg.hint_window.offset_y = cfg.writer_window.offset_y;
             cfg.hint_window.pos_type = 0;
         }
     } else {
@@ -625,7 +625,7 @@ fn update_hint_position(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), Str
         
         if cfg.is_window_config_unified {
             cfg.writer_window.offset_x = cfg.hint_window.offset_x;
-            cfg.writer_window.offset_y = -cfg.hint_window.offset_y; 
+            cfg.writer_window.offset_y = cfg.hint_window.offset_y; 
             cfg.writer_window.pos_type = 0;
         }
     } else {
@@ -1244,7 +1244,9 @@ pub fn run() {
                 unsafe {
                     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
                     // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
+                    // IMPORTANT: Explicitly REMOVE WS_EX_TRANSPARENT (0x20) to ensure clicks are caught!
+                    let new_style = (ex_style | 0x08000000i32 | 0x00000080i32) & !0x00000020i32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
                     // Sync the style change
                     use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED};
                     let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -1278,8 +1280,8 @@ pub fn run() {
                                 HintEvent::Show { candidates, x, y, .. } => {
                                     // Cap visible items at 8 for height; scrolling handles the rest
                                     let visible_count = candidates.len().min(8) as i32;
-                                    // handle(18) + items(n*35) + footer(32) + padding(12) + border(4) = 66
-                                    let inner_height = 70 + (visible_count * 35);
+                                    // Make outer window bounds safely larger to prevent clipping of text and shadows
+                                    let inner_height = 95 + (visible_count * 38);
                                     let outer_height = inner_height;
                                     let outer_width = 300;
 
@@ -1375,13 +1377,15 @@ pub fn run() {
             });
 
             // --- Writer Window Setup ---
+            // IMPORTANT: Use the EXACT same Win32 HWND approach as FlowHint
+            // because Tauri's .show() is broken for transparent+hidden windows on WebView2/Windows.
             let writer_win = tauri::WebviewWindowBuilder::new(
                 app,
                 "writer",
                 tauri::WebviewUrl::App("/#/writer".into()),
             )
             .title("FlowWriter")
-            .inner_size(400.0, 450.0)
+            .inner_size(520.0, 450.0)
             .resizable(true)
             .decorations(false)
             .transparent(true)
@@ -1392,30 +1396,22 @@ pub fn run() {
             .build()
             .unwrap();
 
+            // Get Win32 HWND for direct window management — same pattern as FlowHint
+            // but WITHOUT WS_EX_NOACTIVATE because Writer needs focus for interactive buttons.
             #[cfg(target_os = "windows")]
             let writer_hwnd = {
-                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, ShowWindow, SW_HIDE, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER};
                 let raw_hwnd = writer_win.hwnd().unwrap();
                 let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
-                unsafe {
-                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                    // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
-                    // SAME as HintWindow — prevents activation on click, fixes drag "fly away"
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | 0x08000000i32 | 0x00000080i32);
-                    // Sync the style change
-                    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED};
-                    let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
-                }
+                // Do NOT set WS_EX_NOACTIVATE — Writer needs to accept focus/clicks
                 hwnd
             };
 
             let (writer_tx, writer_rx) = std::sync::mpsc::channel();
             yiboflow_core::writer::set_writer_tx(writer_tx);
             let app_handle_writer = app.handle().clone();
-            
             #[cfg(target_os = "windows")]
             let writer_hwnd_raw = writer_hwnd.0 as isize;
-            
+
             std::thread::spawn(move || {
                 use yiboflow_core::writer::WriterEvent;
                 while let Ok(event) = writer_rx.recv() {
@@ -1427,15 +1423,15 @@ pub fn run() {
                         {
                             let writer_hwnd = windows::Win32::Foundation::HWND(writer_hwnd_raw as *mut _);
                             use windows::Win32::UI::WindowsAndMessaging::{
-                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
+                                ShowWindow, SetWindowPos, SW_SHOW, SW_HIDE,
                                 HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOSIZE, SWP_NOZORDER,
                             };
-                            
+
                             match &ev_clone {
                                 WriterEvent::TextSelected { text: _, x, y } => {
                                     let mut pos_x = *x;
                                     let mut pos_y = *y;
-                                    
+
                                     if pos_x == -1 || pos_y == -1 {
                                         use windows::Win32::Foundation::POINT;
                                         use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
@@ -1447,12 +1443,12 @@ pub fn run() {
                                             }
                                         }
                                     }
-                                    
+
                                     let (pos_type, f_x, f_y, ox, oy) = {
                                         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
                                         (
-                                            cfg.writer_window.pos_type, 
-                                            cfg.writer_window.fixed_x, 
+                                            cfg.writer_window.pos_type,
+                                            cfg.writer_window.fixed_x,
                                             cfg.writer_window.fixed_y,
                                             cfg.writer_window.offset_x,
                                             cfg.writer_window.offset_y
@@ -1461,9 +1457,8 @@ pub fn run() {
 
                                     let mut tx;
                                     let mut ty;
-                                    
+
                                     if pos_type == 1 {
-                                        // Fixed mode: (tx, ty) are user-space (bottom-left)
                                         tx = f_x;
                                         ty = f_y;
                                         if let Ok(Some(mon)) = handle_internal.primary_monitor() {
@@ -1471,67 +1466,100 @@ pub fn run() {
                                             ty = h - ty;
                                         }
                                     } else {
-                                        // Follow mode
                                         tx = pos_x;
                                         ty = pos_y;
                                         *LAST_WRITER_ANCHOR.lock().unwrap() = (tx, ty);
                                         tx += ox;
-                                        ty -= oy; // Writer offset_y is usually "up"
+                                        ty += oy;
                                     }
+                                    
+                                    let outer_width: i32 = 520;
+                                    let outer_height: i32 = 450;
 
-                                    // --- SAFETY CLAMP ---
-                                    let outer_width = 400;
-                                    let outer_height = 450;
+                                    // --- ROBUST SAFETY CLAMP ---
+                                    // Step 1: Try Tauri's monitor_from_point
+                                    let mut clamped = false;
                                     if let Ok(Some(mon)) = handle_internal.monitor_from_point(tx as f64, ty as f64) {
                                         let sx = mon.position().x;
                                         let sy = mon.position().y;
                                         let sw = mon.size().width as i32;
                                         let sh = mon.size().height as i32;
-                                        if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                        if tx < sx { tx = sx + 10; }
-                                        if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                        if ty < sy { ty = sy + 20; }
+                                        if sw > 0 && sh > 0 {
+                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
+                                            if tx < sx { tx = sx + 10; }
+                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
+                                            if ty < sy { ty = sy + 20; }
+                                            clamped = true;
+                                        }
                                     }
 
+                                    // Step 2: If Tauri's monitor detection failed (e.g. DPI mismatch),
+                                    // use Win32 MonitorFromPoint which works with physical pixels
+                                    if !clamped {
+                                        use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
+                                        use windows::Win32::Foundation::POINT;
+                                        let pt = POINT { x: tx, y: ty };
+                                        let hmon = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY) };
+                                        let mut mi = MONITORINFO {
+                                            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                            ..Default::default()
+                                        };
+                                        if unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
+                                            let rc = mi.rcWork;
+                                            let sx = rc.left;
+                                            let sy = rc.top;
+                                            let sw = rc.right - rc.left;
+                                            let sh = rc.bottom - rc.top;
+                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
+                                            if tx < sx { tx = sx + 10; }
+                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
+                                            if ty < sy { ty = sy + 20; }
+                                            clamped = true;
+                                        }
+                                    }
+
+                                    // Step 3: Last resort - force to (100, 100) if all detection failed
+                                    if !clamped {
+                                        tx = 100;
+                                        ty = 100;
+                                    }
+
+                                    info!("[Writer] Showing at ({}, {})", tx, ty);
                                     unsafe {
                                         let _ = SetWindowPos(
                                             writer_hwnd,
                                             Some(HWND_TOPMOST),
                                             tx, ty,
                                             outer_width, outer_height,
-                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                            SWP_SHOWWINDOW,
                                         );
-                                        let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
+                                        let _ = ShowWindow(writer_hwnd, SW_SHOW);
                                     }
                                     yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 WriterEvent::TextCopied { .. } => {
-                                    // Determine Mode
                                     let (pos_type, f_x, f_y, ox, oy) = {
                                         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
                                         (
-                                            cfg.writer_window.pos_type, 
-                                            cfg.writer_window.fixed_x, 
+                                            cfg.writer_window.pos_type,
+                                            cfg.writer_window.fixed_x,
                                             cfg.writer_window.fixed_y,
                                             cfg.writer_window.offset_x,
                                             cfg.writer_window.offset_y
                                         )
                                     };
-                                    let (mut tx, mut ty): (i32, i32); // E0282 fix with type, ty needs mut for Y-flip logic
+                                    let (mut tx, mut ty): (i32, i32);
                                     let mut anchor_x = 0;
                                     let mut anchor_y = 0;
 
                                     if pos_type == 1 {
-                                        // Fixed mode
                                         tx = f_x;
                                         ty = f_y;
-
                                         if let Ok(Some(mon)) = handle_internal.primary_monitor() {
                                             let h = mon.size().height as i32;
                                             ty = h - ty;
                                         }
                                     } else {
-                                        // Follow mode: use cursor pos
                                         use windows::Win32::Foundation::POINT;
                                         use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
                                         let mut pt = POINT::default();
@@ -1543,32 +1571,65 @@ pub fn run() {
                                         }
                                         *LAST_WRITER_ANCHOR.lock().unwrap() = (anchor_x, anchor_y);
                                         tx = anchor_x + ox;
-                                        ty = anchor_y - oy;
+                                        ty = anchor_y + oy;
                                     }
 
-                                    // --- SAFETY CLAMP ---
-                                    let outer_width = 400;
-                                    let outer_height = 450;
+                                    let outer_width: i32 = 520;
+                                    let outer_height: i32 = 450;
+
+                                    // --- ROBUST SAFETY CLAMP (same as TextSelected) ---
+                                    let mut clamped = false;
                                     if let Ok(Some(mon)) = handle_internal.monitor_from_point(tx as f64, ty as f64) {
                                         let sx = mon.position().x;
                                         let sy = mon.position().y;
                                         let sw = mon.size().width as i32;
                                         let sh = mon.size().height as i32;
-                                        if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                        if tx < sx { tx = sx + 10; }
-                                        if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                        if ty < sy { ty = sy + 20; }
+                                        if sw > 0 && sh > 0 {
+                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
+                                            if tx < sx { tx = sx + 10; }
+                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
+                                            if ty < sy { ty = sy + 20; }
+                                            clamped = true;
+                                        }
                                     }
 
+                                    if !clamped {
+                                        use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
+                                        let pt2 = windows::Win32::Foundation::POINT { x: tx, y: ty };
+                                        let hmon = unsafe { MonitorFromPoint(pt2, MONITOR_DEFAULTTOPRIMARY) };
+                                        let mut mi = MONITORINFO {
+                                            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                            ..Default::default()
+                                        };
+                                        if unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
+                                            let rc = mi.rcWork;
+                                            let sx = rc.left;
+                                            let sy = rc.top;
+                                            let sw = rc.right - rc.left;
+                                            let sh = rc.bottom - rc.top;
+                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
+                                            if tx < sx { tx = sx + 10; }
+                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
+                                            if ty < sy { ty = sy + 20; }
+                                            clamped = true;
+                                        }
+                                    }
+
+                                    if !clamped {
+                                        tx = 100;
+                                        ty = 100;
+                                    }
+
+                                    info!("[Writer] Showing (TextCopied) at ({}, {})", tx, ty);
                                     unsafe {
                                         let _ = SetWindowPos(
                                             writer_hwnd,
                                             Some(HWND_TOPMOST),
                                             tx, ty,
                                             outer_width, outer_height,
-                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                            SWP_SHOWWINDOW,
                                         );
-                                        let _ = ShowWindow(writer_hwnd, SW_SHOWNOACTIVATE);
+                                        let _ = ShowWindow(writer_hwnd, SW_SHOW);
                                     }
                                     yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
@@ -1592,7 +1653,6 @@ pub fn run() {
                             }
                         }
                     });
-
                     info!("Emitting writer-event to frontend: {:?}", event);
                     let _ = app_handle_writer.emit("writer-event", event);
                 }

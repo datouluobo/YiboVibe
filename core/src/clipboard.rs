@@ -9,6 +9,19 @@ use tokio::time::sleep;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use image::DynamicImage;
 
+#[cfg(target_os = "windows")]
+struct Win32State {
+    last_text: Arc<Mutex<String>>,
+    last_image_hash: Arc<Mutex<u64>>,
+    master_key: Arc<MasterKey>,
+    ws_tx: mpsc::Sender<WsMessage>,
+    ui_tx: Option<mpsc::Sender<ClipboardEvent>>,
+    http_client: reqwest::Client,
+    server_url: String,
+    token: String,
+    runtime: tokio::runtime::Handle,
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct ClipboardEvent {
     pub status: String,
@@ -78,8 +91,198 @@ impl ClipboardMonitor {
         format!("[Image {}x{}]", width, height)
     }
 
-    /// Spawns an asynchronous background task that polls the system clipboard
-    /// for text changes and dispatches them via Tokio channel or directly returns logic.
+    /// Spawns an asynchronous background task that monitors the system clipboard.
+    /// On Windows, it uses a message-based listener (WM_CLIPBOARDUPDATE).
+    /// On other platforms, it falls back to polling.
+    pub fn start_monitoring(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            self.start_win32_listener();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.start_polling();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_win32_listener(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
+            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+            WM_CLIPBOARDUPDATE,
+        };
+        use windows::Win32::System::DataExchange::AddClipboardFormatListener;
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use windows::core::PCWSTR;
+
+        let last_text_ref = Arc::clone(&self.last_text);
+        let last_image_hash_ref = Arc::clone(&self.last_image_hash);
+        let mk = Arc::clone(&self.master_key);
+        let tx = self.ws_tx.clone();
+        let ui_tx = self.ui_tx.clone();
+        let client = self.http_client.clone();
+        let srv_url = self.server_url.clone();
+        let tok = self.token.clone();
+
+        std::thread::spawn(move || {
+            unsafe {
+                let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
+                let class_name_str = "YiboFlowClipboardListener\0";
+                let class_name_u16: Vec<u16> = class_name_str.encode_utf16().collect();
+                
+                let wnd_class = WNDCLASSW {
+                    style: CS_HREDRAW | CS_VREDRAW,
+                    lpfnWndProc: Some(Self::clipboard_wnd_proc),
+                    hInstance: instance.into(),
+                    lpszClassName: PCWSTR(class_name_u16.as_ptr()),
+                     ..Default::default()
+                };
+
+                RegisterClassW(&wnd_class);
+
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    PCWSTR(class_name_u16.as_ptr()),
+                    PCWSTR(class_name_u16.as_ptr()),
+                    WINDOW_STYLE(0),
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    None,
+                    None,
+                    instance,
+                    None,
+                );
+
+                if hwnd.0 == 0 {
+                    error!("Failed to create hidden clipboard listener window");
+                    return;
+                }
+
+                // Start listening
+                let _ = AddClipboardFormatListener(hwnd);
+                
+                // Store state in window long ptr for the static wnd_proc to access
+                let state = Box::new(Win32State {
+                    last_text: last_text_ref,
+                    last_image_hash: last_image_hash_ref,
+                    master_key: mk,
+                    ws_tx: tx,
+                    ui_tx,
+                    http_client: client,
+                    server_url: srv_url,
+                    token: tok,
+                    runtime: tokio::runtime::Handle::current(),
+                });
+                
+                #[cfg(target_pointer_width = "64")]
+                unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA, Box::into_raw(state) as isize);
+                }
+                
+                info!("Clipboard monitoring daemon started (Win32 Message Listener mode).");
+
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).into() {
+                    let _ = DispatchMessageW(&msg);
+                }
+            }
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    unsafe extern "system" fn clipboard_wnd_proc(hwnd: windows::Win32::Foundation::HWND, msg: u32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, GWLP_USERDATA, WM_CLIPBOARDUPDATE};
+        use windows::Win32::Foundation::LRESULT;
+        
+        if msg == WM_CLIPBOARDUPDATE {
+            #[cfg(target_pointer_width = "64")]
+            let ptr = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+            if ptr != 0 {
+                let state = unsafe { &*(ptr as *const Win32State) };
+                state.runtime.spawn(Self::on_clipboard_change(
+                    state.last_text.clone(),
+                    state.last_image_hash.clone(),
+                    state.master_key.clone(),
+                    state.ws_tx.clone(),
+                    state.ui_tx.clone(),
+                    state.http_client.clone(),
+                    state.server_url.clone(),
+                    state.token.clone()
+                ));
+            }
+            return LRESULT(0);
+        }
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    async fn on_clipboard_change(
+        last_text_ref: Arc<Mutex<String>>,
+        last_image_hash_ref: Arc<Mutex<u64>>,
+        mk: Arc<MasterKey>,
+        tx: mpsc::Sender<WsMessage>,
+        ui_tx: Option<mpsc::Sender<ClipboardEvent>>,
+        client: reqwest::Client,
+        srv_url: String,
+        tok: String,
+    ) {
+        // Debounce slightly to allow OS to finish I/O
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut clipboard = match Clipboard::new() {
+            Ok(cb) => cb,
+            Err(e) => { error!("Listener: Failed to open clipboard: {}", e); return; }
+        };
+
+        if let Ok(current_text) = clipboard.get_text() {
+            let should_dispatch = {
+                let mut last = last_text_ref.lock().unwrap();
+                if current_text != *last && !current_text.is_empty() {
+                    info!("Clipboard [Text] changed via message.");
+                    *last = current_text.clone();
+                    true
+                } else { false }
+            };
+
+            if should_dispatch {
+                let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
+                if config.flowwriter.trigger_copy {
+                    let was_hotkey = if let Ok(t) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock() {
+                        t.map_or(false, |t| t.elapsed().as_millis() < 800)
+                    } else { false };
+
+                    if !was_hotkey {
+                        crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
+                            text: current_text.clone(),
+                        });
+                    }
+                }
+                if config.is_sync_enabled {
+                    Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
+                }
+            }
+        } else if let Ok(current_image) = clipboard.get_image() {
+            let hash = Self::calculate_image_hash(&current_image);
+            let should_dispatch = {
+                let mut last = last_image_hash_ref.lock().unwrap();
+                if hash != *last {
+                    info!("Clipboard [Image] changed via message.");
+                    *last = hash;
+                    true
+                } else { false }
+            };
+
+            if should_dispatch {
+                let (is_sync_enabled, _, _) = crate::config::get_settings();
+                if is_sync_enabled {
+                    Self::secure_dispatch_image(current_image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
+                }
+            }
+        }
+    }
+
     pub fn start_polling(&self) {
         let last_text_ref = Arc::clone(&self.last_text);
         let last_image_hash_ref = Arc::clone(&self.last_image_hash);
@@ -91,78 +294,19 @@ impl ClipboardMonitor {
         let tok = self.token.clone();
 
         tokio::spawn(async move {
-            info!("Clipboard monitoring daemon started (polling mode).");
-
-            let mut clipboard = match Clipboard::new() {
-                Ok(cb) => cb,
-                Err(e) => {
-                    error!("Failed to initialize clipboard manager: {}", e);
-                    return;
-                }
-            };
-
+            info!("Clipboard monitoring daemon started (polling fallback mode).");
             loop {
-                // Poll every 1 second (adjust based on performance needs, Windows hooks are better
-                // but arboard polling is universally cross-platform rust-native)
                 sleep(Duration::from_secs(1)).await;
-
-                if let Ok(current_text) = clipboard.get_text() {
-                    let should_dispatch = {
-                        let mut last = last_text_ref.lock().unwrap();
-                        if current_text != *last && !current_text.is_empty() {
-                            info!(
-                                "Clipboard text changed. Length: {} chars",
-                                current_text.len()
-                            );
-                            *last = current_text.clone();
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if should_dispatch {
-                        let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
-                        
-                        // FlowWriter clipboard trigger (copy-based)
-                        if config.flowwriter.trigger_copy {
-                            // Check if this was NOT a hotkey-triggered copy (hotkey path handles itself)
-                            let was_hotkey = if let Ok(t) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock() {
-                                t.map_or(false, |t| t.elapsed().as_millis() < 1000)
-                            } else { false };
-
-                            if !was_hotkey {
-                                info!("FlowWriter: clipboard copy trigger, sending TextCopied ({} chars)", current_text.len());
-                                crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
-                                    text: current_text.clone(),
-                                });
-                            }
-                        }
-
-                        if config.is_sync_enabled {
-                            Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
-                        }
-                    }
-                } else if let Ok(current_image) = clipboard.get_image() {
-                    let hash = Self::calculate_image_hash(&current_image);
-                    let should_dispatch = {
-                        let mut last = last_image_hash_ref.lock().unwrap();
-                        if hash != *last {
-                            info!("Clipboard image changed. hash: {}", hash);
-                            *last = hash;
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if should_dispatch {
-                        let (is_sync_enabled, _, _) = crate::config::get_settings();
-                        if is_sync_enabled {
-                            Self::secure_dispatch_image(current_image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
-                        }
-                    }
-                }
+                Self::on_clipboard_change(
+                    last_text_ref.clone(),
+                    last_image_hash_ref.clone(),
+                    mk.clone(),
+                    tx.clone(),
+                    ui_tx.clone(),
+                    client.clone(),
+                    srv_url.clone(),
+                    tok.clone()
+                ).await;
             }
         });
     }

@@ -155,7 +155,7 @@ export default function WriterWindow() {
         fetchCustomPrompts();
 
         const setupMsgListener = async () => {
-            const unlistenMsg = await listen<WriterEvent>("writer-event", (event) => {
+            const unlistenMsg = await listen<WriterEvent>("writer-event", async (event) => {
                 const ev = event.payload;
                 console.log("Writer Event RX:", ev);
                 if (ev.type === "TextSelected" || ev.type === "TextCopied") {
@@ -163,6 +163,15 @@ export default function WriterWindow() {
                     setOutput("");
                     setError("");
                     setIsProcessing(false);
+                    
+                    // Force the window to show from the Webview's UI thread
+                    try {
+                        const win = getCurrentWindow();
+                        await win.show();
+                        await win.setFocus();
+                    } catch (e) {
+                        console.error("Failed to show window from frontend:", e);
+                    }
                 }
             });
             return unlistenMsg;

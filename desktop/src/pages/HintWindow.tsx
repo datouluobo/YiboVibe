@@ -134,6 +134,9 @@ export default function HintWindow() {
     }, [onDragMove, onDragEnd]);
 
     const handleAccept = async (index: number) => {
+        if (!visible) return;
+        // Immediate UI feedback and prevent double-clicks which might cause lock-hang
+        setVisible(false);
         try {
             await invoke("accept_hint_candidate", { index });
         } catch (e) {
@@ -272,12 +275,21 @@ export default function HintWindow() {
                     flexShrink: 0,
                 }}>
                     <span>↑↓ 切换</span>
-                    <span style={{ color: 'var(--color-primary, #5E6AD2)', fontWeight: 600 }}>Tab 确认</span>
-                    <span
-                        onClick={() => invoke("reset_hint_position")}
-                        style={{ color: '#E53E3E', cursor: 'pointer' }}
-                        title="重置窗口位置"
-                    >🔴 重置</span>
+                    <span style={{ color: 'var(--color-primary, #5E6AD2)', fontWeight: 600 }}>Tab / → 确认</span>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <span
+                            onClick={() => invoke("reset_hint_position")}
+                            style={{ color: '#E53E3E', cursor: 'pointer' }}
+                            title="重置窗口位置"
+                        >🔴 重置</span>
+                        <span
+                            onClick={(e) => { e.stopPropagation(); invoke("dismiss_hint_window"); }}
+                            style={{ color: '#666', cursor: 'pointer', transition: 'color 0.1s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.color = '#333'}
+                            onMouseLeave={(e) => e.currentTarget.style.color = '#666'}
+                            title="关闭提示框 (ESC)"
+                        >❌ 关闭</span>
+                    </div>
                 </div>
             </div>
         </div>

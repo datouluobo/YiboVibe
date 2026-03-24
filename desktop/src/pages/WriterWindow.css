@@ -120,9 +120,7 @@ body,
 }
 
 .writer-actions-container {
-    overflow-x: auto;
-    scrollbar-width: none;
-    padding-bottom: 4px;
+    width: 100%;
 }
 
 .writer-actions-container::-webkit-scrollbar {
@@ -131,10 +129,8 @@ body,
 
 .writer-actions {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-    flex-shrink: 0;
-    width: max-content;
+    flex-wrap: wrap;
+    gap: 8px 10px;
     padding: 2px 0;
 }
 

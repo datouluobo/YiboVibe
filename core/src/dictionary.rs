@@ -315,7 +315,7 @@ pub fn search_candidates(dict_ids: &[String], buffer: &str) -> Vec<String> {
 /// 尾部匹配查询：检查 buffer 末尾是否匹配任何 candidate 的开头部分
 /// 只要输入长度 >= min_trigger_chars，就会触发匹配
 /// 例如: buffer="git" 匹配 candidate "git init"（前3字母匹配）
-pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<String> {
+pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<(String, usize)> {
     if buffer.is_empty() {
         return vec![];
     }
@@ -358,42 +358,16 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<String> 
         let freq_b = get_freq(&b.1);
         freq_b.cmp(&freq_a).then_with(|| b.0.cmp(&a.0))
     });
-    let out: Vec<String> = results.into_iter().map(|(_, c)| c).collect();
-    out.into_iter().take(15).collect()
+    
+    let mut out = Vec::new();
+    for r in results.into_iter().take(15) {
+        // Return (candidate_string, match_length)
+        out.push((r.1, r.0));
+    }
+    out
 }
 
-/// 获取尾部匹配的长度（buffer尾部与candidate开头匹配了多少字符）
-/// 用于 Plan B 的 suffix 计算: candidate.skip(prefix_len)
-pub fn get_tail_match_prefix_len(dict_ids: &[String], buffer: &str) -> usize {
-    if buffer.is_empty() {
-        return 0;
-    }
-    let buf_lower = buffer.to_lowercase();
-    let buf_chars: Vec<char> = buf_lower.chars().collect();
-    let cache = DICT_CACHE.read().unwrap();
-    let mut best = 0usize;
 
-    for id in dict_ids {
-        if let Some(dict) = cache.get(id) {
-            let min_chars = crate::config::GLOBAL_CONFIG.read().unwrap().flowhint_min_chars;
-            for entry in &dict.entries {
-                let cand = &entry.content;
-                let cand_lower = cand.to_lowercase();
-                let cand_chars: Vec<char> = cand_lower.chars().collect();
-
-                for tail_len in (min_chars..=buf_chars.len().min(cand_chars.len())).rev() {
-                    let buf_tail: String = buf_chars[buf_chars.len() - tail_len..].iter().collect();
-                    let cand_head: String = cand_chars[..tail_len].iter().collect();
-                    if buf_tail == cand_head && tail_len > best {
-                        best = tail_len;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    best
-}
 
 // ---------------------------------------------------------------------------
 // CRUD APIS (For Tauri)

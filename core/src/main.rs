@@ -123,7 +123,7 @@ async fn run_mock_api_test() {
                         let arc_mk = std::sync::Arc::new(mk);
                         let cb_monitor =
                             clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), None);
-                        cb_monitor.start_polling();
+                        cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
 
                         // Just waiting around so the Write/Read daemons don't die instantly.
