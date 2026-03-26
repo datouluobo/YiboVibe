@@ -86,10 +86,12 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn new(config: AiEngineConfig) -> Self {
+        let timeout = Duration::from_millis(if config.timeout_ms > 0 { config.timeout_ms } else { 30000 });
         let client = Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .danger_accept_invalid_certs(true) // 关键：允许 NAS 的自签名或过期证书
-            .connect_timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(timeout) // Global timeout for non-streaming requests
             .build()
             .unwrap_or_else(|_| Client::new());
         Self { http_client: client, config }
@@ -98,9 +100,9 @@ impl AiClient {
     pub fn get_active_endpoint(&self) -> Option<AiEndpoint> {
         if !self.config.auto_mode {
             // Find highest priority enabled endpoint manually
-            let mut enabled: Vec<_> = self.config.endpoints.iter().filter(|e| e.is_enabled).collect();
+            let mut enabled: Vec<_> = self.config.endpoints.iter().filter(|e| e.is_enabled).map(|e| e.clone()).collect();
             enabled.sort_by_key(|e| e.priority);
-            return enabled.first().map(|e| (*e).clone());
+            return enabled.first().cloned();
         }
 
         let cache = ACTIVE_ENDPOINT.read().unwrap();
@@ -120,19 +122,19 @@ impl AiClient {
         }
 
         // Auto mode probing
-        let mut enabled: Vec<_> = self.config.endpoints.iter().filter(|e| e.is_enabled).clone().collect();
+        let mut enabled: Vec<_> = self.config.endpoints.iter().filter(|e| e.is_enabled).cloned().collect();
         enabled.sort_by_key(|e| e.priority);
         
         for ep in enabled {
-            match self.probe(ep).await {
+            match self.probe(&ep).await {
                 Ok(latency) => {
-                    info!("Probed {} successfully ({}ms)", ep.base_url, latency);
+                    info!("[AI-Probe] {} successful ({}ms)", ep.base_url, latency);
                     let mut lock = ACTIVE_ENDPOINT.write().unwrap();
                     *lock = Some(ep.clone());
                     return Ok(ep.clone());
                 }
                 Err(e) => {
-                    warn!("Probing {} failed: {}", ep.base_url, e);
+                    warn!("[AI-Probe] {} failed: {}", ep.base_url, e);
                 }
             }
         }
@@ -170,7 +172,8 @@ impl AiClient {
                 self.http_client.get(&url).header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key))
             };
 
-            match request.timeout(Duration::from_millis(2500)).send().await {
+            // Use a slightly longer timeout for NAS/Remote endpoints
+            match request.timeout(Duration::from_millis(3500)).send().await {
                 Ok(res) => {
                     let status = res.status();
                     if status.is_success() || status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
@@ -207,7 +210,7 @@ impl AiClient {
 
         for url in try_urls {
             info!("Fetching models from: {}", url);
-            let mut request = self.http_client.get(&url).timeout(Duration::from_secs(6));
+            let mut request = self.http_client.get(&url).timeout(Duration::from_secs(10));
             if !endpoint.api_key.is_empty() {
                 request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
             }
@@ -237,7 +240,7 @@ impl AiClient {
             }
         }
 
-        Err(AiError::Api("未检测到模型。如果刚重装了 Ollama，请先执行 ollama pull 下载模型。".into()))
+        Err(AiError::Api("未检测到模型。请检查接口地址或网络。".into()))
     }
 
     pub async fn invalidate_active_endpoint() {
@@ -246,55 +249,64 @@ impl AiClient {
     }
 
     fn build_request_body(&self, endpoint: &AiEndpoint, messages: Vec<ChatMessage>) -> ChatCompletionRequest {
-        if endpoint.provider == AiProvider::Anthropic {
-            // Map roles for anthropic or custom logic here if needed, for Phase 1 we use basic compat layer.
-        }
         ChatCompletionRequest {
             model: endpoint.model.clone(),
             messages,
             temperature: Some(0.3),
-            max_tokens: Some(2048),
+            max_tokens: Some(4096),
             stream: Some(false),
         }
     }
 
     pub async fn chat(&self, messages: Vec<ChatMessage>) -> Result<String, AiError> {
-        let endpoint = self.ensure_active_endpoint().await?;
-        let mut req_body = self.build_request_body(&endpoint, messages);
-        req_body.stream = Some(false);
+        let mut endpoints = self.config.endpoints.iter().filter(|e| e.is_enabled).cloned().collect::<Vec<_>>();
+        endpoints.sort_by_key(|e| e.priority);
 
-        let mut url = endpoint.base_url.clone();
-        if !url.ends_with("/chat/completions") && !url.contains("generativelanguage") {
-            url = format!("{}/chat/completions", url.trim_end_matches('/'));
+        if endpoints.is_empty() {
+            return Err(AiError::NoEndpoint);
         }
 
-        let mut request = self.http_client.post(&url).json(&req_body);
+        let mut last_err = AiError::NoEndpoint;
 
-        if !endpoint.api_key.is_empty() {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
-        }
+        for endpoint in endpoints {
+            let mut req_body = self.build_request_body(&endpoint, messages.clone());
+            req_body.stream = Some(false);
 
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                Self::invalidate_active_endpoint().await;
-                return Err(AiError::Network(e));
+            let mut url = endpoint.base_url.clone();
+            if !url.ends_with("/chat/completions") && !url.contains("generativelanguage") {
+                url = format!("{}/chat/completions", url.trim_end_matches('/'));
+            } else if url.contains("generativelanguage") && !url.ends_with(":generateContent") && !url.contains("openai") {
+                // Handle raw Gemini API if not using OpenAI compatibility layer
+                url = format!("{}:generateContent", url.trim_end_matches('/'));
             }
-        };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            Self::invalidate_active_endpoint().await;
-            return Err(AiError::Api(format!("{} - {}", status, text)));
-        }
+            let mut request = self.http_client.post(&url).json(&req_body);
+            if !endpoint.api_key.is_empty() {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
+            }
 
-        let json_resp: ChatCompletionResponse = response.json().await?;
-        if let Some(choice) = json_resp.choices.first() {
-            Ok(choice.message.content.clone().unwrap_or_default())
-        } else {
-            Err(AiError::Api("Empty choices array from API".to_string()))
+            match request.send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        let json_resp: ChatCompletionResponse = response.json().await?;
+                        if let Some(choice) = json_resp.choices.first() {
+                            return Ok(choice.message.content.clone().unwrap_or_default());
+                        }
+                    } else {
+                        let status = response.status();
+                        let text = response.text().await.unwrap_or_default();
+                        warn!("[AI-Chat] {} failed: {} - {}", endpoint.base_url, status, text);
+                        last_err = AiError::Api(format!("{} - {}", status, text));
+                    }
+                }
+                Err(e) => {
+                    warn!("[AI-Chat] {} network error: {}", endpoint.base_url, e);
+                    last_err = AiError::Network(e);
+                }
+            }
         }
+        
+        Err(last_err)
     }
 
     pub async fn chat_stream(
@@ -302,72 +314,164 @@ impl AiClient {
         messages: Vec<ChatMessage>,
         tx: mpsc::Sender<Result<String, AiError>>,
     ) {
-        let endpoint = match self.ensure_active_endpoint().await {
-            Ok(ep) => ep,
-            Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        };
+        let mut endpoints = self.config.endpoints.iter().filter(|e| e.is_enabled).cloned().collect::<Vec<_>>();
+        endpoints.sort_by_key(|e| e.priority);
 
-        let mut req_body = self.build_request_body(&endpoint, messages);
-        req_body.stream = Some(true);
-
-        let mut url = endpoint.base_url.clone();
-        if !url.ends_with("/chat/completions") && !url.contains("generativelanguage") {
-            url = format!("{}/chat/completions", url.trim_end_matches('/'));
-        }
-
-        info!("AI Stream Request -> URL: {}, Model: {}, Messages: {}", url, req_body.model, req_body.messages.len());
-
-        let mut request = self.http_client.post(&url).json(&req_body);
-        if !endpoint.api_key.is_empty() {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
-        }
-
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                Self::invalidate_active_endpoint().await;
-                let _ = tx.send(Err(AiError::Network(e))).await;
-                return;
-            }
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            Self::invalidate_active_endpoint().await;
-            let _ = tx.send(Err(AiError::Api(format!("{} - {}", status, text)))).await;
+        if endpoints.is_empty() {
+            let _ = tx.send(Err(AiError::NoEndpoint)).await;
             return;
         }
 
-        let mut stream = response.bytes_stream().eventsource();
+        let mut last_err_msg = String::from("所有节点均不可用");
 
-        while let Some(event) = stream.next().await {
-            match event {
-                Ok(ev) => {
-                    let data = ev.data;
-                    if data == "[DONE]" {
-                        break;
-                    }
-                    if data.trim().is_empty() {
-                        continue;
-                    }
-                    
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
-                        && let Some(choices) = json.get("choices").and_then(|c| c.as_array())
-                            && let Some(choice) = choices.first()
-                                && let Some(delta) = choice.get("delta")
-                                    && let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                                        let _ = tx.send(Ok(content.to_string())).await;
-                                    }
+        for (ep_idx, endpoint) in endpoints.iter().enumerate() {
+            let mut req_body = self.build_request_body(endpoint, messages.clone());
+            req_body.stream = Some(true);
+
+            let mut url = endpoint.base_url.clone();
+            if !url.ends_with("/chat/completions") && !url.contains("generativelanguage") {
+                url = format!("{}/chat/completions", url.trim_end_matches('/'));
+            }
+
+            info!("[AI-Stream] Attempting node {}/{}: {} ({})", ep_idx + 1, endpoints.len(), url, endpoint.model);
+
+            let mut request = self.http_client.post(&url).json(&req_body);
+            if !endpoint.api_key.is_empty() {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
+            }
+
+            // Connection timeout (Initial headers)
+            let response = match tokio::time::timeout(Duration::from_secs(12), request.send()).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!("[AI-Stream] Node {} network error: {}", ep_idx + 1, e);
+                    last_err_msg = format!("网络错误: {}", e);
+                    continue; // Try next endpoint
                 }
-                Err(e) => {
-                    let _ = tx.send(Err(AiError::Api(format!("Stream parse err: {:?}", e)))).await;
-                    break;
+                Err(_) => {
+                    warn!("[AI-Stream] Node {} connection timeout (12s)", ep_idx + 1);
+                    last_err_msg = "连接服务器超时 (12s)".into();
+                    continue; // Try next endpoint
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                warn!("[AI-Stream] Node {} API error: {} - {}", ep_idx + 1, status, text);
+                last_err_msg = format!("API 错误 ({}): {}", status, text);
+                continue; // Try next endpoint
+            }
+
+            // If we're here, we successfully started a stream!
+            let mut stream = response.bytes_stream().eventsource();
+            let mut first_token = true;
+            let mut chunk_received = false;
+            let mut in_thinking_block = false;
+
+            loop {
+                // Watchdog for next chunk: 
+                // 90s for the very first token (Reasoning models can take long)
+                // 30s for subsequent tokens
+                let chunk_timeout = if first_token { Duration::from_secs(90) } else { Duration::from_secs(30) };
+                
+                match tokio::time::timeout(chunk_timeout, stream.next()).await {
+                    Ok(Some(Ok(event))) => {
+                        chunk_received = true;
+                        let data = event.data;
+                        if data == "[DONE]" {
+                            info!("[AI-Stream] Node {} completed.", ep_idx + 1);
+                            return; // Success!
+                        }
+                        if data.trim().is_empty() {
+                            continue;
+                        }
+                        
+                        // Parse OpenAI compatible format
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                            let mut found_content = false;
+                            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                if let Some(choice) = choices.first() {
+                                    if let Some(delta) = choice.get("delta") {
+                                        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                            found_content = true;
+                                            
+                                            // Handle <think> blocks for clean output
+                                            let mut output = content.to_string();
+                                            if output.contains("<think>") {
+                                                in_thinking_block = true;
+                                                output = output.split("<think>").next().unwrap_or("").to_string();
+                                            }
+                                            
+                                            if in_thinking_block {
+                                                if output.contains("</think>") {
+                                                    in_thinking_block = false;
+                                                    output = output.split("</think>").nth(1).unwrap_or("").to_string();
+                                                } else {
+                                                    output = String::new(); // Skip everything inside <think>
+                                                }
+                                            }
+
+                                            if !output.is_empty() {
+                                                let _ = tx.send(Ok(output)).await;
+                                                first_token = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if !found_content {
+                                if let Some(error) = json.get("error") {
+                                    let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown AI error");
+                                    let _ = tx.send(Err(AiError::Api(msg.to_string()))).await;
+                                    return; // Critical API error, don't retry if it already started sending?
+                                    // Actually, if we haven't sent any tokens to UI yet, we COULD retry.
+                                    // But if we've sent some, we shouldn't mix results from different models.
+                                }
+                            }
+                        } else {
+                            // Non-standard chunk parsing fallback
+                            // Some providers send raw text if it's not strictly SSE formatted
+                            if first_token {
+                                warn!("[AI-Stream] Unexpected non-JSON chunk received: {}", data);
+                            }
+                            let _ = tx.send(Ok(data)).await;
+                            first_token = false;
+                        }
+                    }
+                    Ok(Some(Err(e))) => {
+                        warn!("[AI-Stream] Node {} stream event error: {:?}", ep_idx + 1, e);
+                        if !chunk_received {
+                            last_err_msg = format!("数据流异常: {:?}", e);
+                            break; // Inner loop break -> try next endpoint
+                        } else {
+                            let _ = tx.send(Err(AiError::Api(format!("数据流中断: {:?}", e)))).await;
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        info!("[AI-Stream] Node {} stream closed.", ep_idx + 1);
+                        return;
+                    }
+                    Err(_) => {
+                        warn!("[AI-Stream] Node {} chunk timeout ({}s)", ep_idx + 1, chunk_timeout.as_secs());
+                        if !chunk_received {
+                            last_err_msg = "模型响应超时，正在尝试备用节点...".into();
+                            break; // Inner loop break -> try next endpoint
+                        } else {
+                            let _ = tx.send(Err(AiError::Api("读取超时，后续内容生成中断".into()))).await;
+                            return;
+                        }
+                    }
                 }
             }
+            
+            // If we reached here, the inner loop broke before success.
+            // Continue to next endpoint in the outer loop.
         }
+
+        // If we exhausted all endpoints
+        let _ = tx.send(Err(AiError::Api(last_err_msg))).await;
     }
 }

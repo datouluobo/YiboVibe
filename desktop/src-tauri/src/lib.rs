@@ -314,6 +314,7 @@ pub struct TestResult {
     pub success: bool,
     pub message: String,
     pub error_type: Option<String>,
+    pub latency_ms: Option<u64>,
 }
 
 #[tauri::command]
@@ -327,10 +328,11 @@ async fn test_ai_endpoint(endpoint: yiboflow_core::config::AiEndpoint) -> Result
     
     // Light probe with strict status check
     match client.probe(&endpoint).await {
-        Ok(_) => Ok(TestResult {
+        Ok(latency) => Ok(TestResult {
             success: true,
-            message: "连接成功：服务已就绪".into(),
+            message: "服务已就绪".into(),
             error_type: None,
+            latency_ms: Some(latency),
         }),
         Err(e) => {
             let err_str = e.to_string();
@@ -352,6 +354,7 @@ async fn test_ai_endpoint(endpoint: yiboflow_core::config::AiEndpoint) -> Result
                 success: false,
                 message: msg,
                 error_type,
+                latency_ms: None,
             })
         }
     }
@@ -435,6 +438,16 @@ fn add_custom_prompt(prompt: yiboflow_core::ai::prompt::CustomPromptTemplate) ->
 #[tauri::command]
 fn remove_custom_prompt(id: String) -> Result<(), String> {
     yiboflow_core::ai::prompt::remove_custom_prompt(&id)
+}
+
+#[tauri::command]
+fn update_standard_prompts(prompts: yiboflow_core::ai::prompt::StandardPrompts) -> Result<(), String> {
+    yiboflow_core::ai::prompt::update_standard_prompts(prompts)
+}
+
+#[tauri::command]
+fn reset_standard_prompts() -> Result<(), String> {
+    yiboflow_core::ai::prompt::reset_standard_prompts()
 }
 
 #[tauri::command]
@@ -553,10 +566,13 @@ fn update_writer_position(app: tauri::AppHandle, x: i32, y: i32) {
 
 #[tauri::command]
 fn paste_writer_text(text: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    yiboflow_core::hook_manager::paste_text_only(&text);
-    
+    // 1. Send signal to hide the writer UI window immediately 
     yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
+    
+    // 2. Perform the actual paste in the background after focus restoration
+    #[cfg(target_os = "windows")]
+    yiboflow_core::hook_manager::paste_to_last_focused_window(text);
+    
     Ok(())
 }
 
@@ -1671,6 +1687,8 @@ pub fn run() {
             update_ai_endpoints,
             add_custom_prompt,
             remove_custom_prompt,
+            update_standard_prompts,
+            reset_standard_prompts,
             stream_ai_writer,
             dismiss_writer_window,
             paste_writer_text,

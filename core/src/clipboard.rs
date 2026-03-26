@@ -8,6 +8,13 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use image::DynamicImage;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    /// Shared clipboard caches used by both the monitor and the hook manager to prevent sync loops.
+    pub static ref LAST_TEXT: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    pub static ref LAST_IMAGE_HASH: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+}
 
 #[cfg(target_os = "windows")]
 struct Win32State {
@@ -49,8 +56,8 @@ impl ClipboardMonitor {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
-            last_text: Arc::new(Mutex::new(String::new())),
-            last_image_hash: Arc::new(Mutex::new(0)),
+            last_text: Arc::clone(&LAST_TEXT),
+            last_image_hash: Arc::clone(&LAST_IMAGE_HASH),
             master_key,
             ws_tx,
             ui_tx,
@@ -228,20 +235,41 @@ impl ClipboardMonitor {
         srv_url: String,
         tok: String,
     ) {
-        // Debounce slightly to allow OS to finish I/O
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Debounce slightly to allow OS or source app to finish I/O
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
-        let mut clipboard = match Clipboard::new() {
-            Ok(cb) => cb,
-            Err(e) => { error!("Listener: Failed to open clipboard: {}", e); return; }
+        let mut clipboard_res = None;
+        for i in 0..5 {
+            match Clipboard::new() {
+                Ok(cb) => { clipboard_res = Some(cb); break; }
+                Err(e) => {
+                    log::warn!("Clipboard busy (attempt {}), retrying... ERR: {}", i+1, e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+
+        let mut clipboard = match clipboard_res {
+            Some(cb) => cb,
+            None => { error!("Listener: Failed to open clipboard after retries."); return; }
         };
 
-        if let Ok(current_text) = clipboard.get_text() {
+        // Try getting text with retry
+        let mut current_text = None;
+        for _ in 0..3 {
+            if let Ok(t) = clipboard.get_text() {
+                current_text = Some(t);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        if let Some(text) = current_text {
             let should_dispatch = {
                 let mut last = last_text_ref.lock().unwrap();
-                if current_text != *last && !current_text.is_empty() {
-                    info!("Clipboard [Text] changed via message.");
-                    *last = current_text.clone();
+                if text != *last && !text.is_empty() {
+                    info!("Clipboard [Text] changed via message listener.");
+                    *last = text.clone();
                     true
                 } else { false }
             };
@@ -255,29 +283,41 @@ impl ClipboardMonitor {
 
                     if !was_hotkey {
                         crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
-                            text: current_text.clone(),
+                            text: text.clone(),
                         });
                     }
                 }
                 if config.is_sync_enabled {
-                    Self::secure_dispatch(&current_text, &mk, &tx, &ui_tx).await;
+                    Self::secure_dispatch(&text, &mk, &tx, &ui_tx).await;
                 }
             }
-        } else if let Ok(current_image) = clipboard.get_image() {
-            let hash = Self::calculate_image_hash(&current_image);
-            let should_dispatch = {
-                let mut last = last_image_hash_ref.lock().unwrap();
-                if hash != *last {
-                    info!("Clipboard [Image] changed via message.");
-                    *last = hash;
-                    true
-                } else { false }
-            };
+        } else {
+            // Try getting image with retry
+            let mut current_image = None;
+            for _ in 0..3 {
+                if let Ok(img) = clipboard.get_image() {
+                    current_image = Some(img);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
 
-            if should_dispatch {
-                let (is_sync_enabled, _, _) = crate::config::get_settings();
-                if is_sync_enabled {
-                    Self::secure_dispatch_image(current_image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
+            if let Some(image) = current_image {
+                let hash = Self::calculate_image_hash(&image);
+                let should_dispatch = {
+                    let mut last = last_image_hash_ref.lock().unwrap();
+                    if hash != *last {
+                        info!("Clipboard [Image] changed via message listener.");
+                        *last = hash;
+                        true
+                    } else { false }
+                };
+
+                if should_dispatch {
+                    let (is_sync_enabled, _, _) = crate::config::get_settings();
+                    if is_sync_enabled {
+                        Self::secure_dispatch_image(image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
+                    }
                 }
             }
         }

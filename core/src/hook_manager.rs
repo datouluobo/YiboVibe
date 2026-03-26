@@ -268,8 +268,25 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.0 != 0 {
-            if let Ok(mut lock) = LAST_HWND.try_lock() {
-                *lock = hwnd.0 as isize;
+            let mut pid = 0;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            let my_pid = unsafe { windows::Win32::System::Threading::GetCurrentProcessId() };
+
+            if pid != my_pid {
+                if let Ok(mut lock) = LAST_HWND.try_lock() {
+                    if *lock != hwnd.0 as isize {
+                        // Window focus changed -> Reset key buffer to prevent cross-app triggers
+                        if let Ok(mut buf) = KEY_BUFFER.try_lock() {
+                            if !buf.is_empty() {
+                                log::info!("[FocusChange] Resetting key buffer. New HWND: 0x{:X}", hwnd.0);
+                                buf.clear();
+                            }
+                        }
+                        *lock = hwnd.0 as isize;
+                    }
+                }
+            } else {
+                // Ignore our own windows for LAST_HWND tracking to ensure focus-restore works correctly
             }
         }
         
@@ -643,6 +660,33 @@ pub fn paste_text_only(text: &str) {
     }
 }
 
+/// Helper to restore focus to original window and paste text.
+/// Designed for FlowWriter insert/replace actions.
+pub fn paste_to_last_focused_window(text: String) {
+    let hwnd_val = {
+        if let Ok(lock) = LAST_HWND.lock() {
+            *lock
+        } else {
+            0
+        }
+    };
+
+    std::thread::spawn(move || {
+        if hwnd_val != 0 {
+            log::info!("[FocusRestore] Attempting to restore focus to HWND: 0x{:X}", hwnd_val);
+            let hwnd = windows::Win32::Foundation::HWND(hwnd_val as _);
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+            }
+            // Increase wait time for the OS to complete window switching
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        } else {
+            log::warn!("[FocusRestore] No LAST_HWND recorded, pasting blindly.");
+        }
+        paste_text_only(&text);
+    });
+}
+
 #[cfg(target_os = "windows")]
 fn replace_text_with_snippet(target: &str, backspace_count: usize) {
     use std::time::Duration;
@@ -679,6 +723,11 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
         // 方案 B：长文本回退到剪切板模式（带影子检查与保护）
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let old_text_opt = clipboard.get_text().ok();
+            
+            // 关键：在设置剪切板前，先更新全局缓存，防止监听器误触发同步
+            if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
+                *last = target.to_string();
+            }
             let _ = clipboard.set_text(target);
             
             // 执行粘贴
@@ -709,13 +758,17 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
             if let Some(old_text) = old_text_opt {
                 let target_owned = target.to_string();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(400));
+                    std::thread::sleep(Duration::from_millis(500));
                     if let Ok(mut cb) = arboard::Clipboard::new() {
                         if let Ok(current) = cb.get_text() {
                             // 关键判断：如果当前内容还是我们要注入的那个片段，说明用户没在期间复制
                             if current == target_owned {
+                                // 还原前也需更新缓存，避免还原本身触发同步回读
+                                if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
+                                    *last = old_text.clone();
+                                }
                                 let _ = cb.set_text(old_text);
-                                log::info!("[ShadowClipboard] Context restored successfully.");
+                                log::info!("[ShadowClipboard] Context restored successfully (no sync loop).");
                             } else {
                                 log::warn!("[ShadowClipboard] User copied new content, skipping restoration.");
                             }
