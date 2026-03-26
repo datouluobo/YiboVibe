@@ -315,7 +315,7 @@ export default function Login() {
                     </div>
 
                     {!isRegistering && (
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "12px", marginBottom: "4px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "12px", marginBottom: "4px", gap: "10px", whiteSpace: "nowrap" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                 <input
                                     type="checkbox"

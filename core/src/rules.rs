@@ -61,24 +61,25 @@ impl DefaultRules {
 pub struct AppRule {
     pub process: String,
     pub display_name: String,
-    pub flowsnap: bool,
-    pub flowhint: bool,
+    pub flowsnap: Option<bool>,
+    pub flowhint: Option<bool>,
     #[serde(default)]
     pub flowhint_dicts: Vec<String>,
-    pub flowwriter: bool,
-    pub flowpredict: bool,
-    pub flowsync: bool,
+    pub flowwriter: Option<bool>,
+    pub flowpredict: Option<bool>,
+    pub flowsync: Option<bool>,
 }
 
 impl AppRule {
-    pub fn is_enabled(&self, feature: Feature) -> bool {
-        match feature {
+    pub fn resolve_enabled(&self, feature: Feature, default: bool) -> bool {
+        let val = match feature {
             Feature::FlowSnap => self.flowsnap,
             Feature::FlowHint => self.flowhint,
             Feature::FlowWriter => self.flowwriter,
             Feature::FlowPredict => self.flowpredict,
             Feature::FlowSync => self.flowsync,
-        }
+        };
+        val.unwrap_or(default)
     }
 }
 
@@ -198,20 +199,22 @@ fn persist_and_rebuild() {
 pub fn is_feature_enabled(process_name: &str, feature: Feature) -> bool {
     let cache = RULES_CACHE.read().unwrap();
     if let Some(rule) = cache.app_map.get(process_name) {
-        rule.is_enabled(feature)
+        rule.resolve_enabled(feature, cache.default.is_enabled(feature))
     } else {
         cache.default.is_enabled(feature)
     }
 }
 
-/// 查询某个进程是否对 **任何** 功能都被禁用（全行关），等效于旧版 blocked_apps
 pub fn is_all_disabled(process_name: &str) -> bool {
     let cache = RULES_CACHE.read().unwrap();
+    let d = &cache.default;
     if let Some(rule) = cache.app_map.get(process_name) {
-        !rule.flowsnap && !rule.flowhint && !rule.flowwriter && !rule.flowpredict && !rule.flowsync
+        !rule.resolve_enabled(Feature::FlowSnap, d.flowsnap) 
+        && !rule.resolve_enabled(Feature::FlowHint, d.flowhint) 
+        && !rule.resolve_enabled(Feature::FlowWriter, d.flowwriter) 
+        && !rule.resolve_enabled(Feature::FlowPredict, d.flowpredict) 
+        && !rule.resolve_enabled(Feature::FlowSync, d.flowsync)
     } else {
-        // 默认行不太可能全关，但仍做判断
-        let d = &cache.default;
         !d.flowsnap && !d.flowhint && !d.flowwriter && !d.flowpredict && !d.flowsync
     }
 }
@@ -220,10 +223,11 @@ pub fn is_all_disabled(process_name: &str) -> bool {
 pub fn get_app_flowhint_dicts(process_name: &str) -> Vec<String> {
     let cache = RULES_CACHE.read().unwrap();
     let is_enabled = if let Some(rule) = cache.app_map.get(process_name) {
-        if !rule.flowhint_dicts.is_empty() && rule.flowhint {
+        let actual = rule.resolve_enabled(Feature::FlowHint, cache.default.flowhint);
+        if !rule.flowhint_dicts.is_empty() && actual {
             return rule.flowhint_dicts.clone();
         }
-        rule.flowhint
+        actual
     } else {
         cache.default.flowhint
     };
@@ -286,13 +290,19 @@ pub fn toggle_app_feature(process: String, feature: Feature) -> Result<(), Strin
     let mut cfg = RULES_CONFIG.write().map_err(|e| e.to_string())?;
     let key = process.trim().to_lowercase();
     if let Some(rule) = cfg.app_overrides.iter_mut().find(|r| r.process.trim().to_lowercase() == key) {
-        match feature {
-            Feature::FlowSnap => rule.flowsnap = !rule.flowsnap,
-            Feature::FlowHint => rule.flowhint = !rule.flowhint,
-            Feature::FlowWriter => rule.flowwriter = !rule.flowwriter,
-            Feature::FlowPredict => rule.flowpredict = !rule.flowpredict,
-            Feature::FlowSync => rule.flowsync = !rule.flowsync,
-        }
+        // 状态循环：Inherit(None) -> Allow(Some(true)) -> Deny(Some(false)) -> Inherit(None)
+        let (current, next) = match feature {
+            Feature::FlowSnap => (rule.flowsnap, &mut rule.flowsnap),
+            Feature::FlowHint => (rule.flowhint, &mut rule.flowhint),
+            Feature::FlowWriter => (rule.flowwriter, &mut rule.flowwriter),
+            Feature::FlowPredict => (rule.flowpredict, &mut rule.flowpredict),
+            Feature::FlowSync => (rule.flowsync, &mut rule.flowsync),
+        };
+        *next = match current {
+            None => Some(true),
+            Some(true) => Some(false),
+            Some(false) => None,
+        };
     } else {
         return Err(format!("No override rule found for process: {}", process));
     }

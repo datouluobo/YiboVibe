@@ -86,12 +86,14 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn new(config: AiEngineConfig) -> Self {
-        let timeout = Duration::from_millis(if config.timeout_ms > 0 { config.timeout_ms } else { 30000 });
+        let timeout = Duration::from_millis(if config.timeout_ms > 0 { config.timeout_ms } else { 120000 }); // 增加默认宽容度至 120s
         let client = Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .danger_accept_invalid_certs(true) // 关键：允许 NAS 的自签名或过期证书
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(timeout) // Global timeout for non-streaming requests
+            .danger_accept_invalid_certs(true) 
+            .connect_timeout(Duration::from_secs(12)) // 稍微延长连接超时
+            .timeout(timeout) // 全局请求/读取超时
+            .tcp_keepalive(Some(Duration::from_secs(60))) // 增加 TCP 保活
+            .pool_idle_timeout(Duration::from_secs(90))   // 增加连接池保活
             .build()
             .unwrap_or_else(|_| Client::new());
         Self { http_client: client, config }
@@ -335,7 +337,7 @@ impl AiClient {
 
             info!("[AI-Stream] Attempting node {}/{}: {} ({})", ep_idx + 1, endpoints.len(), url, endpoint.model);
 
-            let mut request = self.http_client.post(&url).json(&req_body);
+            let mut request = self.http_client.post(&url).json(&req_body).timeout(Duration::from_secs(600));
             if !endpoint.api_key.is_empty() {
                 request = request.header(header::AUTHORIZATION, format!("Bearer {}", endpoint.api_key));
             }

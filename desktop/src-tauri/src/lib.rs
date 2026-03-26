@@ -101,8 +101,8 @@ async fn connect_engine(
     let login_result = client.login(login_payload).await;
 
     let _is_mock_target = server_url.contains("127.0.0.1") || server_url.contains("localhost");
-    let mut needs_mock = false;
-    let mut api_err = String::new();
+    let mut needs_mock;
+    let mut api_err;
 
     match login_result {
         Ok(res) => {
@@ -982,12 +982,12 @@ fn set_default_rules(
 fn upsert_app_rule(
     process: String,
     display_name: String,
-    flowsnap: bool,
-    flowhint: bool,
+    flowsnap: Option<bool>,
+    flowhint: Option<bool>,
     flowhint_dicts: Vec<String>,
-    flowwriter: bool,
-    flowpredict: bool,
-    flowsync: bool,
+    flowwriter: Option<bool>,
+    flowpredict: Option<bool>,
+    flowsync: Option<bool>,
 ) -> Result<(), String> {
     yiboflow_core::rules::upsert_app_rule(yiboflow_core::rules::AppRule {
         process,
@@ -1166,6 +1166,7 @@ pub fn run() {
                 .with_denylist(&["hint", "writer"])
                 .build()
         )
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(AppState {
             is_connected: Mutex::new(false),
             ws_tx: Mutex::new(None),

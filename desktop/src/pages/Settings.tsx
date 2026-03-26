@@ -204,6 +204,8 @@ export default function Settings() {
     const [endpointModels, setEndpointModels] = useState<{ [key: number]: { loading: boolean, list: string[] } }>({});
     const [openModelMenus, setOpenModelMenus] = useState<{ [key: number]: boolean }>({});
     const [endpointProviderQuick, setEndpointProviderQuick] = useState<{ [key: number]: string }>({});
+    const [isAutostartEnabled, setIsAutostartEnabled] = useState(false);
+    const [appVersion, setAppVersion] = useState("");
 
 
     const fetchConfig = () => {
@@ -223,6 +225,15 @@ export default function Settings() {
             }
         }).catch(console.error);
 
+        // Check autostart status
+        invoke("plugin:autostart|is_enabled").then((enabled: any) => {
+            setIsAutostartEnabled(!!enabled);
+        }).catch(e => console.error("Autostart check failed:", e));
+
+        // Get app version
+        import("@tauri-apps/api/app").then(({ getVersion }) => {
+            getVersion().then(setAppVersion);
+        });
     };
 
     useEffect(() => {
@@ -478,11 +489,44 @@ export default function Settings() {
         { id: "en", name: t('settings.language_english') }
     ];
 
+    const toggleAutostart = async () => {
+        try {
+            if (isAutostartEnabled) {
+                await invoke("plugin:autostart|disable");
+            } else {
+                await invoke("plugin:autostart|enable");
+            }
+            setIsAutostartEnabled(!isAutostartEnabled);
+        } catch (e) {
+            setAlertDialog({ isOpen: true, message: "设置自启失败: " + String(e), type: 'error' });
+        }
+    };
+
 
     return (
         <div style={{ animation: 'fadeIn 0.4s ease-out', width: '100%', maxWidth: '1600px', margin: '0 auto', paddingBottom: '40px', paddingLeft: '20px', paddingRight: '20px' }}>
-            <h1 style={{ fontSize: '28px', fontWeight: 600, marginBottom: '8px', color: 'var(--color-text-main)' }}>{t('settings.title')}</h1>
-            <p style={{ color: 'var(--color-text-muted)', marginBottom: '32px' }}>{t('settings.subtitle')}</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div>
+                    <h1 style={{ fontSize: '28px', fontWeight: 600, marginBottom: '8px', color: 'var(--color-text-main)' }}>{t('settings.title')}</h1>
+                    <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>{t('settings.subtitle')}</p>
+                </div>
+                {appVersion && (
+                    <div style={{ 
+                        marginTop: '10px',
+                        padding: '4px 12px', 
+                        borderRadius: '100px', 
+                        background: 'var(--color-surface-elevated)', 
+                        border: '1px solid var(--color-glass-border)',
+                        color: 'var(--color-text-dim)', 
+                        fontSize: '12px', 
+                        fontWeight: 600,
+                        letterSpacing: '0.5px',
+                        boxShadow: 'var(--shadow-glass)'
+                    }}>
+                        RELEASE v{appVersion}
+                    </div>
+                )}
+            </div>
 
             {/* Language Selector */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginBottom: '32px' }}>
@@ -576,6 +620,42 @@ export default function Settings() {
                             </div>
                         );
                     })}
+                </div>
+            </div>
+
+
+            {/* General System Settings */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ padding: '10px', background: 'rgba(94, 106, 210, 0.1)', borderRadius: '12px', color: 'var(--color-primary)' }}>
+                            <Activity size={22} />
+                        </div>
+                        <div>
+                            <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>系统常规设置</h3>
+                            <p style={{ color: 'var(--color-text-muted)', margin: '4px 0 0 0', fontSize: '14px' }}>配置系统级的运行状态与启动偏好。</p>
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={toggleAutostart}
+                        style={{
+                            background: isAutostartEnabled ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${isAutostartEnabled ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                            color: isAutostartEnabled ? '#22c55e' : 'var(--color-text-muted)',
+                            padding: '10px 20px',
+                            borderRadius: '100px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            transition: 'all 0.2s'
+                        }}
+                    >
+                        {isAutostartEnabled ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                        {isAutostartEnabled ? '开机自启: 已开启' : '开机自启: 已关闭'}
+                    </button>
                 </div>
             </div>
 

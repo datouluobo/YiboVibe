@@ -18,12 +18,12 @@ interface DefaultRules {
 interface AppRule {
     process: string;
     display_name: string;
-    flowsnap: boolean;
-    flowhint: boolean;
+    flowsnap: boolean | null;
+    flowhint: boolean | null;
     flowhint_dicts: string[];
-    flowwriter: boolean;
-    flowpredict: boolean;
-    flowsync: boolean;
+    flowwriter: boolean | null;
+    flowpredict: boolean | null;
+    flowsync: boolean | null;
 }
 
 interface FlowRulesPayload {
@@ -39,17 +39,41 @@ type FeatureKey = typeof FEATURE_COLS[number];
 // ---------------------------------------------------------------------------
 
 function StatusCell({ value, isHint, onToggle, onConfig }: {
-    value: boolean; isHint?: boolean;
+    value: boolean | null; isHint?: boolean;
     onToggle: () => void; onConfig?: () => void;
 }) {
-    if (isHint && value) {
-        return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <button onClick={onToggle} style={{
-                    width: '28px', height: '28px', borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: 'rgba(34,139,230,0.15)', color: '#228be6',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px'
-                }}>✓</button>
+    // 状态渲染逻辑
+    const isAllow = value === true;
+    const isDeny = value === false;
+    const isInherit = value === null;
+
+    let bg = 'rgba(150,150,150,0.1)';
+    let color = 'var(--color-text-dim)';
+    let label = '○';
+
+    if (isAllow) {
+        bg = 'rgba(34,197,94,0.15)';
+        color = '#22c55e';
+        label = '✓';
+    } else if (isDeny) {
+        bg = 'rgba(239,68,68,0.15)';
+        color = '#ef4444';
+        label = '✕';
+    } else if (isInherit) {
+        // Already default values, but explicitly acknowledging the logic
+    }
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button onClick={onToggle} style={{
+                width: '28px', height: '28px', borderRadius: '50%', border: 'none', cursor: 'pointer',
+                background: bg, color: color,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '14px', transition: 'all 0.15s'
+            }}>
+                {label}
+            </button>
+            {isHint && isAllow && onConfig && (
                 <button onClick={onConfig} style={{
                     width: '24px', height: '24px', borderRadius: '4px', border: 'none', cursor: 'pointer',
                     background: 'transparent', color: 'var(--color-text-dim)',
@@ -57,19 +81,8 @@ function StatusCell({ value, isHint, onToggle, onConfig }: {
                 }} title="配置词库">
                     <Settings2 size={13} />
                 </button>
-            </div>
-        );
-    }
-    return (
-        <button onClick={onToggle} style={{
-            width: '28px', height: '28px', borderRadius: '50%', border: 'none', cursor: 'pointer',
-            background: value ? 'rgba(34,197,94,0.15)' : 'rgba(150,150,150,0.1)',
-            color: value ? '#22c55e' : 'var(--color-text-dim)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '14px', transition: 'all 0.15s'
-        }}>
-            {value ? '✓' : '○'}
-        </button>
+            )}
+        </div>
     );
 }
 
@@ -268,10 +281,14 @@ export default function FlowRules() {
     // ------- App Rule Toggle -------
     const toggleRule = async (idx: number, key: FeatureKey) => {
         const rule = rules[idx];
-        // Optimistic UI update
         setRules(prev => prev.map((r, i) => {
             if (i !== idx) return r;
-            return { ...r, [key]: !(r as any)[key] };
+            const cur = (r as any)[key];
+            let next = null;
+            if (cur === null) next = true;
+            else if (cur === true) next = false;
+            else next = null;
+            return { ...r, [key]: next };
         }));
         try {
             await invoke("toggle_app_feature", { process: rule.process, feature: key });
@@ -299,12 +316,12 @@ export default function FlowRules() {
         const newRule: AppRule = {
             process,
             display_name: displayName,
-            flowsnap: defaults.flowsnap,
-            flowhint: defaults.flowhint,
+            flowsnap: null,
+            flowhint: null,
             flowhint_dicts: [],
-            flowwriter: defaults.flowwriter,
-            flowpredict: defaults.flowpredict,
-            flowsync: defaults.flowsync,
+            flowwriter: null,
+            flowpredict: null,
+            flowsync: null,
         };
         setRules(prev => [...prev, newRule]);
         try {
