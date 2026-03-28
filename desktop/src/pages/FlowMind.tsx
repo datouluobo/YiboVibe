@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle, GripVertical, Languages } from "lucide-react";
+import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle, GripVertical } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Reorder } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";

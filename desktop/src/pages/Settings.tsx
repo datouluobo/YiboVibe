@@ -1017,6 +1017,59 @@ export default function Settings() {
                 </div>
             </div>
 
+            {/* Device Identity & Collision Management */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px', border: '1px solid var(--color-glass-border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ padding: '10px', background: 'rgba(94, 106, 210, 0.1)', borderRadius: '12px', color: 'var(--color-primary)' }}>
+                            <ShieldCheck size={22} />
+                        </div>
+                        <div>
+                            <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>设备唯一性标识 (Identity)</h3>
+                            <p style={{ color: 'var(--color-text-muted)', margin: '4px 0 0 0', fontSize: '14px' }}>
+                                当前指纹: <code style={{ background: 'var(--color-bg-base)', padding: '2px 6px', borderRadius: '4px', color: 'var(--color-primary)', fontSize: '12px' }}>{appConfig?.device_fingerprint || '获取中...'}</code>
+                            </p>
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={() => {
+                            setConfirmDialog({
+                                isOpen: true,
+                                message: "重新生成识别码将导致云端将此电脑视为“新设备”，需重新登录。确认为解决同步冲突而重置？",
+                                onConfirm: async () => {
+                                    try {
+                                        const newFp = await invoke<string>("regenerate_device_fingerprint");
+                                        setAppConfig((prev: any) => ({ ...prev, device_fingerprint: newFp }));
+                                        setAlertDialog({ isOpen: true, message: "识别码重置成功！请重新启动本程序以完全生效（新身份将在下次登录时激活）。", type: 'success' });
+                                    } catch (e) {
+                                        setAlertDialog({ isOpen: true, message: "重置失败: " + String(e), type: 'error' });
+                                    }
+                                }
+                            });
+                        }}
+                        className="btn-ghost"
+                        style={{
+                            padding: '10px 20px',
+                            borderRadius: '100px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            cursor: 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            border: '1px solid var(--color-border)',
+                            color: 'var(--color-danger)'
+                        }}
+                    >
+                        <RefreshCw size={16} /> 重置唯一识别码
+                    </button>
+                </div>
+                <p style={{ marginTop: '16px', fontSize: '12px', color: 'var(--color-text-dim)', lineHeight: 1.5 }}>
+                    💡 提示：如果您通过“直接复制配置文件夹”的方式在另一台电脑部署了 YiboFlow，可能导致两台电脑拥有相同的指纹，从而无法同时被云端识别。点击重置后，两台电脑即可在仪表盘中互相看见。
+                </p>
+            </div>
+
             {/* Custom Confirm Dialog */}
             {
                 confirmDialog.isOpen && (

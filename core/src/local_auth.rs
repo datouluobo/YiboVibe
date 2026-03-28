@@ -32,6 +32,14 @@ lazy_static! {
 
 /// Helper to get the base `%APPDATA%/YiboFlow` global dir
 pub fn get_yiboflow_global_dir() -> PathBuf {
+    if let Ok(val) = std::env::var("YIBOFLOW_DATA_DIR") {
+        let path = PathBuf::from(val);
+        if !path.exists() {
+            let _ = fs::create_dir_all(&path);
+        }
+        return path;
+    }
+    
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
     path.push("YiboFlow");
     if !path.exists() {

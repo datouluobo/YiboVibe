@@ -24,6 +24,8 @@
         "subtitle_register": "创建一个受零知识证明保护的新账户。",
         "username": "用户名",
         "placeholder_username": "请输入唯一用户名",
+        "device_name": "设备标识 (用于区分多端)",
+        "placeholder_device_name": "例如: Sim-PC-1 或 办公室常用机",
         "master_password": "主加密密码 (Master Password)",
         "placeholder_password": "用于在本地计算生成主密钥",
         "btn_login": "解密并登入",

@@ -63,12 +63,13 @@ async fn connect_engine(
     server_url: String,
     username: String,
     password: String,
+    device_name: String,
 ) -> Result<bool, String> {
     {
         let connected_flag = state.is_connected.lock().await;
         if *connected_flag {
-            info!("Already connected. Bypassing engine setup to prevent duplicate monitors.");
-            return Ok(true);
+             info!("Already connected. Bypassing engine setup to prevent duplicate monitors.");
+             return Ok(true);
         }
     }
 
@@ -81,21 +82,26 @@ async fn connect_engine(
     });
 
     info!(
-        "Tauri Command Received: connect_engine -> Server: {}, User: {}",
-        server_url, username
+        "Tauri Command Received: connect_engine -> Server: {}, User: {}, Device: {}",
+        server_url, username, device_name
     );
 
     if server_url == "local" {
         return yiboflow_core::local_auth::login_local_user(&username, &password);
     }
 
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
-        device_name: "YiboFlow Desktop Native".to_string(),
+        device_name: device_name.clone(),
         device_type: "windows".to_string(),
-        device_fingerprint: "gui-native-1234".to_string(),
+        device_fingerprint: config_fingerprint,
     };
 
     let login_result = client.login(login_payload).await;
@@ -768,13 +774,18 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
     info!("Resolving sync conflict with action: {}", action);
 
     // 1. We must login again to grab tokens and salt for key derivation
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: "gui-native-1234".to_string(),
+        device_fingerprint: config_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
@@ -893,13 +904,18 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
         });
     }
 
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: "gui-native-1234".to_string(),
+        device_fingerprint: config_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
@@ -940,6 +956,67 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
         remote_manifest_size: remote_size,
         status_msg: status_str,
     })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterDevice {
+    pub id: String,
+    pub name: String,
+    pub is_online: bool,
+    pub is_local: bool,
+    pub device_type: String,
+}
+
+#[tauri::command]
+async fn get_cluster_devices(server_url: String, username: String, password: String) -> Result<Vec<ClusterDevice>, String> {
+    if server_url.is_empty() || server_url == "local" || username.is_empty() {
+        return Ok(vec![ClusterDevice {
+            id: "local_win".to_string(),
+            name: "本地模式".to_string(),
+            is_online: true,
+            is_local: true,
+            device_type: "windows".to_string(),
+        }]);
+    }
+
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+
+    let mut client = ApiClient::new(server_url.clone());
+    let login_payload = LoginRequest {
+        username: username.clone(),
+        password: password.clone(),
+        device_name: "YiboFlow Desktop Native".to_string(),
+        device_type: "windows".to_string(),
+        device_fingerprint: config_fingerprint.clone(),
+    };
+
+    let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
+    if login_result.code != 200 || login_result.data.is_none() {
+        return Err(format!("Auth Failed: {}", login_result.msg));
+    }
+    let d = login_result.data.unwrap();
+
+    // Query /api/v1/sync/devices
+    let devices_res = client.get_devices(&d.access_token).await.map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for dev in devices_res {
+        let is_local = dev.id == d.device_id;
+        
+        out.push(ClusterDevice {
+            id: format!("{}", dev.id),
+            name: dev.name,
+            is_online: dev.is_online,
+            is_local, 
+            device_type: dev.r#type,
+        });
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1148,6 +1225,15 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tauri::command]
+fn regenerate_device_fingerprint() -> Result<String, String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    let new_fp = uuid::Uuid::new_v4().to_string();
+    cfg.device_fingerprint = new_fp.clone();
+    let _ = cfg.save();
+    Ok(new_fp)
+}
+
 pub fn run() {
     // Intialize Rust logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -1725,7 +1811,9 @@ pub fn run() {
             force_override_remote,
             manual_vault_compaction,
             get_vault_sync_status,
+            get_cluster_devices,
             resolve_file_conflicts,
+            regenerate_device_fingerprint,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

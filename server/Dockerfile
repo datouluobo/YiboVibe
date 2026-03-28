@@ -36,8 +36,8 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 ENV TZ=Asia/Shanghai
 ENV GIN_MODE=release
 
-# 暴露唯一的对公 API 端口 (数据库等均不上浮)
-EXPOSE 8080
+# 暴露 API 端口 (与用户 NAS 环对齐 11434)
+EXPOSE 11434
 
 # 运行引擎
 CMD ["./yiboflow_server"]

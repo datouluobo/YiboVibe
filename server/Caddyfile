@@ -1,0 +1,23 @@
+:11434 {
+    # 1. 同步服务分流：探测到路径包含 /api/ 则直接转发给后端服务 (不设网关拦截)
+    handle /api/* {
+        reverse_proxy yiboflow_api:8080
+    }
+
+    # 2. AI 引擎分流：探测到路径包含 /v1/ 则执行严苛的 API Key 鉴权
+    handle /v1/* {
+        @no-auth {
+            not header Authorization "Bearer {$AI_API_KEY}"
+        }
+        # 鉴权失败拦截
+        respond @no-auth "Unauthorized Access: Securely Protected by YiboFlow" 401
+        
+        # 鉴权通过，转发给 Ollama
+        reverse_proxy ollama:11434
+    }
+
+    # 3. 兜底处理 (防止误访问其他路径)
+    handle {
+        respond "YiboFlow Gateway is Active" 200
+    }
+}

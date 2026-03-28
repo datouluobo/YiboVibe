@@ -38,17 +38,8 @@ export default function FlowDeck() {
     const [vaultStatus, setVaultStatus] = useState<any>(null);
     const [retryCount, setRetryCount] = useState(0);
 
-    // Mocked cluster devices (In future this would be synced via the vault/NAS hub)
-    const [devices, setDevices] = useState(() => {
-        try {
-            const saved = localStorage.getItem('yiboflow_cluster_devices');
-            if (saved) return JSON.parse(saved);
-        } catch { }
-        return [
-            { id: 'local_win', name: '主控台 (Windows)', isOnline: true, isLocal: true },
-            { id: 'mobile_1', name: '移动设备 1', isOnline: false, isLocal: false }
-        ];
-    });
+    // Cluster devices (Dynamic discovery via NAS/Vault)
+    const [devices, setDevices] = useState<any[]>([]);
 
     const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
     const [editDeviceName, setEditDeviceName] = useState("");
@@ -59,9 +50,9 @@ export default function FlowDeck() {
             setEditingDeviceId(null);
             return;
         }
+        // Local edit (until we have a rename-device API)
         const updated = devices.map((d: any) => d.id === id ? { ...d, name: editDeviceName } : d);
         setDevices(updated);
-        localStorage.setItem('yiboflow_cluster_devices', JSON.stringify(updated));
         setEditingDeviceId(null);
     };
 
@@ -73,22 +64,22 @@ export default function FlowDeck() {
             const username = localStorage.getItem('yiboflow_username') || "";
             const savedPwdB64 = localStorage.getItem('yiboflow_saved_pwd') || "";
             
-            if (!serverUrl || serverUrl === 'local' || !username) {
+            setVaultStatus(null);
+            if (!serverUrl || serverUrl === 'local' || !username || !savedPwdB64) {
+                if (!savedPwdB64 && serverUrl !== 'local') setVaultStatus({ error: "MASTER_PWD_UNSAVED" });
                 return;
             }
             
-            setVaultStatus(null); // Enter detecting state
-            
-            if (!savedPwdB64) {
-                setVaultStatus({ error: "MASTER_PWD_UNSAVED" });
-                return;
-            }
             try {
                 const password = atob(savedPwdB64);
-                const info = await invoke("get_vault_sync_status", { serverUrl, username, password });
+                const info: any = await invoke("get_vault_sync_status", { serverUrl, username, password });
                 setVaultStatus(info);
+                
+                // Also fetch cluster devices!
+                const list: any = await invoke("get_cluster_devices", { serverUrl, username, password });
+                setDevices(list);
             } catch (e) {
-                console.error("Failed to fetch vault status:", e);
+                console.error("Discovery error:", e);
                 setVaultStatus({ error: String(e) });
             }
         };
@@ -133,7 +124,15 @@ export default function FlowDeck() {
                                 <div style={{ background: '#ef4444', color: '#fff', padding: '4px', borderRadius: '50%', display: 'flex' }}>
                                     <XCircle size={16} />
                                 </div>
-                                <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--color-text-main)' }}>
+                                <span style={{ 
+                                    fontSize: '14px', 
+                                    fontWeight: 500, 
+                                    color: 'var(--color-text-main)',
+                                    wordBreak: 'break-all',
+                                    whiteSpace: 'pre-wrap',
+                                    lineHeight: '1.5',
+                                    flex: 1
+                                }}>
                                     {vaultStatus.error === "MASTER_PWD_UNSAVED" ? "同步状态受限：由于未记住密码，无法侦测云端库" : `云端库探测失败：${vaultStatus.error}`}
                                 </span>
                                 <button className="btn-ghost" style={{ fontSize: '12px', padding: '4px 8px', color: 'var(--color-primary)' }} onClick={() => setRetryCount(c => c + 1)}>立即重探测</button>

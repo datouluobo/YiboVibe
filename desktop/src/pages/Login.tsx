@@ -49,6 +49,7 @@ export default function Login() {
         }
         return "";
     });
+    const [deviceName, setDeviceName] = useState(() => localStorage.getItem('yiboflow_device_name') || "Sim-PC-1");
     const [loading, setLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState("");
     const [isRegistering, setIsRegistering] = useState(false);
@@ -102,11 +103,13 @@ export default function Login() {
                     serverUrl,
                     username,
                     password,
+                    deviceName,
                 });
 
                 if (result) {
                     localStorage.setItem('yiboflow_server_url', serverUrl);
                     localStorage.setItem('yiboflow_username', username);
+                    localStorage.setItem('yiboflow_device_name', deviceName);
                     localStorage.setItem('yiboflow_connected_at', new Date().toISOString());
                     if (rememberPwd) {
                         localStorage.setItem('yiboflow_remember_pwd', 'true');
@@ -292,6 +295,23 @@ export default function Login() {
                                 placeholder={t('login.placeholder_username')}
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="input-group">
+                        <label htmlFor="deviceName">{t('login.device_name')}</label>
+                        <div style={{ position: "relative" }}>
+                            <Server size={18} style={{ position: "absolute", left: 14, top: 12, color: "#8E8E93" }} />
+                            <input
+                                id="deviceName"
+                                type="text"
+                                className="modern-input"
+                                style={{ paddingLeft: 40 }}
+                                placeholder={t('login.placeholder_device_name')}
+                                value={deviceName}
+                                onChange={(e) => setDeviceName(e.target.value)}
                                 required
                             />
                         </div>

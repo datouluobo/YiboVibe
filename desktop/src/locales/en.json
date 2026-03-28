@@ -24,6 +24,8 @@
         "subtitle_register": "Creating a new Zero-Knowledge encrypted identity.",
         "username": "Username",
         "placeholder_username": "Enter your username",
+        "device_name": "Device Identifier",
+        "placeholder_device_name": "e.g. Sim-PC-1 or Office Manager",
         "master_password": "Master Password",
         "placeholder_password": "Used to derive Master Key (MK)",
         "btn_login": "Decrypt & Login",

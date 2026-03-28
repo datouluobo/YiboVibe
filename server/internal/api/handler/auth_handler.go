@@ -91,6 +91,7 @@ func Login(c *gin.Context) {
 		Msg:  "Login successful",
 		Data: gin.H{
 			"uid":           res.User.UID,
+			"device_id":     res.DeviceID,
 			"username":      res.User.Username,
 			"kdf_salt":      res.User.KdfSalt, // Crucial for client deriving MK later!
 			"access_token":  res.AccessToken,

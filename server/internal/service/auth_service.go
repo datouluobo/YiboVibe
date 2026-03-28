@@ -50,6 +50,7 @@ type LoginPayload struct {
 // LoginResult encapsulates the tokens and user details needed to return
 type LoginResult struct {
 	User         *model.User
+	DeviceID     uint
 	AccessToken  string
 	RefreshToken string
 }
@@ -105,6 +106,7 @@ func Authenticate(payload LoginPayload) (*LoginResult, error) {
 
 	return &LoginResult{
 		User:         user,
+		DeviceID:     latestDevice.ID,
 		AccessToken:  accessToken,
 		RefreshToken: rawRefreshToken, // Server only hashes it, client gets plain
 	}, nil

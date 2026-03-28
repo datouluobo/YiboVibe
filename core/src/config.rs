@@ -120,6 +120,8 @@ pub struct AppConfig {
     pub is_window_config_unified: bool,
     #[serde(default)]
     pub dictionary_order: Vec<String>,
+    #[serde(default = "default_fingerprint")]
+    pub device_fingerprint: String,
 }
 
 fn default_min_chars() -> usize { 2 }
@@ -128,6 +130,7 @@ fn default_tab_key() -> u32 { 0x09 }
 
 fn default_true() -> bool { true }
 fn default_empty_string() -> String { String::new() }
+fn default_fingerprint() -> String { uuid::Uuid::new_v4().to_string() }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -212,6 +215,7 @@ impl AppConfig {
             flowwriter: FlowWriterConfig::default(),
             is_window_config_unified: false,
             dictionary_order: Vec::new(),
+            device_fingerprint: default_fingerprint(),
         };
         cfg.save();
         cfg

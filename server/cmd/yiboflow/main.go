@@ -11,6 +11,7 @@ import (
 	"github.com/datouluobo/YiboFlow/server/internal/model"
 	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
 	"github.com/datouluobo/YiboFlow/server/internal/ws"
+	"os"
 )
 
 func main() {
@@ -92,6 +93,7 @@ func main() {
 
 			// Query online devices
 			protectedGrp.GET("/online", handler.GetOnlineDevices)
+			protectedGrp.GET("/devices", handler.ListDevices)
 		}
 
 		// Vault Advanced Sync Endpoint (Match client: /api/v1/vault/)
@@ -105,8 +107,11 @@ func main() {
 		}
 	}
 
-	// Read port from env or default to 8080
-	port := "8080"
+	// Read port from env or default to 11434 (aligned with user's NAS reverse proxy)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "11434"
+	}
 	log.Printf("Server listening on :%s", port)
 
 	if err := r.Run(":" + port); err != nil {
