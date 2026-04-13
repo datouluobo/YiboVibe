@@ -10,8 +10,6 @@ import { invoke } from "@tauri-apps/api/core";
 interface DefaultRules {
     flowsnap: boolean;
     flowhint: boolean;
-    flowwriter: boolean;
-    flowpredict: boolean;
     flowsync: boolean;
 }
 
@@ -21,8 +19,6 @@ interface AppRule {
     flowsnap: boolean | null;
     flowhint: boolean | null;
     flowhint_dicts: string[];
-    flowwriter: boolean | null;
-    flowpredict: boolean | null;
     flowsync: boolean | null;
 }
 
@@ -31,7 +27,7 @@ interface FlowRulesPayload {
     app_overrides: AppRule[];
 }
 
-const FEATURE_COLS = ["flowsnap", "flowhint", "flowwriter", "flowpredict", "flowsync"] as const;
+const FEATURE_COLS = ["flowsnap", "flowhint", "flowsync"] as const;
 type FeatureKey = typeof FEATURE_COLS[number];
 
 // ---------------------------------------------------------------------------
@@ -245,7 +241,7 @@ function AddAppModal({ onClose, onAdd }: {
 export default function FlowRules() {
     const { t } = useTranslation();
     const [defaults, setDefaults] = useState<DefaultRules>({
-        flowsnap: true, flowhint: false, flowwriter: true, flowpredict: true, flowsync: true,
+        flowsnap: true, flowhint: false, flowsync: true,
     });
     const [rules, setRules] = useState<AppRule[]>([]);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -319,8 +315,6 @@ export default function FlowRules() {
             flowsnap: null,
             flowhint: null,
             flowhint_dicts: [],
-            flowwriter: null,
-            flowpredict: null,
             flowsync: null,
         };
         setRules(prev => [...prev, newRule]);
@@ -331,8 +325,6 @@ export default function FlowRules() {
                 flowsnap: newRule.flowsnap,
                 flowhint: newRule.flowhint,
                 flowhintDicts: newRule.flowhint_dicts,
-                flowwriter: newRule.flowwriter,
-                flowpredict: newRule.flowpredict,
                 flowsync: newRule.flowsync,
             });
         } catch (e) {
@@ -344,8 +336,6 @@ export default function FlowRules() {
     const colLabels: Record<string, string> = {
         flowsnap: t('flowrules.col_flowsnap'),
         flowhint: t('flowrules.col_flowhint'),
-        flowwriter: t('flowrules.col_flowwriter'),
-        flowpredict: t('flowrules.col_flowpredict'),
         flowsync: t('flowrules.col_flowsync'),
     };
 

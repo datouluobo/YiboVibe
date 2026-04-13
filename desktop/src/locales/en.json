@@ -2,17 +2,13 @@
     "nav": {
         "flowdeck": "FlowDeck",
         "flowmind": "FlowMind",
-        "flowwriter": "FlowWriter",
-        "flowpredict": "FlowPredict",
         "flowsync": "FlowSync",
         "flowdrop": "FlowDrop",
         "flowrules": "FlowRules",
         "settings": "Settings",
         "tooltip_flowdeck": "System status overview and device monitoring",
         "tooltip_flowmind": "Unified smart input engine: prefix expansion and intelligent completion",
-        "tooltip_flowwriter": "Select text, AI rewrites with one hotkey",
-        "tooltip_flowpredict": "AI predicts your next input based on context",
-        "tooltip_flowsync": "E2EE real-time clipboard sync across all devices",
+        "flowsync": "FlowSync",
         "tooltip_flowdrop": "P2P encrypted cross-device file transfer",
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
         "tooltip_settings": "Theme, language, AI engine and global preferences"
@@ -86,7 +82,7 @@
         "btn_export": "Export Config",
         "btn_import": "Import Config",
         "ai_engine_title": "AI Engine Configuration",
-        "ai_engine_desc": "Configure the AI backend for FlowWriter and FlowPredict.",
+        "ai_engine_desc": "Configure the AI backend for FlowMind smart completion.",
         "ai_provider": "Provider",
         "ai_endpoint": "API Endpoint",
         "ai_apikey": "API Key",
@@ -96,9 +92,7 @@
         "ai_mode_local": "Local / LAN",
         "ai_test_btn": "Test Connection",
         "ai_status_ok": "Connected",
-        "ai_status_fail": "Connection Failed",
-        "hotkey_flowwriter": "FlowWriter Hotkey",
-        "hotkey_flowpredict": "FlowPredict Hotkey"
+        "ai_status_fail": "Connection Failed"
     },
     "snippets": {
         "title": "FlowSnap",
@@ -153,19 +147,7 @@
         "editor_back": "Back",
         "editor_bind_apps": "Bind Applications"
     },
-    "flowwriter": {
-        "title": "FlowWriter",
-        "subtitle": "Select text, AI rewrites it beautifully — like magic.",
-        "wip_message": "This feature is under active development. Stay tuned...",
-        "hotkey_label": "Trigger Hotkey",
-        "prompt_template": "Rewrite Prompt Template"
-    },
-    "flowpredict": {
-        "title": "FlowPredict",
-        "subtitle": "AI-powered context awareness — it knows what you'll type next.",
-        "wip_message": "This feature is under active development. Stay tuned...",
-        "hotkey_label": "Trigger Hotkey"
-    },
+
     "flowrules": {
         "title": "FlowRules",
         "subtitle": "Per-app fine-grained control for every feature module.",
@@ -176,8 +158,6 @@
         "col_app": "Application",
         "col_flowsnap": "Snap",
         "col_flowhint": "Hint",
-        "col_flowwriter": "Writer",
-        "col_flowpredict": "Predict",
         "col_flowsync": "Sync",
         "state_on": "On",
         "state_off": "Off",

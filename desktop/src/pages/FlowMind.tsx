@@ -466,19 +466,7 @@ export default function FlowMind() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>🔍 引擎诊断</h3>
                     <div style={{ display: 'flex', gap: '8px' }}>
-                        <button
-                            onClick={async () => {
-                                await invoke("reset_hint_position");
-                                alert("已重置所有悬浮窗坐标与偏移量，请尝试打字查看！");
-                            }}
-                            className="btn-ghost"
-                            style={{ padding: '6px 16px', fontSize: '12px', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
-                        >
-                            🔄 恢复所有窗口位置
-                        </button>
-                        <button onClick={async () => { try { await invoke("dismiss_hint_window"); } catch { } }} className="btn-ghost" style={{ padding: '6px 16px', fontSize: '12px', color: '#ef4444' }}>
-                            关闭候选窗
-                        </button>
+
                         <button onClick={runDiagnose} className="btn-primary" style={{ padding: '6px 16px', fontSize: '12px' }}>
                             运行诊断
                         </button>

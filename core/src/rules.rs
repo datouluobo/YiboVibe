@@ -17,8 +17,6 @@ use lazy_static::lazy_static;
 pub enum Feature {
     FlowSnap,
     FlowHint,
-    FlowWriter,
-    FlowPredict,
     FlowSync,
 }
 
@@ -27,8 +25,6 @@ pub enum Feature {
 pub struct DefaultRules {
     pub flowsnap: bool,
     pub flowhint: bool,
-    pub flowwriter: bool,
-    pub flowpredict: bool,
     pub flowsync: bool,
 }
 
@@ -37,8 +33,6 @@ impl Default for DefaultRules {
         Self {
             flowsnap: true,
             flowhint: false,
-            flowwriter: true,
-            flowpredict: true,
             flowsync: true,
         }
     }
@@ -49,8 +43,6 @@ impl DefaultRules {
         match feature {
             Feature::FlowSnap => self.flowsnap,
             Feature::FlowHint => self.flowhint,
-            Feature::FlowWriter => self.flowwriter,
-            Feature::FlowPredict => self.flowpredict,
             Feature::FlowSync => self.flowsync,
         }
     }
@@ -65,8 +57,6 @@ pub struct AppRule {
     pub flowhint: Option<bool>,
     #[serde(default)]
     pub flowhint_dicts: Vec<String>,
-    pub flowwriter: Option<bool>,
-    pub flowpredict: Option<bool>,
     pub flowsync: Option<bool>,
 }
 
@@ -75,8 +65,6 @@ impl AppRule {
         let val = match feature {
             Feature::FlowSnap => self.flowsnap,
             Feature::FlowHint => self.flowhint,
-            Feature::FlowWriter => self.flowwriter,
-            Feature::FlowPredict => self.flowpredict,
             Feature::FlowSync => self.flowsync,
         };
         val.unwrap_or(default)
@@ -211,11 +199,9 @@ pub fn is_all_disabled(process_name: &str) -> bool {
     if let Some(rule) = cache.app_map.get(process_name) {
         !rule.resolve_enabled(Feature::FlowSnap, d.flowsnap) 
         && !rule.resolve_enabled(Feature::FlowHint, d.flowhint) 
-        && !rule.resolve_enabled(Feature::FlowWriter, d.flowwriter) 
-        && !rule.resolve_enabled(Feature::FlowPredict, d.flowpredict) 
         && !rule.resolve_enabled(Feature::FlowSync, d.flowsync)
     } else {
-        !d.flowsnap && !d.flowhint && !d.flowwriter && !d.flowpredict && !d.flowsync
+        !d.flowsnap && !d.flowhint && !d.flowsync
     }
 }
 
@@ -294,8 +280,6 @@ pub fn toggle_app_feature(process: String, feature: Feature) -> Result<(), Strin
         let (current, next) = match feature {
             Feature::FlowSnap => (rule.flowsnap, &mut rule.flowsnap),
             Feature::FlowHint => (rule.flowhint, &mut rule.flowhint),
-            Feature::FlowWriter => (rule.flowwriter, &mut rule.flowwriter),
-            Feature::FlowPredict => (rule.flowpredict, &mut rule.flowpredict),
             Feature::FlowSync => (rule.flowsync, &mut rule.flowsync),
         };
         *next = match current {
@@ -317,8 +301,6 @@ pub fn toggle_default_feature(feature: Feature) -> Result<(), String> {
     match feature {
         Feature::FlowSnap => cfg.default.flowsnap = !cfg.default.flowsnap,
         Feature::FlowHint => cfg.default.flowhint = !cfg.default.flowhint,
-        Feature::FlowWriter => cfg.default.flowwriter = !cfg.default.flowwriter,
-        Feature::FlowPredict => cfg.default.flowpredict = !cfg.default.flowpredict,
         Feature::FlowSync => cfg.default.flowsync = !cfg.default.flowsync,
     }
     drop(cfg);

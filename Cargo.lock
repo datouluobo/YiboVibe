@@ -4977,7 +4977,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "env_logger",
  "lazy_static",
@@ -4992,6 +4992,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "tokio",
+ "uuid",
  "windows 0.62.2",
  "yiboflow-core",
 ]
@@ -7054,7 +7055,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "yiboflow-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "aes-gcm",
  "arboard",

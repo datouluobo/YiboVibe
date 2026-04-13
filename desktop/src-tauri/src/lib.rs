@@ -14,10 +14,7 @@ pub struct AppState {
     pub ws_tx: Mutex<Option<tokio::sync::mpsc::Sender<yiboflow_core::ws::WsMessage>>>,
 }
 
-lazy_static::lazy_static! {
-    static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
-    static ref LAST_WRITER_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
-}
+
 
 #[tauri::command]
 async fn register_engine(
@@ -309,9 +306,6 @@ struct SettingsPayload {
     is_sync_enabled: bool,
     flowhint_min_chars: usize,
     flowhint_accept_key: u32,
-    hint_window: yiboflow_core::config::WindowConfig,
-    writer_window: yiboflow_core::config::WindowConfig,
-    is_window_config_unified: bool,
     dictionary_order: Vec<String>,
 }
 
@@ -389,9 +383,6 @@ fn get_settings() -> Result<SettingsPayload, String> {
         is_sync_enabled: cfg.is_sync_enabled,
         flowhint_min_chars: cfg.flowhint_min_chars,
         flowhint_accept_key: cfg.flowhint_accept_key,
-        hint_window: cfg.hint_window.clone(),
-        writer_window: cfg.writer_window.clone(),
-        is_window_config_unified: cfg.is_window_config_unified,
         dictionary_order: cfg.dictionary_order.clone(),
     })
 }
@@ -401,25 +392,16 @@ fn update_settings(
     is_sync_enabled: bool, 
     flowhint_min_chars: usize, 
     flowhint_accept_key: u32, 
-    hint_window: yiboflow_core::config::WindowConfig,
-    writer_window: yiboflow_core::config::WindowConfig,
-    is_window_config_unified: bool,
 ) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
     cfg.flowhint_accept_key = flowhint_accept_key;
-    cfg.hint_window = hint_window;
-    cfg.writer_window = writer_window;
-    cfg.is_window_config_unified = is_window_config_unified;
     cfg.save();
     Ok(())
 }
 
-#[tauri::command]
-fn get_custom_prompts() -> Result<yiboflow_core::ai::prompt::CustomPromptsConfig, String> {
-    Ok(yiboflow_core::ai::prompt::get_custom_prompts_config())
-}
+
 
 #[tauri::command]
 fn get_app_config() -> Result<yiboflow_core::config::AppConfig, String> {
@@ -436,269 +418,9 @@ fn update_ai_endpoints(endpoints: Vec<yiboflow_core::config::AiEndpoint>) -> Res
     Ok(())
 }
 
-#[tauri::command]
-fn add_custom_prompt(prompt: yiboflow_core::ai::prompt::CustomPromptTemplate) -> Result<(), String> {
-    yiboflow_core::ai::prompt::add_custom_prompt(prompt)
-}
-
-#[tauri::command]
-fn remove_custom_prompt(id: String) -> Result<(), String> {
-    yiboflow_core::ai::prompt::remove_custom_prompt(&id)
-}
-
-#[tauri::command]
-fn update_standard_prompts(prompts: yiboflow_core::ai::prompt::StandardPrompts) -> Result<(), String> {
-    yiboflow_core::ai::prompt::update_standard_prompts(prompts)
-}
-
-#[tauri::command]
-fn reset_standard_prompts() -> Result<(), String> {
-    yiboflow_core::ai::prompt::reset_standard_prompts()
-}
-
-#[tauri::command]
-fn get_flowwriter_config() -> Result<yiboflow_core::config::FlowWriterConfig, String> {
-    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
-    Ok(cfg.flowwriter.clone())
-}
-
-#[tauri::command]
-fn update_flowwriter_config(config: yiboflow_core::config::FlowWriterConfig) -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    cfg.flowwriter = config;
-    cfg.save();
-    Ok(())
-}
-
-#[tauri::command]
-async fn stream_ai_writer(
-    action: String,
-    action_payload: Option<String>,
-    user_input: String,
-    window: tauri::Window,
-) -> Result<(), String> {
-    let prompt_action = match action.as_str() {
-        "Polish" => yiboflow_core::ai::prompt::PromptAction::Polish,
-        "Expand" => yiboflow_core::ai::prompt::PromptAction::Expand { ratio: action_payload.unwrap_or("1.5".into()).parse().unwrap_or(1.5) },
-        "Condense" => yiboflow_core::ai::prompt::PromptAction::Condense { ratio: action_payload.unwrap_or("50%".into()) },
-        "Summarize" => yiboflow_core::ai::prompt::PromptAction::Summarize,
-        "Style" => yiboflow_core::ai::prompt::PromptAction::Style { style: action_payload.unwrap_or("Professional".into()) },
-        "Translate" => yiboflow_core::ai::prompt::PromptAction::Translate { target_lang: action_payload.unwrap_or("English".into()) },
-        "Explain" => yiboflow_core::ai::prompt::PromptAction::Explain,
-        "Custom" => yiboflow_core::ai::prompt::PromptAction::Custom { template_id: action_payload.unwrap_or_default() },
-        _ => return Err("Invalid PromptAction".into()),
-    };
-
-    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().ai_engine.clone();
-    let client = yiboflow_core::ai::client::AiClient::new(cfg);
-    let msgs = yiboflow_core::ai::prompt::build_messages(&prompt_action, &user_input);
-
-    info!("=== FlowWriter AI Request ===");
-    info!("Action: {}", action);
-    info!("User Input ({} chars): {:?}", user_input.len(), &user_input[..user_input.len().min(200)]);
-    for (i, m) in msgs.iter().enumerate() {
-        info!("Message[{}] role={} content({} chars)={:?}", i, m.role, m.content.len(), &m.content[..m.content.len().min(200)]);
-    }
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
-    
-    tokio::spawn(async move {
-        client.chat_stream(msgs, tx).await;
-    });
-
-    while let Some(res) = rx.recv().await {
-        match res {
-            Ok(chunk) => {
-                let _ = window.emit("writer-stream-chunk", chunk);
-            }
-            Err(e) => {
-                let _ = window.emit("writer-stream-error", e.to_string());
-                break;
-            }
-        }
-    }
-    let _ = window.emit("writer-stream-end", ());
-    Ok(())
-}
-
-#[tauri::command]
-fn dismiss_writer_window() -> Result<(), String> {
-    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
-    Ok(())
-}
-
-#[tauri::command]
-fn move_writer_window(x: i32, y: i32) -> Result<(), String> {
-    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::MoveWindow { x, y });
-    Ok(())
-}
-
-#[tauri::command]
-fn update_writer_position(app: tauri::AppHandle, x: i32, y: i32) {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    
-    // Transform Windows Y to User Bottom-Left Y for Fixed mode
-    let mut current_pos_y = y;
-    if let Ok(Some(mon)) = app.primary_monitor() {
-        let h = mon.size().height as i32;
-        current_pos_y = h - y;
-    }
-
-    if cfg.writer_window.pos_type == 0 {
-        // Follow mode: update relative offsets
-        let anchor = LAST_WRITER_ANCHOR.lock().unwrap();
-        cfg.writer_window.offset_x = x - anchor.0;
-        cfg.writer_window.offset_y = y - anchor.1; 
-        
-        if cfg.is_window_config_unified {
-            cfg.hint_window.offset_x = cfg.writer_window.offset_x;
-            cfg.hint_window.offset_y = cfg.writer_window.offset_y;
-            cfg.hint_window.pos_type = 0;
-        }
-    } else {
-        // Fixed mode: update absolute coordinates
-        cfg.writer_window.fixed_x = x;
-        cfg.writer_window.fixed_y = current_pos_y;
-        
-        if cfg.is_window_config_unified {
-            cfg.hint_window.fixed_x = x;
-            cfg.hint_window.fixed_y = y; 
-            cfg.hint_window.pos_type = 1;
-        }
-    }
-    let _ = cfg.save();
-    let _ = app.emit("config-updated", ());
-}
-
-#[tauri::command]
-fn paste_writer_text(text: String) -> Result<(), String> {
-    // 1. Send signal to hide the writer UI window immediately 
-    yiboflow_core::writer::send_writer_event(yiboflow_core::writer::WriterEvent::Hide);
-    
-    // 2. Perform the actual paste in the background after focus restoration
-    #[cfg(target_os = "windows")]
-    yiboflow_core::hook_manager::paste_to_last_focused_window(text);
-    
-    Ok(())
-}
 
 
-#[tauri::command]
-fn diagnose_flowhint(_app_handle: tauri::AppHandle) -> Result<String, String> {
-    let mut report = String::from("--- FlowHint Engine Diagnostic Report ---\n");
 
-    // 1. Config
-    let (_sync, _, _) = yiboflow_core::config::get_settings();
-    report.push_str(&format!("[Config] sync={}\n", _sync));
-
-    // 2. Rules default
-    let rules = yiboflow_core::rules::get_rules();
-    report.push_str(&format!("[Rules] default.flowhint={}\n", rules.default.flowhint));
-    report.push_str(&format!("[Rules] default.flowsnap={}\n", rules.default.flowsnap));
-
-    // 3. Feature query for notepad
-    let hint_ok = yiboflow_core::rules::is_feature_enabled("notepad.exe", yiboflow_core::rules::Feature::FlowHint);
-    report.push_str(&format!("[Rules] is_feature_enabled(notepad.exe, FlowHint)={}\n", hint_ok));
-
-    // 4. Dict IDs
-    let dict_ids = yiboflow_core::rules::get_app_flowhint_dicts("notepad.exe");
-    report.push_str(&format!("[Dicts] dict_ids_for_notepad={:?}\n", dict_ids));
-
-    // 5. Dictionary search
-    let cands = yiboflow_core::dictionary::search_candidates_tail(&dict_ids, "gi");
-    report.push_str(&format!("[Dicts] search_candidates_tail('gi')={:?}\n", cands));
-
-    let cands_exact = yiboflow_core::dictionary::search_candidates(&dict_ids, "gi");
-    report.push_str(&format!("[Dicts] search_candidates_exact('gi')={:?}\n", cands_exact));
-
-    // 6. HINT_TX status
-    let tx_set = yiboflow_core::hook_manager::HINT_TX.lock().map(|tx| tx.is_some()).unwrap_or(false);
-    report.push_str(&format!("[Channel] HINT_TX is_set={}\n", tx_set));
-
-    // 7. Try actually sending a test event
-    if tx_set {
-        yiboflow_core::hook_manager::set_hint_tx_test_send();
-        report.push_str("[Channel] Sent test HintEvent::Show (Event loop will handle SW_SHOWNOACTIVATE)\n");
-    }
-
-    Ok(report)
-}
-
-#[tauri::command]
-fn accept_hint_candidate(index: usize) -> Result<(), String> {
-    yiboflow_core::hook_manager::accept_hint_by_index(index);
-    Ok(())
-}
-
-#[tauri::command]
-fn dismiss_hint_window() -> Result<(), String> {
-    yiboflow_core::hook_manager::dismiss_hint();
-    Ok(())
-}
-
-#[tauri::command]
-fn update_hint_position(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    if cfg.hint_window.pos_type == 0 {
-        // Follow mode: update relative offsets
-        let anchor = LAST_HINT_ANCHOR.lock().unwrap();
-        cfg.hint_window.offset_x = x - anchor.0;
-        cfg.hint_window.offset_y = y - anchor.1;
-        
-        if cfg.is_window_config_unified {
-            cfg.writer_window.offset_x = cfg.hint_window.offset_x;
-            cfg.writer_window.offset_y = cfg.hint_window.offset_y; 
-            cfg.writer_window.pos_type = 0;
-        }
-    } else {
-        // Fixed mode: update absolute coordinates
-        cfg.hint_window.fixed_x = x;
-        cfg.hint_window.fixed_y = y;
-        
-        if cfg.is_window_config_unified {
-            cfg.writer_window.fixed_x = x;
-            // Convert x, y (Top-Left) to Writer's user-space Y (Bottom-Left)
-            if let Ok(Some(mon)) = app.primary_monitor() {
-                let h = mon.size().height as i32;
-                cfg.writer_window.fixed_y = h - y;
-            }
-            cfg.writer_window.pos_type = 1;
-        }
-    }
-    cfg.save();
-    let _ = app.emit("config-updated", ());
-    Ok(())
-}
-
-#[tauri::command]
-fn move_hint_window(x: i32, y: i32) -> Result<(), String> {
-    if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
-        let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow { x, y });
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn reset_hint_position() -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    // Reset Hint
-    cfg.hint_window.fixed_x = -1;
-    cfg.hint_window.fixed_y = -1;
-    cfg.hint_window.offset_x = 0;
-    cfg.hint_window.offset_y = 0;
-    cfg.hint_window.pos_type = 0; 
-    
-    // Reset Writer
-    cfg.writer_window.fixed_x = -1;
-    cfg.writer_window.fixed_y = -1;
-    cfg.writer_window.offset_x = 0;
-    cfg.writer_window.offset_y = 0;
-    cfg.writer_window.pos_type = 0;
-
-    cfg.save();
-    info!("Positions for Hint and Writer have been force-reset to defaults.");
-    Ok(())
-}
 
 #[tauri::command]
 fn change_local_password(new_password: String) -> Result<(), String> {
@@ -1042,15 +764,11 @@ fn get_flow_rules() -> Result<FlowRulesPayload, String> {
 fn set_default_rules(
     flowsnap: bool,
     flowhint: bool,
-    flowwriter: bool,
-    flowpredict: bool,
     flowsync: bool,
 ) -> Result<(), String> {
     yiboflow_core::rules::set_default_rules(yiboflow_core::rules::DefaultRules {
         flowsnap,
         flowhint,
-        flowwriter,
-        flowpredict,
         flowsync,
     })
 }
@@ -1062,8 +780,6 @@ fn upsert_app_rule(
     flowsnap: Option<bool>,
     flowhint: Option<bool>,
     flowhint_dicts: Vec<String>,
-    flowwriter: Option<bool>,
-    flowpredict: Option<bool>,
     flowsync: Option<bool>,
 ) -> Result<(), String> {
     yiboflow_core::rules::upsert_app_rule(yiboflow_core::rules::AppRule {
@@ -1072,8 +788,6 @@ fn upsert_app_rule(
         flowsnap,
         flowhint,
         flowhint_dicts,
-        flowwriter,
-        flowpredict,
         flowsync,
     })
 }
@@ -1099,8 +813,6 @@ fn parse_feature(s: &str) -> Result<yiboflow_core::rules::Feature, String> {
     match s.to_lowercase().as_str() {
         "flowsnap" => Ok(yiboflow_core::rules::Feature::FlowSnap),
         "flowhint" => Ok(yiboflow_core::rules::Feature::FlowHint),
-        "flowwriter" => Ok(yiboflow_core::rules::Feature::FlowWriter),
-        "flowpredict" => Ok(yiboflow_core::rules::Feature::FlowPredict),
         "flowsync" => Ok(yiboflow_core::rules::Feature::FlowSync),
         _ => Err(format!("Unknown feature: {}", s)),
     }
@@ -1249,7 +961,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_denylist(&["hint", "writer"])
+                .with_denylist(&["hint"])
                 .build()
         )
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
@@ -1320,467 +1032,16 @@ pub fn run() {
                 }
             });
 
-            // Dynamically create the Hint window so window-state-plugin ignores it
-            let hint_win = tauri::WebviewWindowBuilder::new(
-                app,
-                "hint",
-                tauri::WebviewUrl::App("/#/hint".into()),
-            )
-            .title("FlowHint")
-            .inner_size(300.0, 280.0)
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .visible(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .build()
-            .unwrap();
-
-            // Get Win32 HWND for direct window management (no focus stealing)
-            #[cfg(target_os = "windows")]
-            let hint_hwnd = {
-                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
-                let raw_hwnd = hint_win.hwnd().unwrap();
-                let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
-                unsafe {
-                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                    // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
-                    // IMPORTANT: Explicitly REMOVE WS_EX_TRANSPARENT (0x20) to ensure clicks are caught!
-                    let new_style = (ex_style | 0x08000000i32 | 0x00000080i32) & !0x00000020i32;
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
-                    // Sync the style change
-                    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED};
-                    let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
-                }
-                hwnd
-            };
-
-            // Bridge FlowHint events from Hook to Tauri Frontend
-            // Show/hide/position the hint window from Rust side using Win32 APIs
-            // to guarantee NO focus stealing (SW_SHOWNOACTIVATE)
-            let (hint_tx, hint_rx) = std::sync::mpsc::channel();
-            yiboflow_core::hook_manager::set_hint_tx(hint_tx);
-            let app_handle = app.handle().clone();
-            #[cfg(target_os = "windows")]
-            let hint_hwnd_raw = hint_hwnd.0 as isize; // isize is Send-safe
-            std::thread::spawn(move || {
-                use yiboflow_core::hook_manager::HintEvent;
-                while let Ok(event) = hint_rx.recv() {
-
-                    let ev_clone = event.clone();
-                    let app_handle_inner = app_handle.clone();
-                    let _ = app_handle.run_on_main_thread(move || {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let hint_hwnd = windows::Win32::Foundation::HWND(hint_hwnd_raw as *mut _);
-                            use windows::Win32::UI::WindowsAndMessaging::{
-                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
-                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOZORDER, SWP_NOSIZE,
-                            };
-                            match &ev_clone {
-                                HintEvent::Show { candidates, x, y, .. } => {
-                                    // Cap visible items at 8 for height; scrolling handles the rest
-                                    let visible_count = candidates.len().min(8) as i32;
-                                    // Make outer window bounds safely larger to prevent clipping of text and shadows
-                                    let inner_height = 95 + (visible_count * 38);
-                                    let outer_height = inner_height;
-                                    let outer_width = 300;
-
-                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy) = {
-                                        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
-                                        (
-                                            cfg.hint_window.pos_type, 
-                                            cfg.hint_window.fixed_x, 
-                                            cfg.hint_window.fixed_y,
-                                            cfg.hint_window.offset_x,
-                                            cfg.hint_window.offset_y
-                                        )
-                                    };
-                                    
-                                    // 0: Follow, 1: Fixed
-                                    let mut pos_x = *x;
-                                    let mut pos_y = *y;
-                                    
-                                    // Diagnostic Override: Ensure test window is always visible
-                                    let is_diag = candidates.get(0).map(|s| s.contains("[诊断]")).unwrap_or(false);
-                                    if is_diag {
-                                        pos_x = 400;
-                                        pos_y = 400;
-                                    } else if cfg_pos_type == 0 {
-                                        // Save anchor
-                                        *LAST_HINT_ANCHOR.lock().unwrap() = (pos_x, pos_y);
-                                        pos_x += cfg_ox;
-                                        pos_y += cfg_oy;
-                                        if cfg_oy == 0 { pos_y += 20; }
-                                    } else {
-                                        if cfg_x != -1 { pos_x = cfg_x; }
-                                        if cfg_y != -1 { pos_y = cfg_y; }
-                                    }
-
-                                    // --- SAFETY CLAMP & AUTO-ADJUST ---
-                                    // Detect which monitor the coordinates belong to
-                                    if let Ok(Some(monitor)) = app_handle_inner.monitor_from_point(pos_x as f64, pos_y as f64) {
-                                        let screen_x = monitor.position().x;
-                                        let screen_y = monitor.position().y;
-                                        let screen_w = monitor.size().width as i32;
-                                        let screen_h = monitor.size().height as i32;
-                                        
-                                        // Ensure horizontal safety within THIS monitor
-                                        if pos_x + outer_width > screen_x + screen_w {
-                                            pos_x = screen_x + screen_w - outer_width - 10;
-                                        }
-                                        if pos_x < screen_x { pos_x = screen_x + 10; }
-
-                                        // Ensure vertical safety within THIS monitor
-                                        if pos_y + outer_height > screen_y + screen_h {
-                                            pos_y = screen_y + screen_h - outer_height - 10;
-                                        }
-                                        if pos_y < screen_y { pos_y = screen_y + 20; }
-                                    }
-
-                                    unsafe {
-                                        // Position and show without activating
-                                        info!("Clamped Position: ({}, {})", pos_x, pos_y);
-                                        let _ = SetWindowPos(
-                                            hint_hwnd,
-                                            Some(HWND_TOPMOST),
-                                            pos_x, pos_y,
-                                            outer_width, outer_height,
-                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                        );
-                                        let _ = ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
-                                    }
-                                }
-                                HintEvent::Hide => {
-                                    unsafe {
-                                        let _ = ShowWindow(hint_hwnd, SW_HIDE);
-                                    }
-                                }
-                                HintEvent::MoveWindow { x, y } => {
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            hint_hwnd,
-                                            None,
-                                            *x, *y,
-                                            0, 0,
-                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-                                        );
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    });
-
-                    // Always emit event to frontend for content updates
-                    let _ = app_handle.emit("hint-event", event);
-                }
-            });
-
-            // --- Writer Window Setup ---
-            // IMPORTANT: Use the EXACT same Win32 HWND approach as FlowHint
-            // because Tauri's .show() is broken for transparent+hidden windows on WebView2/Windows.
-            let writer_win = tauri::WebviewWindowBuilder::new(
-                app,
-                "writer",
-                tauri::WebviewUrl::App("/#/writer".into()),
-            )
-            .title("FlowWriter")
-            .inner_size(520.0, 450.0)
-            .resizable(true)
-            .decorations(false)
-            .transparent(true)
-            .visible(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .build()
-            .unwrap();
-
-            // Get Win32 HWND for direct window management — same pattern as FlowHint
-            // but WITHOUT WS_EX_NOACTIVATE because Writer needs focus for interactive buttons.
-            #[cfg(target_os = "windows")]
-            let writer_hwnd = {
-                let raw_hwnd = writer_win.hwnd().unwrap();
-                let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
-                // Do NOT set WS_EX_NOACTIVATE — Writer needs to accept focus/clicks
-                hwnd
-            };
-
-            let (writer_tx, writer_rx) = std::sync::mpsc::channel();
-            yiboflow_core::writer::set_writer_tx(writer_tx);
-            let app_handle_writer = app.handle().clone();
-            #[cfg(target_os = "windows")]
-            let writer_hwnd_raw = writer_hwnd.0 as isize;
-
-            std::thread::spawn(move || {
-                use yiboflow_core::writer::WriterEvent;
-                while let Ok(event) = writer_rx.recv() {
-                    let ev_clone = event.clone();
-                    let app_handle_clone = app_handle_writer.clone();
-                    let handle_internal = app_handle_clone.clone();
-                    let _ = app_handle_clone.run_on_main_thread(move || {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let writer_hwnd = windows::Win32::Foundation::HWND(writer_hwnd_raw as *mut _);
-                            use windows::Win32::UI::WindowsAndMessaging::{
-                                ShowWindow, SetWindowPos, SW_SHOW, SW_HIDE,
-                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOSIZE, SWP_NOZORDER,
-                            };
-
-                            match &ev_clone {
-                                WriterEvent::TextSelected { text: _, x, y } => {
-                                    let mut pos_x = *x;
-                                    let mut pos_y = *y;
-
-                                    if pos_x == -1 || pos_y == -1 {
-                                        use windows::Win32::Foundation::POINT;
-                                        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                                        let mut pt = POINT::default();
-                                        unsafe {
-                                            if GetCursorPos(&mut pt).is_ok() {
-                                                pos_x = pt.x;
-                                                pos_y = pt.y;
-                                            }
-                                        }
-                                    }
-
-                                    let (pos_type, f_x, f_y, ox, oy) = {
-                                        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
-                                        (
-                                            cfg.writer_window.pos_type,
-                                            cfg.writer_window.fixed_x,
-                                            cfg.writer_window.fixed_y,
-                                            cfg.writer_window.offset_x,
-                                            cfg.writer_window.offset_y
-                                        )
-                                    };
-
-                                    let mut tx;
-                                    let mut ty;
-
-                                    if pos_type == 1 {
-                                        tx = f_x;
-                                        ty = f_y;
-                                        if let Ok(Some(mon)) = handle_internal.primary_monitor() {
-                                            let h = mon.size().height as i32;
-                                            ty = h - ty;
-                                        }
-                                    } else {
-                                        tx = pos_x;
-                                        ty = pos_y;
-                                        *LAST_WRITER_ANCHOR.lock().unwrap() = (tx, ty);
-                                        tx += ox;
-                                        ty += oy;
-                                    }
-                                    
-                                    let outer_width: i32 = 520;
-                                    let outer_height: i32 = 450;
-
-                                    // --- ROBUST SAFETY CLAMP ---
-                                    // Step 1: Try Tauri's monitor_from_point
-                                    let mut clamped = false;
-                                    if let Ok(Some(mon)) = handle_internal.monitor_from_point(tx as f64, ty as f64) {
-                                        let sx = mon.position().x;
-                                        let sy = mon.position().y;
-                                        let sw = mon.size().width as i32;
-                                        let sh = mon.size().height as i32;
-                                        if sw > 0 && sh > 0 {
-                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                            if tx < sx { tx = sx + 10; }
-                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                            if ty < sy { ty = sy + 20; }
-                                            clamped = true;
-                                        }
-                                    }
-
-                                    // Step 2: If Tauri's monitor detection failed (e.g. DPI mismatch),
-                                    // use Win32 MonitorFromPoint which works with physical pixels
-                                    if !clamped {
-                                        use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
-                                        use windows::Win32::Foundation::POINT;
-                                        let pt = POINT { x: tx, y: ty };
-                                        let hmon = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY) };
-                                        let mut mi = MONITORINFO {
-                                            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                                            ..Default::default()
-                                        };
-                                        if unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
-                                            let rc = mi.rcWork;
-                                            let sx = rc.left;
-                                            let sy = rc.top;
-                                            let sw = rc.right - rc.left;
-                                            let sh = rc.bottom - rc.top;
-                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                            if tx < sx { tx = sx + 10; }
-                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                            if ty < sy { ty = sy + 20; }
-                                            clamped = true;
-                                        }
-                                    }
-
-                                    // Step 3: Last resort - force to (100, 100) if all detection failed
-                                    if !clamped {
-                                        tx = 100;
-                                        ty = 100;
-                                    }
-
-                                    info!("[Writer] Showing at ({}, {})", tx, ty);
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            writer_hwnd,
-                                            Some(HWND_TOPMOST),
-                                            tx, ty,
-                                            outer_width, outer_height,
-                                            SWP_SHOWWINDOW,
-                                        );
-                                        let _ = ShowWindow(writer_hwnd, SW_SHOW);
-                                    }
-                                    yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                WriterEvent::TextCopied { .. } => {
-                                    let (pos_type, f_x, f_y, ox, oy) = {
-                                        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
-                                        (
-                                            cfg.writer_window.pos_type,
-                                            cfg.writer_window.fixed_x,
-                                            cfg.writer_window.fixed_y,
-                                            cfg.writer_window.offset_x,
-                                            cfg.writer_window.offset_y
-                                        )
-                                    };
-                                    let (mut tx, mut ty): (i32, i32);
-                                    let mut anchor_x = 0;
-                                    let mut anchor_y = 0;
-
-                                    if pos_type == 1 {
-                                        tx = f_x;
-                                        ty = f_y;
-                                        if let Ok(Some(mon)) = handle_internal.primary_monitor() {
-                                            let h = mon.size().height as i32;
-                                            ty = h - ty;
-                                        }
-                                    } else {
-                                        use windows::Win32::Foundation::POINT;
-                                        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                                        let mut pt = POINT::default();
-                                        unsafe {
-                                            if GetCursorPos(&mut pt).is_ok() {
-                                                anchor_x = pt.x + 10;
-                                                anchor_y = pt.y + 10;
-                                            }
-                                        }
-                                        *LAST_WRITER_ANCHOR.lock().unwrap() = (anchor_x, anchor_y);
-                                        tx = anchor_x + ox;
-                                        ty = anchor_y + oy;
-                                    }
-
-                                    let outer_width: i32 = 520;
-                                    let outer_height: i32 = 450;
-
-                                    // --- ROBUST SAFETY CLAMP (same as TextSelected) ---
-                                    let mut clamped = false;
-                                    if let Ok(Some(mon)) = handle_internal.monitor_from_point(tx as f64, ty as f64) {
-                                        let sx = mon.position().x;
-                                        let sy = mon.position().y;
-                                        let sw = mon.size().width as i32;
-                                        let sh = mon.size().height as i32;
-                                        if sw > 0 && sh > 0 {
-                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                            if tx < sx { tx = sx + 10; }
-                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                            if ty < sy { ty = sy + 20; }
-                                            clamped = true;
-                                        }
-                                    }
-
-                                    if !clamped {
-                                        use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
-                                        let pt2 = windows::Win32::Foundation::POINT { x: tx, y: ty };
-                                        let hmon = unsafe { MonitorFromPoint(pt2, MONITOR_DEFAULTTOPRIMARY) };
-                                        let mut mi = MONITORINFO {
-                                            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                                            ..Default::default()
-                                        };
-                                        if unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
-                                            let rc = mi.rcWork;
-                                            let sx = rc.left;
-                                            let sy = rc.top;
-                                            let sw = rc.right - rc.left;
-                                            let sh = rc.bottom - rc.top;
-                                            if tx + outer_width > sx + sw { tx = sx + sw - outer_width - 10; }
-                                            if tx < sx { tx = sx + 10; }
-                                            if ty + outer_height > sy + sh { ty = sy + sh - outer_height - 10; }
-                                            if ty < sy { ty = sy + 20; }
-                                            clamped = true;
-                                        }
-                                    }
-
-                                    if !clamped {
-                                        tx = 100;
-                                        ty = 100;
-                                    }
-
-                                    info!("[Writer] Showing (TextCopied) at ({}, {})", tx, ty);
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            writer_hwnd,
-                                            Some(HWND_TOPMOST),
-                                            tx, ty,
-                                            outer_width, outer_height,
-                                            SWP_SHOWWINDOW,
-                                        );
-                                        let _ = ShowWindow(writer_hwnd, SW_SHOW);
-                                    }
-                                    yiboflow_core::writer::WRITER_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                WriterEvent::Hide => {
-                                    unsafe {
-                                        let _ = ShowWindow(writer_hwnd, SW_HIDE);
-                                    }
-                                    yiboflow_core::writer::WRITER_VISIBLE.store(false, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                WriterEvent::MoveWindow { x, y } => {
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            writer_hwnd,
-                                            None,
-                                            *x, *y,
-                                            0, 0,
-                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    info!("Emitting writer-event to frontend: {:?}", event);
-                    let _ = app_handle_writer.emit("writer-event", event);
-                }
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             connect_engine,
             register_engine,
             resolve_sync_conflict,
-            get_custom_prompts,
             list_endpoint_models,
             test_ai_endpoint,
             get_app_config,
             update_ai_endpoints,
-            add_custom_prompt,
-            remove_custom_prompt,
-            update_standard_prompts,
-            reset_standard_prompts,
-            stream_ai_writer,
-            dismiss_writer_window,
-            paste_writer_text,
-            get_flowwriter_config,
-            update_flowwriter_config,
             get_settings,
             update_settings,
             set_dictionary_order,
@@ -1799,14 +1060,6 @@ pub fn run() {
             get_all_dictionaries,
             save_dictionary,
             delete_dictionary,
-            diagnose_flowhint,
-            accept_hint_candidate,
-            dismiss_hint_window,
-            update_hint_position,
-            move_hint_window,
-            reset_hint_position,
-            move_writer_window,
-            update_writer_position,
             rename_local_account,
             force_override_remote,
             manual_vault_compaction,

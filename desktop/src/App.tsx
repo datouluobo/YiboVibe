@@ -6,14 +6,10 @@ import Layout from "./components/Layout";
 // Pages — Flow 全家桶
 import FlowDeck from "./pages/FlowDeck";
 import FlowMind from "./pages/FlowMind";
-import FlowWriter from "./pages/FlowWriter";
-import FlowPredict from "./pages/FlowPredict";
 import FlowSync from "./pages/FlowSync";
 import FlowDrop from "./pages/FlowDrop";
 import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
-import HintWindow from "./pages/HintWindow";
-import WriterWindow from "./pages/WriterWindow";
 import "./App.css";
 
 function App() {
@@ -72,15 +68,11 @@ function App() {
               <Route index element={<Navigate to="/app/flowdeck" replace />} />
               <Route path="flowdeck" element={<FlowDeck />} />
               <Route path="flowmind" element={<FlowMind />} />
-              <Route path="flowwriter" element={<FlowWriter />} />
-              <Route path="flowpredict" element={<FlowPredict />} />
               <Route path="flowsync" element={<FlowSync />} />
               <Route path="flowdrop" element={<FlowDrop />} />
               <Route path="flowrules" element={<FlowRules />} />
               <Route path="settings" element={<Settings />} />
             </Route>
-            <Route path="/hint" element={<HintWindow />} />
-            <Route path="/writer" element={<WriterWindow />} />
           </Routes>
         </div>
       </div>

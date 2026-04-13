@@ -1,0 +1,13 @@
+# .antigravityignore 
+# 排除大型二进制中间文件夹，防止 IDE 索引压力与内存溢出
+# 遵循 RULE[user_global] 项目轻量化准则
+
+target/
+node_modules/
+dist/
+dist-ssr/
+*.log
+*.tmp
+.tauri/
+.vite/
+.output/

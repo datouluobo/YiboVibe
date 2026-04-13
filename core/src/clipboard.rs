@@ -276,17 +276,6 @@ impl ClipboardMonitor {
 
             if should_dispatch {
                 let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
-                if config.flowwriter.trigger_copy {
-                    let was_hotkey = if let Ok(t) = crate::writer::LAST_HOTKEY_TRIGGER_TIME.lock() {
-                        t.map_or(false, |t| t.elapsed().as_millis() < 800)
-                    } else { false };
-
-                    if !was_hotkey {
-                        crate::writer::send_writer_event(crate::writer::WriterEvent::TextCopied {
-                            text: text.clone(),
-                        });
-                    }
-                }
                 if config.is_sync_enabled {
                     Self::secure_dispatch(&text, &mk, &tx, &ui_tx).await;
                 }

@@ -2,17 +2,13 @@
     "nav": {
         "flowdeck": "布告",
         "flowmind": "灵思",
-        "flowwriter": "妙笔",
-        "flowpredict": "先知",
         "flowsync": "烽火",
         "flowdrop": "走镖",
         "flowrules": "中枢",
         "settings": "偏好",
         "tooltip_flowdeck": "全局状态总览与设备连接监控",
         "tooltip_flowmind": "统一智能输入引擎，前缀展开与智能词库补全",
-        "tooltip_flowwriter": "选中文本，AI 一键润色重写",
-        "tooltip_flowpredict": "AI 根据上下文预测你接下来要输入的内容",
-        "tooltip_flowsync": "E2EE 端到端加密剪贴板实时同步",
+        "flowsync": "烽火",
         "tooltip_flowdrop": "P2P 跨设备安全文件极速传输",
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
         "tooltip_settings": "主题、语言、AI 引擎与全局偏好配置"
@@ -86,7 +82,7 @@
         "btn_export": "导出配置",
         "btn_import": "导入配置",
         "ai_engine_title": "AI 引擎配置",
-        "ai_engine_desc": "配置 FlowWriter 妙笔与 FlowPredict 先知使用的 AI 后端。",
+        "ai_engine_desc": "配置灵思词库等功能使用的 AI 后端。",
         "ai_provider": "服务商",
         "ai_endpoint": "API 端点",
         "ai_apikey": "API Key",
@@ -96,9 +92,7 @@
         "ai_mode_local": "本机 / 局域网",
         "ai_test_btn": "测试连接",
         "ai_status_ok": "连接正常",
-        "ai_status_fail": "连接失败",
-        "hotkey_flowwriter": "FlowWriter 妙笔快捷键",
-        "hotkey_flowpredict": "FlowPredict 先知快捷键"
+        "ai_status_fail": "连接失败"
     },
     "snippets": {
         "title": "FlowSnap · 锦囊",
@@ -153,19 +147,7 @@
         "editor_back": "返回",
         "editor_bind_apps": "绑定应用"
     },
-    "flowwriter": {
-        "title": "FlowWriter · 妙笔",
-        "subtitle": "选中文本，AI 一键润色，妙笔生花。",
-        "wip_message": "此功能正在精心打磨中，敬请期待...",
-        "hotkey_label": "触发快捷键",
-        "prompt_template": "润色提示词模板"
-    },
-    "flowpredict": {
-        "title": "FlowPredict · 先知",
-        "subtitle": "AI 上下文感知，未卜先知您的下一段输入。",
-        "wip_message": "此功能正在精心打磨中，敬请期待...",
-        "hotkey_label": "触发快捷键"
-    },
+
     "flowrules": {
         "title": "FlowRules · 中枢",
         "subtitle": "按应用精细控制每个功能模块的生效策略。",
@@ -176,8 +158,6 @@
         "col_app": "应用程序",
         "col_flowsnap": "锦囊",
         "col_flowhint": "灵犀",
-        "col_flowwriter": "妙笔",
-        "col_flowpredict": "先知",
         "col_flowsync": "烽火",
         "state_on": "启用",
         "state_off": "禁用",
