@@ -19,6 +19,23 @@ import("@tauri-apps/api/event").then(({ listen }) => {
   });
 });
 
+import HintWindow from "./pages/HintWindow";
+import { HashRouter } from "react-router-dom";
+
+const isHintOverlay = window.location.hash.includes('#/hint');
+
+console.log("Rendering attempt:", { hash: window.location.hash, isHintOverlay });
+
+if (isHintOverlay) {
+  document.body.style.background = 'transparent';
+  document.body.style.backgroundImage = 'none';
+  document.documentElement.style.background = 'transparent';
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <App />
+  isHintOverlay ? (
+    <HashRouter><HintWindow /></HashRouter>
+  ) : (
+    <App />
+  )
 );

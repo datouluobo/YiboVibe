@@ -1,7 +1,7 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-    LayoutDashboard, Sparkles, PenTool, BrainCircuit,
+    LayoutDashboard, Sparkles,
     Flame, Truck, ShieldCheck, Settings, LogOut
 } from "lucide-react";
 

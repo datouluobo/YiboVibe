@@ -3,6 +3,10 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
+lazy_static::lazy_static! {
+    static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
+}
+
 use yiboflow_core::api::{ApiClient, LoginRequest, RegisterRequest};
 use yiboflow_core::clipboard::ClipboardMonitor;
 use yiboflow_core::crypto::MasterKey;
@@ -936,6 +940,92 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
     Ok(())
 }
 
+#[tauri::command]
+fn diagnose_flowhint() -> Result<String, String> {
+    let dicts = yiboflow_core::dictionary::get_all_dictionaries();
+    let mut report = String::new();
+    report.push_str("--- LingSi (FlowHint) Diagnostic Report ---\n\n");
+    report.push_str(&format!("Loaded Dictionaries: {}\n", dicts.len()));
+    for d in &dicts {
+        report.push_str(&format!("  - {} (ID: {}, Entries: {})\n", d.name, d.id, d.entries.len()));
+    }
+    
+    let default_rules = yiboflow_core::rules::get_rules().default;
+    report.push_str(&format!("\nDefault FlowHint Enabled: {}\n", default_rules.flowhint));
+    
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(hint) = yiboflow_core::hook_manager::CURRENT_HINT.lock() {
+            report.push_str(&format!("Hook Status: Active={}\n", hint.is_active));
+            report.push_str(&format!("Current Buffer Matches: {}\n", hint.candidates.len()));
+        }
+    }
+    
+    // 6. HINT_TX status
+    let tx_set = yiboflow_core::hook_manager::HINT_TX.lock().map(|tx| tx.is_some()).unwrap_or(false);
+    report.push_str(&format!("[Channel] HINT_TX is_set={}\n", tx_set));
+
+    // 7. Try actually sending a test event
+    if tx_set {
+        yiboflow_core::hook_manager::set_hint_tx_test_send();
+        report.push_str("[Channel] Sent test HintEvent::Show (Event loop will handle SW_SHOWNOACTIVATE)\n");
+    }
+
+    report.push_str("\nEngine: Ready\n");
+    Ok(report)
+}
+
+#[tauri::command]
+fn accept_hint_candidate(index: usize) -> Result<(), String> {
+    yiboflow_core::hook_manager::accept_hint_by_index(index);
+    Ok(())
+}
+
+#[tauri::command]
+fn dismiss_hint_window() -> Result<(), String> {
+    yiboflow_core::hook_manager::dismiss_hint();
+    Ok(())
+}
+
+#[tauri::command]
+fn update_hint_position(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    if cfg.hint_window.pos_type == 0 {
+        // Follow mode: update relative offsets
+        let anchor = LAST_HINT_ANCHOR.lock().unwrap();
+        cfg.hint_window.offset_x = x - anchor.0;
+        cfg.hint_window.offset_y = y - anchor.1;
+    } else {
+        // Fixed mode: update absolute coordinates
+        cfg.hint_window.fixed_x = x;
+        cfg.hint_window.fixed_y = y;
+    }
+    cfg.save();
+    let _ = app.emit("config-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn move_hint_window(x: i32, y: i32) -> Result<(), String> {
+    if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
+        let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow { x, y });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_hint_position() -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+    cfg.hint_window.fixed_x = -1;
+    cfg.hint_window.fixed_y = -1;
+    cfg.hint_window.offset_x = 0;
+    cfg.hint_window.offset_y = 0;
+    cfg.hint_window.pos_type = 0;
+    cfg.save();
+    info!("Hint window position has been force-reset to defaults.");
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[tauri::command]
 fn regenerate_device_fingerprint() -> Result<String, String> {
@@ -1032,6 +1122,150 @@ pub fn run() {
                 }
             });
 
+            // Dynamically create the Hint window so window-state-plugin ignores it
+            let hint_win = tauri::WebviewWindowBuilder::new(
+                app,
+                "hint",
+                tauri::WebviewUrl::App("/#/hint".into()),
+            )
+            .title("FlowHint")
+            .inner_size(300.0, 280.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .visible(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .build()
+            .unwrap();
+
+            // Get Win32 HWND for direct window management (no focus stealing)
+            #[cfg(target_os = "windows")]
+            let hint_hwnd = {
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
+                let raw_hwnd = hint_win.hwnd().unwrap();
+                let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
+                unsafe {
+                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                    // WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080
+                    // IMPORTANT: Explicitly REMOVE WS_EX_TRANSPARENT (0x20) to ensure clicks are caught!
+                    let new_style = (ex_style | 0x08000000i32 | 0x00000080i32) & !0x00000020i32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
+                    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED};
+                    let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                }
+                hwnd
+            };
+
+            // Bridge FlowHint events from Hook to Tauri Frontend
+            let (hint_tx, hint_rx) = std::sync::mpsc::channel();
+            yiboflow_core::hook_manager::set_hint_tx(hint_tx);
+            let app_handle = app.handle().clone();
+            #[cfg(target_os = "windows")]
+            let hint_hwnd_raw = hint_hwnd.0 as isize;
+            std::thread::spawn(move || {
+                use yiboflow_core::hook_manager::HintEvent;
+                while let Ok(event) = hint_rx.recv() {
+                    let ev_clone = event.clone();
+                    let app_handle_inner = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let hint_hwnd = windows::Win32::Foundation::HWND(hint_hwnd_raw as *mut _);
+                            use windows::Win32::UI::WindowsAndMessaging::{
+                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
+                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOZORDER, SWP_NOSIZE,
+                            };
+                            match &ev_clone {
+                                HintEvent::Show { candidates, x, y, .. } => {
+                                    let visible_count = candidates.len().min(8) as i32;
+                                    let inner_height = 95 + (visible_count * 38);
+                                    let outer_height = inner_height;
+                                    let outer_width = 300;
+
+                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy) = {
+                                        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+                                        (
+                                            cfg.hint_window.pos_type,
+                                            cfg.hint_window.fixed_x,
+                                            cfg.hint_window.fixed_y,
+                                            cfg.hint_window.offset_x,
+                                            cfg.hint_window.offset_y
+                                        )
+                                    };
+
+                                    let mut pos_x = *x;
+                                    let mut pos_y = *y;
+
+                                    let is_diag = candidates.get(0).map(|s| s.contains("[诊断]")).unwrap_or(false);
+                                    if is_diag {
+                                        pos_x = 400;
+                                        pos_y = 400;
+                                    } else if cfg_pos_type == 0 {
+                                        *LAST_HINT_ANCHOR.lock().unwrap() = (pos_x, pos_y);
+                                        pos_x += cfg_ox;
+                                        pos_y += cfg_oy;
+                                        if cfg_oy == 0 { pos_y += 20; }
+                                    } else {
+                                        if cfg_x != -1 { pos_x = cfg_x; }
+                                        if cfg_y != -1 { pos_y = cfg_y; }
+                                    }
+
+                                    // Safety clamp
+                                    if let Ok(Some(monitor)) = app_handle_inner.monitor_from_point(pos_x as f64, pos_y as f64) {
+                                        let screen_x = monitor.position().x;
+                                        let screen_y = monitor.position().y;
+                                        let screen_w = monitor.size().width as i32;
+                                        let screen_h = monitor.size().height as i32;
+                                        if pos_x + outer_width > screen_x + screen_w {
+                                            pos_x = screen_x + screen_w - outer_width - 10;
+                                        }
+                                        if pos_x < screen_x { pos_x = screen_x + 10; }
+                                        if pos_y + outer_height > screen_y + screen_h {
+                                            pos_y = screen_y + screen_h - outer_height - 10;
+                                        }
+                                        if pos_y < screen_y { pos_y = screen_y + 20; }
+                                    }
+
+                                    unsafe {
+                                        info!("Clamped Position: ({}, {})", pos_x, pos_y);
+                                        let _ = SetWindowPos(
+                                            hint_hwnd,
+                                            Some(HWND_TOPMOST),
+                                            pos_x, pos_y,
+                                            outer_width, outer_height,
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                        );
+                                        let _ = ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
+                                    }
+                                }
+                                HintEvent::Hide => {
+                                    unsafe {
+                                        let _ = ShowWindow(hint_hwnd, SW_HIDE);
+                                    }
+                                }
+                                HintEvent::MoveWindow { x, y } => {
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            hint_hwnd,
+                                            None,
+                                            *x, *y,
+                                            0, 0,
+                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+
+                    // Always emit event to frontend for content updates
+                    let _ = app_handle.emit("hint-event", event);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1067,6 +1301,12 @@ pub fn run() {
             get_cluster_devices,
             resolve_file_conflicts,
             regenerate_device_fingerprint,
+            diagnose_flowhint,
+            accept_hint_candidate,
+            dismiss_hint_window,
+            update_hint_position,
+            move_hint_window,
+            reset_hint_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

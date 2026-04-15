@@ -62,22 +62,118 @@ fn send_ctrl_c() {
 }
 
 
-
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub enum HintSource {
+    FlowHint,
+    FlowSnapMulti,
+}
 
 lazy_static::lazy_static! {
     static ref KEY_BUFFER: Mutex<String> = Mutex::new(String::new());
-    static ref CURRENT_HINT: Mutex<HintState> = Mutex::new(HintState {
+    pub static ref CURRENT_HINT: Mutex<HintState> = Mutex::new(HintState {
         is_active: false,
         candidates: vec![],
         selected_index: 0,
         prefix_lens: vec![],
+        source: HintSource::FlowHint,
         snap_backspace_count: 0,
         is_buffered: false,
     });
     static ref LAST_HWND: Mutex<isize> = Mutex::new(0);
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", content = "data")]
+pub enum HintEvent {
+    Show {
+        candidates: Vec<String>,
+        selected_index: usize,
+        x: i32,
+        y: i32,
+    },
+    UpdateSelection(usize),
+    Hide,
+    MoveWindow {
+        x: i32,
+        y: i32,
+    },
+}
 
+pub static HINT_TX: Mutex<Option<std::sync::mpsc::Sender<HintEvent>>> = Mutex::new(None);
+
+pub fn set_hint_tx(tx: std::sync::mpsc::Sender<HintEvent>) {
+    if let Ok(mut lock) = HINT_TX.lock() {
+        *lock = Some(tx);
+    }
+}
+
+fn send_hint_event(event: HintEvent) {
+    if let Ok(lock) = HINT_TX.lock() {
+        if let Some(tx) = lock.as_ref() {
+            let _ = tx.send(event);
+        }
+    }
+}
+
+pub fn set_hint_tx_test_send() {
+    send_hint_event(HintEvent::Show {
+        candidates: vec!["[诊断] git init".to_string(), "[诊断] git status".to_string()],
+        selected_index: 0,
+        x: 300,
+        y: 300,
+    });
+}
+
+/// Accept a FlowHint candidate by index (called from frontend mouse click)
+pub fn accept_hint_by_index(index: usize) {
+    let mut data_opt = None;
+
+    if let Ok(mut hs) = CURRENT_HINT.lock() {
+        if hs.is_active && index < hs.candidates.len() {
+            let candidate = hs.candidates[index].clone();
+            let prefix_len = hs.prefix_lens.get(index).copied().unwrap_or(0);
+            data_opt = Some((candidate, prefix_len, hs.source.clone(), hs.is_buffered, hs.snap_backspace_count));
+            hs.is_active = false;
+        }
+    }
+
+    if let Some((candidate, prefix_len, source, is_buffered, bs_count)) = data_opt {
+        send_hint_event(HintEvent::Hide);
+        if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+
+        #[cfg(target_os = "windows")]
+        std::thread::spawn(move || {
+            // Try to restore the original window focus if clicked from Tauri UI
+            if let Ok(last_hwnd_val) = LAST_HWND.lock().map(|h| *h) {
+                if last_hwnd_val != 0 {
+                    let hwnd = windows::Win32::Foundation::HWND(last_hwnd_val as _);
+                    unsafe {
+                        windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(30)); // allow focus sequence to finish
+                }
+            }
+            
+            if source == HintSource::FlowSnapMulti || is_buffered {
+                replace_text_with_snippet(&candidate, bs_count);
+            } else {
+                let suffix: String = candidate.chars().skip(prefix_len).collect();
+                if !suffix.is_empty() {
+                    paste_text_only(&suffix);
+                }
+            }
+        });
+    }
+}
+
+/// Dismiss the hint window
+pub fn dismiss_hint() {
+    if let Ok(mut hint_state) = CURRENT_HINT.lock() {
+        hint_state.is_active = false;
+        drop(hint_state);
+        send_hint_event(HintEvent::Hide);
+    }
+}
 
 #[cfg(target_os = "windows")]
 unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> {
@@ -116,6 +212,7 @@ pub struct HintState {
     pub candidates: Vec<String>,
     pub selected_index: usize,
     pub prefix_lens: Vec<usize>,
+    pub source: HintSource,
     pub snap_backspace_count: usize,
     pub is_buffered: bool,
 }
@@ -197,7 +294,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
         
         // ---------------------------------------------------------
-        // 1. FlowWriter Hotkey Check (Alt+Q by default)
+        // 1. FlowWriter Hotkey Check — removed in v0.8.0
         // ---------------------------------------------------------
 
 
@@ -230,13 +327,69 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
         log::info!("[FlowSnap-DBG] key=0x{:X} ime_cn={} exe={}", key_code, is_ime_chinese_mode, exe_name);
 
-        // 2. Feature Check (FlowSnap only now, FlowHint/Xianzhi removed)
-        let snippets_active = crate::rules::is_feature_enabled(&exe_name, crate::rules::Feature::FlowSnap);
+        // 2. Hint UI Logic (Using try_lock to be cross-thread safe)
+        let hint_res = {
+            if let Ok(mut hs) = CURRENT_HINT.try_lock() {
+                let s_active = crate::rules::is_feature_enabled(&exe_name, crate::rules::Feature::FlowSnap);
+                let a_active = crate::rules::is_feature_enabled(&exe_name, crate::rules::Feature::FlowHint);
+                
+                let mut act = 0; // 0=none, 1=confirm, 2=hide, 3=up, 4=down
+                let mut idx = 0;
 
+                if hs.is_active {
+                    if key_code == 0x09 || key_code == 0x27 { // Tab or Right
+                        idx = hs.selected_index;
+                        act = 1;
+                    } else if key_code == 0x1B { // ESC
+                        hs.is_active = false;
+                        act = 2;
+                    } else if key_code == 0x26 { // Up
+                        if hs.selected_index > 0 {
+                            hs.selected_index -= 1;
+                            idx = hs.selected_index;
+                            act = 3;
+                        }
+                    } else if key_code == 0x28 { // Down
+                        if hs.selected_index + 1 < hs.candidates.len() {
+                            hs.selected_index += 1;
+                            idx = hs.selected_index;
+                            act = 4;
+                        }
+                    }
+                }
+                
+                // Add action for Chinese Mode auto-hide
+                let mut ime_hide = false;
+                if hs.is_active && hs.source == HintSource::FlowHint && is_ime_chinese_mode && (0x41..=0x5A).contains(&key_code) {
+                    hs.is_active = false;
+                    ime_hide = true;
+                }
 
+                (s_active, a_active, act, idx, ime_hide)
+            } else { (false, false, 0, 0, false) }
+        };
 
+        let snippets_active = hint_res.0;
+        let autofill_active = hint_res.1;
 
+        if hint_res.4 { send_hint_event(HintEvent::Hide); }
 
+        match hint_res.2 {
+            1 => {
+                accept_hint_by_index(hint_res.3);
+                return LRESULT(1);
+            }
+            2 => {
+                send_hint_event(HintEvent::Hide);
+                if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+                return LRESULT(1);
+            }
+            3 | 4 => {
+                send_hint_event(HintEvent::UpdateSelection(hint_res.3));
+                return LRESULT(1);
+            }
+            _ => {}
+        }
 
         let is_shift = {
             use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
@@ -304,7 +457,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             let mut matched_trigger: Option<String> = None;
             let mut matched_replacements: Vec<String> = Vec::new();
             // FlowSnap: ALWAYS attempt matching regardless of IME state
-            // (Chinese-mode replacement is handled via ESC+paste with 0 backspaces)
             if snippets_active {
                 let snap_table = crate::smart_router::build_snap_table();
                 for (trigger, replacements) in snap_table.iter() {
@@ -317,7 +469,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 }
             }
 
-            // hint_state_opt lock released automatically
             let mut matched_snap = false;
             // 5. Apply FlowSnap
             if let Some(trigger) = matched_trigger {
@@ -335,17 +486,48 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         });
                         return LRESULT(1);
                     } else {
-                        // Since HintWindow is deleted, FlowSnapMulti defaults to picking first candidate
-                        let target = matched_replacements[0].clone();
-                        thread::spawn(move || {
-                            replace_text_with_snippet(&target, bs_actual);
-                        });
+                        if let Ok(mut hs) = CURRENT_HINT.lock() {
+                            hs.is_active = true;
+                            hs.candidates = matched_replacements.clone();
+                            hs.selected_index = 0;
+                            hs.source = HintSource::FlowSnapMulti;
+                            hs.snap_backspace_count = bs_actual;
+                            hs.is_buffered = false;
+                            
+                            let (mut cx, mut cy) = (0, 0);
+                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } { cx = px; cy = py; }
+                            send_hint_event(HintEvent::Show { 
+                                candidates: matched_replacements.clone(), 
+                                selected_index: 0, x: cx, y: cy 
+                            });
+                        }
                         return LRESULT(1);
                     }
                 }
             }
 
-
+            if !matched_snap && !is_ime_chinese_mode {
+                if autofill_active && !buf.is_empty() {
+                    let dict_ids = crate::rules::get_app_flowhint_dicts(&active_exe);
+                    let cands_with_len = crate::dictionary::search_candidates_tail(&dict_ids, &buf);
+                    if !cands_with_len.is_empty() {
+                        let cands: Vec<String> = cands_with_len.iter().map(|(c, _)| c.clone()).collect();
+                        let prefix_lens: Vec<usize> = cands_with_len.iter().map(|(_, l)| *l).collect();
+                        if let Ok(mut hs) = CURRENT_HINT.lock() {
+                            hs.is_active = true; hs.candidates = cands.clone();
+                            hs.selected_index = 0; hs.prefix_lens = prefix_lens;
+                            hs.source = HintSource::FlowHint; hs.is_buffered = false;
+                            let (mut cx, mut cy) = (0, 0);
+                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } { cx = px; cy = py; }
+                            send_hint_event(HintEvent::Show { candidates: cands, selected_index: 0, x: cx, y: cy });
+                        }
+                    } else {
+                        if let Ok(mut hs) = CURRENT_HINT.lock() {
+                            if hs.is_active { hs.is_active = false; send_hint_event(HintEvent::Hide); }
+                        }
+                    }
+                }
+            }
         }
     }
     unsafe { CallNextHookEx(None, ncode, wparam, lparam) }

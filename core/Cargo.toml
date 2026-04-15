@@ -1,7 +1,8 @@
 [package]
 name = "yiboflow-core"
-version = "0.8.0"
-edition = "2024"
+version = "0.8.1"
+edition = "2021"
+authors = ["YiboFlow Team"]
 
 [dependencies]
 # Async Runtime & Networking

@@ -41,6 +41,27 @@ pub struct AiEngineConfig {
 
 
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WindowConfig {
+    pub pos_type: i32, // 0: Follow, 1: Fixed
+    pub fixed_x: i32,
+    pub fixed_y: i32,
+    pub offset_x: i32,
+    pub offset_y: i32,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            pos_type: 0,
+            fixed_x: -1,
+            fixed_y: -1,
+            offset_x: 0,
+            offset_y: 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SearchEngine {
     pub name: String,
@@ -67,6 +88,10 @@ pub struct AppConfig {
     pub dictionary_order: Vec<String>,
     #[serde(default = "default_fingerprint")]
     pub device_fingerprint: String,
+    #[serde(default)]
+    pub hint_window: WindowConfig,
+    #[serde(default)]
+    pub is_window_config_unified: bool,
 }
 
 fn default_min_chars() -> usize { 2 }
@@ -157,6 +182,8 @@ impl AppConfig {
             sync_meta: crate::sync::SyncMeta::default(),
             dictionary_order: Vec::new(),
             device_fingerprint: default_fingerprint(),
+            hint_window: WindowConfig::default(),
+            is_window_config_unified: false,
         };
         cfg.save();
         cfg

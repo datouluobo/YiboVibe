@@ -10,6 +10,7 @@ import FlowSync from "./pages/FlowSync";
 import FlowDrop from "./pages/FlowDrop";
 import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
+import HintWindow from "./pages/HintWindow";
 import "./App.css";
 
 function App() {
@@ -64,6 +65,7 @@ function App() {
         <div className="main-content" style={{ display: 'flex' }}>
           <Routes>
             <Route path="/" element={<Login />} />
+            <Route path="/hint" element={<HintWindow />} />
             <Route path="/app" element={<Layout />}>
               <Route index element={<Navigate to="/app/flowdeck" replace />} />
               <Route path="flowdeck" element={<FlowDeck />} />

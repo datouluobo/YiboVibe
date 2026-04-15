@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
-import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages, Save, UploadCloud, DownloadCloud, ServerCog, AlertTriangle, AlertCircle, Box, ToggleRight, ToggleLeft, ShieldCheck, ShieldAlert, Activity, RefreshCw, GripVertical, BrainCircuit, Plus, Trash2, ChevronDown } from "lucide-react";
+import { Palette, Monitor, Laptop, Zap, CheckCircle2, Languages, Save, UploadCloud, DownloadCloud, ServerCog, AlertTriangle, AlertCircle, ToggleRight, ToggleLeft, ShieldCheck, ShieldAlert, Activity, RefreshCw, GripVertical, BrainCircuit, Plus, Trash2, ChevronDown } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { Reorder, useDragControls } from "framer-motion";
