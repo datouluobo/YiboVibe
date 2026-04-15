@@ -396,6 +396,26 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             (unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000) != 0
         };
 
+        let is_ctrl_alt_win = {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN};
+            let ctrl = (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0;
+            let alt = (unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } as u16 & 0x8000) != 0;
+            let lwin = (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0;
+            let rwin = (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0;
+            ctrl || alt || lwin || rwin
+        };
+
+        if is_ctrl_alt_win {
+            if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+            if let Ok(mut hs) = CURRENT_HINT.lock() {
+                if hs.is_active {
+                    hs.is_active = false;
+                    send_hint_event(HintEvent::Hide);
+                }
+            }
+            return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
+        }
+
         if (0x41..=0x5A).contains(&key_code) {
             if let Some(ch) = std::char::from_u32(key_code + 32) {
                 if let Ok(mut buf) = KEY_BUFFER.lock() {
