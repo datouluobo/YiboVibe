@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.8.1"
+version = "0.8.4"
 description = "YiboFlow Desktop Native"
 authors = ["YiboFlow Team"]
 edition = "2021"
@@ -32,6 +32,9 @@ tauri-plugin-single-instance = "2.0.0"
 tauri-plugin-autostart = "2"
 lazy_static = "1.4.0"
 uuid = { version = "1.0", features = ["v4"] }
+arboard = "3.4"
+base64 = "0.22.1"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

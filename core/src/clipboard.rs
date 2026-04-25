@@ -382,14 +382,14 @@ impl ClipboardMonitor {
     }
 
     async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>) {
-        let preview = if plaintext.chars().count() > 15 {
-            format!("{}...", plaintext.chars().take(15).collect::<String>())
+        let log_preview = if plaintext.chars().count() > 40 {
+            format!("{}...", plaintext.chars().take(40).collect::<String>())
         } else {
             plaintext.to_string()
         };
         info!(
             "[Intercepted] Preparing to E2EE encrypt locally: {:?}",
-            preview
+            log_preview
         );
 
         // 1. Generate fresh DK
@@ -435,7 +435,7 @@ impl ClipboardMonitor {
             if let Some(chan) = ui_tx {
                 let _ = chan.send(ClipboardEvent {
                     status: "sent".to_string(),
-                    preview: preview.clone(),
+                    preview: plaintext.to_string(),
                 }).await;
             }
         }
@@ -613,10 +613,9 @@ impl ClipboardMonitor {
 
                         if Self::try_set_clipboard_text(&plaintext, 5, Duration::from_millis(100)).await {
                             if let Some(chan) = ui_tx.as_ref() {
-                                let preview = if plaintext.len() > 15 { format!("{}...", &plaintext[..15]) } else { plaintext.clone() };
                                 let _ = chan.send(ClipboardEvent {
                                     status: "received".to_string(),
-                                    preview,
+                                    preview: plaintext.clone(),
                                 }).await;
                             }
                         } else {

@@ -4977,9 +4977,12 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.8.1"
+version = "0.8.4"
 dependencies = [
+ "arboard",
+ "base64 0.22.1",
  "env_logger",
+ "image 0.24.9",
  "lazy_static",
  "log",
  "serde",
@@ -7055,7 +7058,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "yiboflow-core"
-version = "0.8.1"
+version = "0.8.4"
 dependencies = [
  "aes-gcm",
  "arboard",

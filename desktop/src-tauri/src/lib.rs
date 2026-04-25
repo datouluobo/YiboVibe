@@ -941,6 +941,78 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
 }
 
 #[tauri::command]
+fn read_clipboard_content() -> Result<serde_json::Value, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        // Try text first
+        if let Ok(text) = cb.get_text() {
+            if !text.is_empty() {
+                return Ok(serde_json::json!({
+                    "type": "text",
+                    "content": text,
+                }));
+            }
+        }
+    }
+
+    // Try image
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        if let Ok(img) = cb.get_image() {
+            let width = img.width as u32;
+            let height = img.height as u32;
+            if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, img.bytes.into_owned()) {
+                let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
+                let mut buf = std::io::Cursor::new(Vec::new());
+                if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                    let encoded = STANDARD.encode(buf.into_inner());
+                    return Ok(serde_json::json!({
+                        "type": "image",
+                        "content": format!("data:image/png;base64,{}", encoded),
+                        "width": width,
+                        "height": height,
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({ "type": "empty" }))
+}
+
+#[tauri::command]
+fn write_to_clipboard(content: String) -> Result<(), String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| format!("Clipboard open failed: {}", e))?;
+    cb.set_text(content).map_err(|e| format!("Clipboard write failed: {}", e))
+}
+
+#[tauri::command]
+fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let data_uri = image_base64.trim();
+    let b64_str = if data_uri.starts_with("data:image/") {
+        data_uri.split(",").nth(1).unwrap_or("")
+    } else {
+        data_uri
+    };
+
+    let bytes = STANDARD.decode(b64_str).map_err(|e| format!("Base64 decode failed: {}", e))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("Image parse failed: {}", e))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+
+    let img_data = arboard::ImageData {
+        width: w as usize,
+        height: h as usize,
+        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+    };
+
+    let mut cb = arboard::Clipboard::new().map_err(|e| format!("Clipboard open failed: {}", e))?;
+    cb.set_image(img_data).map_err(|e| format!("Clipboard write failed: {}", e))
+}
+
+#[tauri::command]
 fn diagnose_flowhint() -> Result<String, String> {
     let dicts = yiboflow_core::dictionary::get_all_dictionaries();
     let mut report = String::new();
@@ -1307,6 +1379,9 @@ pub fn run() {
             update_hint_position,
             move_hint_window,
             reset_hint_position,
+            read_clipboard_content,
+            write_to_clipboard,
+            write_image_to_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
