@@ -56,13 +56,14 @@ export default function Cloudboard() {
     }, []);
 
     return (
-        <div style={{ animation: 'fadeIn 0.4s ease-out', maxWidth: '900px', margin: '0 auto', paddingBottom: '40px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+        <div style={{ width: '100%', paddingBottom: '40px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '28px' }}>
                 <div>
-                    <h1 style={{ fontSize: '28px', fontWeight: 600, marginBottom: '8px', color: 'var(--color-text-main)' }}>
-                        {t('nav.cloudboard')}
+                    <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
+                        <ClipboardCopy size={22} color="var(--color-primary)" />
+                        {t('sync.title')}
                     </h1>
-                    <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>
+                    <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
                         {t('sync.subtitle')}
                     </p>
                 </div>
@@ -85,13 +86,6 @@ export default function Cloudboard() {
             </div>
 
             <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-                <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--color-glass-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.1)' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <ClipboardCopy size={18} color="var(--color-text-muted)" />
-                        {t('sync.activity_stream_title')}
-                    </h3>
-                </div>
-
                 <div style={{ minHeight: '300px' }}>
                     {clipboardLogs.length === 0 ? (
                         <div style={{ padding: '80px 20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>

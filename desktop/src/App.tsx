@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Login from "./pages/Login";
@@ -8,56 +8,86 @@ import FlowDeck from "./pages/FlowDeck";
 import FlowMind from "./pages/FlowMind";
 import FlowSync from "./pages/FlowSync";
 import FlowDrop from "./pages/FlowDrop";
+import FlowProbe from "./pages/FlowProbe";
 import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
 import HintWindow from "./pages/HintWindow";
 import "./App.css";
 
+const appWindow = (() => {
+  try { return getCurrentWindow(); } catch { return null; }
+})();
+
 function App() {
-  let appWindow: any = null;
-  try {
-    appWindow = getCurrentWindow();
-  } catch (e) {
-    console.warn("Not running in Tauri environment, skipping window APIs");
-  }
+  const [isMaximized, setIsMaximized] = useState(false);
+  const lastClickRef = { time: 0, x: 0, y: 0 };
 
   useEffect(() => {
     const theme = localStorage.getItem('yiboflow_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', theme);
   }, []);
 
+  useEffect(() => {
+    if (!appWindow) return;
+    appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+    const unlisten = appWindow.onResized(() => {
+      appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  const handleTitlebarMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || !appWindow) return;
+    if ((e.target as HTMLElement).closest('.titlebar-controls')) return;
+
+    const now = Date.now();
+    const isDoubleClick =
+      now - lastClickRef.time < 400 &&
+      Math.abs(e.clientX - lastClickRef.x) < 5 &&
+      Math.abs(e.clientY - lastClickRef.y) < 5;
+
+    lastClickRef.time = now;
+    lastClickRef.x = e.clientX;
+    lastClickRef.y = e.clientY;
+
+    if (isDoubleClick) {
+      appWindow.toggleMaximize();
+    } else {
+      appWindow.startDragging();
+    }
+  };
+
   return (
     <Router>
       <div className="app-container">
-        {/* Tauri Titlebar - Draggable Area */}
         <div
           className="titlebar"
-          onPointerDown={(e) => {
-            if (e.buttons === 1) {
-              appWindow.startDragging();
-            }
-          }}
+          onMouseDown={handleTitlebarMouseDown}
         >
           <span className="titlebar-title">YiboFlow</span>
-          <div className="titlebar-controls" onPointerDown={(e) => e.stopPropagation()}>
-            <div
+          <div className="titlebar-controls">
+            <button
               className="titlebar-button minimize"
-              onClick={() => appWindow.minimize()}
+              onClick={() => appWindow?.minimize()}
             >
-              <svg viewBox="0 0 10 10"><path d="M1 4h8v2H1z" /></svg>
-            </div>
-            <div
+              <svg viewBox="0 0 10 10"><path d="M1 4h8v2H1z" fill="currentColor" /></svg>
+            </button>
+            <button
               className="titlebar-button maximize"
-              onClick={() => appWindow.toggleMaximize()}
+              onClick={() => appWindow?.toggleMaximize()}
             >
-              <svg viewBox="0 0 10 10"><path d="M1 1h8v8H1z" fill="none" stroke="currentColor" /></svg>
-            </div>
-            <div
+              {isMaximized ? (
+                <svg viewBox="0 0 10 10"><path d="M2.5 3.5h4v4h-4z" fill="none" stroke="currentColor" strokeWidth="1" /><path d="M3.5 3.5V2h4v4H6" fill="none" stroke="currentColor" strokeWidth="1" /></svg>
+              ) : (
+                <svg viewBox="0 0 10 10"><path d="M1 1h8v8H1z" fill="none" stroke="currentColor" strokeWidth="1" /></svg>
+              )}
+            </button>
+            <button
               className="titlebar-button close"
-              onClick={() => appWindow.close()}
+              onClick={() => appWindow?.close()}
             >
               <svg viewBox="0 0 10 10"><path d="M1 1l8 8m0-8L1 9" stroke="currentColor" strokeWidth="1.5" /></svg>
-            </div>
+            </button>
           </div>
         </div>
 
@@ -72,6 +102,7 @@ function App() {
               <Route path="flowmind" element={<FlowMind />} />
               <Route path="flowsync" element={<FlowSync />} />
               <Route path="flowdrop" element={<FlowDrop />} />
+              <Route path="flowprobe" element={<FlowProbe />} />
               <Route path="flowrules" element={<FlowRules />} />
               <Route path="settings" element={<Settings />} />
             </Route>

@@ -20,12 +20,9 @@ function StatusBadge({ status, label }: { status: 'ok' | 'warn' | 'error'; label
     );
 }
 
-function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function SectionCard({ children }: { title?: string; icon?: React.ReactNode; children: React.ReactNode }) {
     return (
         <div className="glass-panel" style={{ padding: '18px', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-dim)' }}>
-                {icon}{title}
-            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {children}
             </div>
@@ -99,7 +96,7 @@ export default function FlowDeck() {
     const isRemote = localStorage.getItem('yiboflow_server_url') && localStorage.getItem('yiboflow_server_url') !== 'local';
 
     return (
-        <div style={{ maxWidth: '920px' }}>
+        <div style={{ width: '100%', paddingBottom: '40px' }}>
             <div style={{ marginBottom: '28px' }}>
                 <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
                     <LayoutDashboard size={22} color="var(--color-primary)" />

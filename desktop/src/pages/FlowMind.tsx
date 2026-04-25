@@ -298,16 +298,24 @@ export default function FlowMind() {
     };
 
     return (
-        <div style={{ animation: 'fadeIn 0.4s ease-out', maxWidth: '900px', margin: '0 auto', paddingBottom: '40px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+        <div style={{ width: '100%', paddingBottom: '40px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '28px' }}>
                 <div>
-                    <h1 style={{ fontSize: '28px', fontWeight: 600, marginBottom: '8px', color: 'var(--color-text-main)' }}>
-                        <Sparkles size={22} color="var(--color-primary)" style={{ verticalAlign: 'middle', marginRight: '10px' }} />
-                        {t('nav.flowmind', 'FlowMind · 灵思')}
+                    <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
+                        <Sparkles size={22} color="var(--color-primary)" />
+                        {t('flowmind.title')}
                     </h1>
-                    <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>
-                        {t('nav.tooltip_flowmind', '统一智能输入引擎，前缀展开与智能词库补全')}
+                    <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
+                        {t('flowmind.subtitle')}
                     </p>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '100px', background: 'var(--color-primary-glow)', color: 'var(--color-primary)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.3px' }}>
+                            FlowSnap 锦囊
+                        </span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontSize: '11px', fontWeight: 600, letterSpacing: '0.3px' }}>
+                            FlowHint 灵犀
+                        </span>
+                    </div>
                 </div>
 
                 <button
@@ -333,14 +341,9 @@ export default function FlowMind() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
                 <div className="glass-panel" style={{ padding: '16px 20px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                        <h3 style={{ fontSize: '15px', fontWeight: 600, margin: '0 0 4px 0', color: 'var(--color-text-main)' }}>
-                            词库触发最小字数
-                        </h3>
-                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
-                            输入达到多少字母后才开始前缀候选。
-                        </p>
-                    </div>
+                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
+                        词库触发最小字数
+                    </p>
                     <div style={{ flexShrink: 0, marginLeft: '16px' }}>
                         <input
                             type="number"
@@ -355,14 +358,9 @@ export default function FlowMind() {
                 </div>
 
                 <div className="glass-panel" style={{ padding: '16px 20px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                        <h3 style={{ fontSize: '15px', fontWeight: 600, margin: '0 0 4px 0', color: 'var(--color-text-main)' }}>
-                            候选词上屏快捷键
-                        </h3>
-                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
-                            选中候选词进行智能补全时的快捷按键。
-                        </p>
-                    </div>
+                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
+                        候选词上屏快捷键
+                    </p>
                     <div style={{ flexShrink: 0, marginLeft: '16px', width: '160px' }}>
                         <CustomSelect
                             options={ALL_KEYS}
@@ -393,19 +391,13 @@ export default function FlowMind() {
             )}
 
             <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-                <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--color-glass-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.1)' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Sparkles size={18} color="var(--color-text-muted)" />
-                        智能输入词库
-                    </h3>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', background: 'var(--color-surface)', padding: '4px 10px', borderRadius: '100px', border: '1px solid var(--color-border)' }}>
-                            {dicts.length} 个词库
-                        </span>
-                        <button onClick={openCreateModal} className="btn-ghost" style={{ padding: '5px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--color-surface-elevated)' }}>
-                            <Plus size={13} />新建词库
-                        </button>
-                    </div>
+                <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-glass-border)' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', background: 'var(--color-surface)', padding: '4px 10px', borderRadius: '100px', border: '1px solid var(--color-border)' }}>
+                        {dicts.length} 个词库
+                    </span>
+                    <button onClick={openCreateModal} className="btn-ghost" style={{ padding: '5px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--color-surface-elevated)' }}>
+                        <Plus size={13} />新建词库
+                    </button>
                 </div>
 
                 <Reorder.Group axis="y" values={dicts} onReorder={handleReorderDicts} style={{ padding: '12px', listStyleType: 'none', margin: 0 }}>
@@ -463,14 +455,10 @@ export default function FlowMind() {
             </div>
 
             <div className="glass-panel" style={{ padding: '20px', marginTop: '20px', borderRadius: 'var(--radius-lg)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>🔍 引擎诊断</h3>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-
-                        <button onClick={runDiagnose} className="btn-primary" style={{ padding: '6px 16px', fontSize: '12px' }}>
-                            运行诊断
-                        </button>
-                    </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
+                    <button onClick={runDiagnose} className="btn-primary" style={{ padding: '6px 16px', fontSize: '12px' }}>
+                        运行诊断
+                    </button>
                 </div>
                 {diagReport && (
                     <pre style={{

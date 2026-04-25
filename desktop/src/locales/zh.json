@@ -4,14 +4,16 @@
         "flowmind": "灵思",
         "flowsync": "烽火",
         "flowdrop": "走镖",
+        "flowprobe": "探脉",
         "flowrules": "中枢",
-        "settings": "偏好",
+        "settings": "韬略",
         "tooltip_flowdeck": "全局状态总览与设备连接监控",
         "tooltip_flowmind": "统一智能输入引擎，前缀展开与智能词库补全",
-        "flowsync": "烽火",
+        "tooltip_flowsync": "受端到端加密保护的剪贴板同步桥梁",
         "tooltip_flowdrop": "P2P 跨设备安全文件极速传输",
+        "tooltip_flowprobe": "AI 端点探测与连通性测试",
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
-        "tooltip_settings": "主题、语言、AI 引擎与全局偏好配置"
+        "tooltip_settings": "主题、语言与全局偏好配置"
     },
     "login": {
         "title_login": "登录 YiboFlow",
@@ -53,7 +55,7 @@
         "proto_http": "HTTP (明文通道)"
     },
     "settings": {
-        "title": "系统设置",
+        "title": "韬略 · Settings",
         "subtitle": "核心配置与交互偏好。",
         "engine_title": "魔法缩略语引擎",
         "engine_desc": "开启全局高级键盘拦截器，实现输入的无感自动展开与替换。",
@@ -95,7 +97,7 @@
         "ai_status_fail": "连接失败"
     },
     "snippets": {
-        "title": "FlowSnap · 锦囊",
+        "title": "锦囊 · FlowSnap",
         "subtitle": "自定义缩略语，打出关键词即刻展开为完整文本。",
         "active_snippets_title": "已启用的魔法锦囊",
         "rules_count": "{{count}} 组词条",
@@ -114,7 +116,7 @@
         "add_modal_save": "注入引擎"
     },
     "flowhint": {
-        "title": "FlowHint · 灵犀",
+        "title": "灵犀 · FlowHint",
         "subtitle": "智能词库补全引擎，敲几个字母系统心领神会。",
         "engine_status": "补全引擎状态",
         "min_trigger": "最小触发字符数",
@@ -149,7 +151,7 @@
     },
 
     "flowrules": {
-        "title": "FlowRules · 中枢",
+        "title": "中枢 · FlowRules",
         "subtitle": "按应用精细控制每个功能模块的生效策略。",
         "default_row": "默认（未列出的应用）",
         "btn_add_app": "添加应用规则",
@@ -167,7 +169,7 @@
         "btn_remove": "移除"
     },
     "flowdeck": {
-        "title": "FlowDeck · 布告",
+        "title": "布告 · FlowDeck",
         "subtitle": "全局状态总览",
         "section_engine": "引擎核心",
         "section_network": "同步网络",
@@ -187,7 +189,7 @@
         "latency_ms": "延迟: {{ms}}ms"
     },
     "sync": {
-        "title": "FlowSync · 烽火",
+        "title": "烽火 · FlowSync",
         "subtitle": "受底层端到端最高级别加密保护的通信桥梁",
         "e2ee_status": "端到端加密",
         "master_key_title": "主密钥已装载",
@@ -218,7 +220,27 @@
         "network_wan": "公网穿透"
     },
     "drop": {
-        "title": "FlowDrop · 走镖",
+        "title": "走镖 · FlowDrop",
         "subtitle": "P2P 跨设备安全文件极速传输"
+    },
+    "flowprobe": {
+        "title": "探脉 · FlowProbe",
+        "subtitle": "AI 端点探测与连通性测试",
+        "route_title": "AI 引擎节点路由",
+        "route_desc": "多节点动态链路管理。系统将按优先级匹配可用节点。",
+        "btn_add_node": "新增节点",
+        "preset_custom": "-- 自定义 --",
+        "placeholder_url": "接口地址 (http://...)",
+        "placeholder_model": "模型名称",
+        "btn_test": "测试",
+        "btn_delete": "删除节点",
+        "status_enabled": "已启用",
+        "status_disabled": "已禁用",
+        "drag_sort": "拖拽排序",
+        "loading": "正在并发验证..."
+    },
+    "flowmind": {
+        "title": "灵思 · FlowMind",
+        "subtitle": "统一智能输入引擎"
     }
 }

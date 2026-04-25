@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { UploadCloud, Smartphone, Laptop2, MonitorUp, Wifi, Zap, RefreshCw } from "lucide-react";
+import { UploadCloud, Smartphone, Laptop2, Wifi, Zap, RefreshCw, Truck } from "lucide-react";
 import { useState, useEffect } from "react";
 
 export default function Drop() {
@@ -66,16 +66,20 @@ export default function Drop() {
     const onlineOtherDevices = devices.filter(d => !d.isLocal && d.isOnline);
 
     return (
-        <div style={{ animation: 'fadeIn 0.4s ease-out', maxWidth: '900px', margin: '0 auto', paddingBottom: '40px' }}>
-            <h1 style={{ fontSize: '28px', fontWeight: 600, marginBottom: '8px', color: 'var(--color-text-main)' }}>{t('nav.drop')}</h1>
-            <p style={{ color: 'var(--color-text-muted)', marginBottom: '32px' }}>P2P ultra-fast cross-device file transfer console.</p>
+        <div style={{ width: '100%', paddingBottom: '40px' }}>
+            <div style={{ marginBottom: '28px' }}>
+                <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
+                    <Truck size={22} color="var(--color-primary)" />
+                    {t('drop.title')}
+                </h1>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
+                    {t('drop.subtitle')}
+                </p>
+            </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(400px, 1fr) 340px', gap: '24px' }}>
                 <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                        <h3 style={{ fontSize: '18px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <MonitorUp size={20} color="var(--color-primary)" /> {t('sync.online_devices_title')}
-                        </h3>
                         <span style={{ fontSize: '12px', background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', padding: '4px 10px', borderRadius: '100px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                             {isLoading ? <RefreshCw size={12} className="animate-spin" /> : <><Wifi size={12} /> {onlineOtherDevices.length} 个可见节点</>}
                         </span>
@@ -119,10 +123,6 @@ export default function Drop() {
                 </div>
 
                 <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <UploadCloud size={20} color="var(--color-primary)" /> Transfer Console
-                    </h3>
-
                     <div style={{
                         border: '2px dashed var(--color-primary)',
                         background: 'var(--color-primary-glow)',

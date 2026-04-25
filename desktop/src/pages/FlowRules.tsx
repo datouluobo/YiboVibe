@@ -340,7 +340,7 @@ export default function FlowRules() {
     };
 
     return (
-        <div style={{ maxWidth: '960px' }}>
+        <div style={{ width: '100%', paddingBottom: '40px' }}>
             <div style={{ marginBottom: '28px' }}>
                 <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
                     <ShieldCheck size={22} color="var(--color-primary)" />

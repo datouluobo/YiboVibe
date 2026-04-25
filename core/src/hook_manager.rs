@@ -684,15 +684,34 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
         // 方案 B：长文本回退到剪切板模式（带影子检查与保护）
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let old_text_opt = clipboard.get_text().ok();
+            // Drop the clipboard instance immediately after reading old content
+            drop(clipboard);
             
-            // 关键：在设置剪切板前，先更新全局缓存，防止监听器误触发同步
+            // Update global cache before setting, to prevent sync loop
             if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
                 *last = target.to_string();
             }
-            let _ = clipboard.set_text(target);
+
+            // Re-open clipboard with retries to set new content
+            let mut set_ok = false;
+            for attempt in 0..5 {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    if cb.set_text(target).is_ok() {
+                        set_ok = true;
+                        break;
+                    }
+                }
+                if attempt + 1 < 5 {
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+            }
+            if !set_ok {
+                log::error!("[ShadowClipboard] Failed to set clipboard text after retries.");
+                return;
+            }
             
-            // 执行粘贴
-            std::thread::sleep(Duration::from_millis(15));
+            // Execute Ctrl+V paste
+            std::thread::sleep(Duration::from_millis(20));
             let vk_v = VIRTUAL_KEY(0x56);
             let mut inputs: Vec<INPUT> = Vec::new();
             let mut kd_ctrl = INPUT::default();
@@ -715,24 +734,29 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
             inputs.push(ku_ctrl);
             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
 
-            // 影子保护逻辑：仅当剪切板内容没被用户手动更改时，才进行还原
+            // Shadow restore logic: only restore if user hasn't copied new content
             if let Some(old_text) = old_text_opt {
                 let target_owned = target.to_string();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(500));
-                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                        if let Ok(current) = cb.get_text() {
-                            // 关键判断：如果当前内容还是我们要注入的那个片段，说明用户没在期间复制
-                            if current == target_owned {
-                                // 还原前也需更新缓存，避免还原本身触发同步回读
-                                if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
-                                    *last = old_text.clone();
+                    std::thread::sleep(Duration::from_millis(600));
+                    // Open clipboard with retries to avoid conflicting with user operations
+                    for attempt in 0..5 {
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            if let Ok(current) = cb.get_text() {
+                                if current == target_owned {
+                                    if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
+                                        *last = old_text.clone();
+                                    }
+                                    let _ = cb.set_text(old_text);
+                                    log::info!("[ShadowClipboard] Context restored successfully (no sync loop).");
+                                } else {
+                                    log::warn!("[ShadowClipboard] User copied new content, skipping restoration.");
                                 }
-                                let _ = cb.set_text(old_text);
-                                log::info!("[ShadowClipboard] Context restored successfully (no sync loop).");
-                            } else {
-                                log::warn!("[ShadowClipboard] User copied new content, skipping restoration.");
                             }
+                            break;
+                        }
+                        if attempt + 1 < 5 {
+                            std::thread::sleep(Duration::from_millis(50));
                         }
                     }
                 });

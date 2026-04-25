@@ -2,7 +2,7 @@ import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
     LayoutDashboard, Sparkles,
-    Flame, Truck, ShieldCheck, Settings, LogOut
+    Flame, Truck, Activity, ShieldCheck, Settings, LogOut
 } from "lucide-react";
 
 interface NavItem {
@@ -51,6 +51,7 @@ export default function Layout() {
         {
             id: "system",
             items: [
+                { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
                 { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
                 { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
             ]

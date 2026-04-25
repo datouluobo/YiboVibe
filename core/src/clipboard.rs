@@ -235,34 +235,13 @@ impl ClipboardMonitor {
         srv_url: String,
         tok: String,
     ) {
-        // Debounce slightly to allow OS or source app to finish I/O
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Debounce to allow OS or source app to finish I/O
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let mut clipboard_res = None;
-        for i in 0..5 {
-            match Clipboard::new() {
-                Ok(cb) => { clipboard_res = Some(cb); break; }
-                Err(e) => {
-                    log::warn!("Clipboard busy (attempt {}), retrying... ERR: {}", i+1, e);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
-
-        let mut clipboard = match clipboard_res {
-            Some(cb) => cb,
-            None => { error!("Listener: Failed to open clipboard after retries."); return; }
-        };
-
-        // Try getting text with retry
-        let mut current_text = None;
-        for _ in 0..3 {
-            if let Ok(t) = clipboard.get_text() {
-                current_text = Some(t);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        // Open clipboard, read immediately, and drop right away to release the OS lock.
+        // Each read attempt gets its own short-lived Clipboard instance so we never
+        // hold the system clipboard open across sleep/retry boundaries.
+        let current_text = Self::try_read_clipboard_text(3, Duration::from_millis(80)).await;
 
         if let Some(text) = current_text {
             let should_dispatch = {
@@ -281,15 +260,7 @@ impl ClipboardMonitor {
                 }
             }
         } else {
-            // Try getting image with retry
-            let mut current_image = None;
-            for _ in 0..3 {
-                if let Ok(img) = clipboard.get_image() {
-                    current_image = Some(img);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
+            let current_image = Self::try_read_clipboard_image(3, Duration::from_millis(80)).await;
 
             if let Some(image) = current_image {
                 let hash = Self::calculate_image_hash(&image);
@@ -310,6 +281,76 @@ impl ClipboardMonitor {
                 }
             }
         }
+    }
+
+    /// Open the system clipboard, read text, and release immediately.
+    /// Retries with fresh Clipboard instances so we never hold the OS lock while sleeping.
+    async fn try_read_clipboard_text(max_retries: u32, retry_delay: Duration) -> Option<String> {
+        for i in 0..max_retries {
+            if let Ok(mut cb) = Clipboard::new() {
+                if let Ok(t) = cb.get_text() {
+                    return Some(t);
+                }
+            }
+            if i + 1 < max_retries {
+                log::warn!("Clipboard text read busy (attempt {}), retrying...", i + 1);
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+        None
+    }
+
+    /// Open the system clipboard, read image, and release immediately.
+    async fn try_read_clipboard_image(max_retries: u32, retry_delay: Duration) -> Option<arboard::ImageData<'static>> {
+        for i in 0..max_retries {
+            if let Ok(mut cb) = Clipboard::new() {
+                if let Ok(img) = cb.get_image() {
+                    // Convert to owned data so the lifetime is 'static
+                    return Some(arboard::ImageData {
+                        width: img.width,
+                        height: img.height,
+                        bytes: std::borrow::Cow::Owned(img.bytes.into_owned()),
+                    });
+                }
+            }
+            if i + 1 < max_retries {
+                log::warn!("Clipboard image read busy (attempt {}), retrying...", i + 1);
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+        None
+    }
+
+    /// Try to write text to the system clipboard with retries, releasing the lock between attempts.
+    async fn try_set_clipboard_text(text: &str, max_retries: u32, retry_delay: Duration) -> bool {
+        for i in 0..max_retries {
+            if let Ok(mut cb) = Clipboard::new() {
+                if cb.set_text(text.to_string()).is_ok() {
+                    return true;
+                }
+            }
+            if i + 1 < max_retries {
+                log::warn!("Clipboard text write busy (attempt {}), retrying...", i + 1);
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+        false
+    }
+
+    /// Try to write image to the system clipboard with retries, releasing the lock between attempts.
+    async fn try_set_clipboard_image(image: arboard::ImageData<'_>, max_retries: u32, retry_delay: Duration) -> bool {
+        for i in 0..max_retries {
+            if let Ok(mut cb) = Clipboard::new() {
+                if cb.set_image(image.clone()).is_ok() {
+                    return true;
+                }
+            }
+            if i + 1 < max_retries {
+                log::warn!("Clipboard image write busy (attempt {}), retrying...", i + 1);
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+        false
     }
 
     pub fn start_polling(&self) {
@@ -568,18 +609,18 @@ impl ClipboardMonitor {
                         {
                             let mut last = last_text_ref.lock().unwrap();
                             *last = plaintext.clone();
-                        } // MutexGuard is dropped here before await!
+                        }
 
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            if let Err(e) = clipboard.set_text(plaintext.clone()) {
-                                error!("Failed to set arboard clipboard: {}", e);
-                            } else if let Some(chan) = ui_tx.as_ref() {
+                        if Self::try_set_clipboard_text(&plaintext, 5, Duration::from_millis(100)).await {
+                            if let Some(chan) = ui_tx.as_ref() {
                                 let preview = if plaintext.len() > 15 { format!("{}...", &plaintext[..15]) } else { plaintext.clone() };
                                 let _ = chan.send(ClipboardEvent {
                                     status: "received".to_string(),
                                     preview,
                                 }).await;
                             }
+                        } else {
+                            error!("Failed to set clipboard text after retries (received sync).");
                         }
                     } else if format_type == "image" {
                         let uuid = msg.payload["blob_uuid"].as_str().unwrap_or("");
@@ -659,6 +700,7 @@ impl ClipboardMonitor {
                                 *last = hash;
                             }
 
+                            // Use a short-lived clipboard instance: open, write, release immediately
                             if let Err(e) = clipboard.set_image(arboard_img.clone()) {
                                 error!("Failed to set arboard image clipboard: {}", e);
                             } else if let Some(chan) = ui_tx.as_ref() {

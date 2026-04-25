@@ -4,14 +4,16 @@
         "flowmind": "FlowMind",
         "flowsync": "FlowSync",
         "flowdrop": "FlowDrop",
+        "flowprobe": "FlowProbe",
         "flowrules": "FlowRules",
         "settings": "Settings",
         "tooltip_flowdeck": "System status overview and device monitoring",
         "tooltip_flowmind": "Unified smart input engine: prefix expansion and intelligent completion",
-        "flowsync": "FlowSync",
+        "tooltip_flowsync": "End-to-end encrypted clipboard bridge",
         "tooltip_flowdrop": "P2P encrypted cross-device file transfer",
+        "tooltip_flowprobe": "AI endpoint probing & connectivity testing",
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
-        "tooltip_settings": "Theme, language, AI engine and global preferences"
+        "tooltip_settings": "Theme, language and global preferences"
     },
     "login": {
         "title_login": "Login to YiboFlow",
@@ -61,7 +63,7 @@
         "sync_desc": "Securely synchronize clipboard across your connected devices.",
         "theme_title": "Theme Preference",
         "theme_desc": "Customize your visual experience.",
-        "language_title": "Language (语言)",
+        "language_title": "Language",
         "language_desc": "Select your interface language.",
         "light_mode": "Light Mode",
         "dark_mode": "Dark Mode",
@@ -220,5 +222,25 @@
     "drop": {
         "title": "FlowDrop",
         "subtitle": "P2P encrypted cross-device file transfer"
+    },
+    "flowprobe": {
+        "title": "FlowProbe",
+        "subtitle": "AI endpoint probing & connectivity testing",
+        "route_title": "AI Engine Node Routing",
+        "route_desc": "Multi-node dynamic link management. System matches available nodes by priority.",
+        "btn_add_node": "Add Node",
+        "preset_custom": "-- Custom --",
+        "placeholder_url": "Endpoint URL (http://...)",
+        "placeholder_model": "Model name",
+        "btn_test": "Test",
+        "btn_delete": "Delete node",
+        "status_enabled": "Enabled",
+        "status_disabled": "Disabled",
+        "drag_sort": "Drag to reorder",
+        "loading": "Verifying..."
+    },
+    "flowmind": {
+        "title": "FlowMind",
+        "subtitle": "Unified smart input engine"
     }
 }
