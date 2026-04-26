@@ -1,8 +1,10 @@
 mod api;
+mod cache;
 mod clipboard;
 mod config;
 mod rules;
 mod crypto;
+mod history;
 mod hook_manager;
 mod ws;
 mod p2p;

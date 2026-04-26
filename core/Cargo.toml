@@ -1,6 +1,6 @@
 [package]
 name = "yiboflow-core"
-version = "0.8.6"
+version = "0.8.7"
 edition = "2024"
 authors = ["YiboFlow Team"]
 
@@ -54,6 +54,10 @@ windows = { version = "0.52", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_DataExchange"
 ] }
+
+# Clipboard History Storage
+rusqlite = { version = "0.31", features = ["bundled"] }
+blake3 = "1.5"
 
 # Error Handling & Utils
 thiserror = "1.0"

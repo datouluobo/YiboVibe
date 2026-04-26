@@ -83,12 +83,22 @@ impl ClipboardMonitor {
 
     fn generate_thumbnail_base64(image_data: &arboard::ImageData<'_>) -> String {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use image::imageops::FilterType;
+        const MAX_EDGE: u32 = 512;
         let width = image_data.width as u32;
         let height = image_data.height as u32;
 
         if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, image_data.bytes.to_vec()) {
             let dyn_img = DynamicImage::ImageRgba8(img_buffer);
-            let thumb = dyn_img.thumbnail(200, 200);
+            let max_dim = width.max(height);
+            let thumb = if max_dim <= MAX_EDGE {
+                dyn_img
+            } else {
+                let scale = MAX_EDGE as f32 / max_dim as f32;
+                let tw = (width as f32 * scale).round() as u32;
+                let th = (height as f32 * scale).round() as u32;
+                dyn_img.resize(tw.max(1), th.max(1), FilterType::Lanczos3)
+            };
             let mut buf = std::io::Cursor::new(Vec::new());
             if thumb.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
                 let encoded = STANDARD.encode(buf.into_inner());
@@ -131,6 +141,7 @@ impl ClipboardMonitor {
         let client = self.http_client.clone();
         let srv_url = self.server_url.clone();
         let tok = self.token.clone();
+        let runtime_handle = tokio::runtime::Handle::current();
 
         std::thread::spawn(move || {
             unsafe {
@@ -181,7 +192,7 @@ impl ClipboardMonitor {
                     http_client: client,
                     server_url: srv_url,
                     token: tok,
-                    runtime: tokio::runtime::Handle::current(),
+                    runtime: runtime_handle,
                 });
                 
                 #[cfg(target_pointer_width = "64")]
@@ -241,7 +252,7 @@ impl ClipboardMonitor {
         // Open clipboard, read immediately, and drop right away to release the OS lock.
         // Each read attempt gets its own short-lived Clipboard instance so we never
         // hold the system clipboard open across sleep/retry boundaries.
-        let current_text = Self::try_read_clipboard_text(3, Duration::from_millis(80)).await;
+        let current_text = Self::try_read_clipboard_text(1, Duration::from_millis(50)).await;
 
         if let Some(text) = current_text {
             let should_dispatch = {
@@ -255,12 +266,19 @@ impl ClipboardMonitor {
 
             if should_dispatch {
                 let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
+                crate::cache::record_clipboard_text(&text, "local");
+                if let Some(chan) = ui_tx.as_ref() {
+                    let _ = chan.send(ClipboardEvent {
+                        status: "sent".to_string(),
+                        preview: text.clone(),
+                    }).await;
+                }
                 if config.is_sync_enabled {
                     Self::secure_dispatch(&text, &mk, &tx, &ui_tx).await;
                 }
             }
         } else {
-            let current_image = Self::try_read_clipboard_image(3, Duration::from_millis(80)).await;
+            let current_image = Self::try_read_clipboard_image(2, Duration::from_millis(50)).await;
 
             if let Some(image) = current_image {
                 let hash = Self::calculate_image_hash(&image);
@@ -274,6 +292,35 @@ impl ClipboardMonitor {
                 };
 
                 if should_dispatch {
+                    {
+                        let img_bytes = &image.bytes;
+                        let mut raw = Vec::with_capacity(16 + img_bytes.len());
+                        raw.extend_from_slice(&(image.width as u64).to_le_bytes());
+                        raw.extend_from_slice(&(image.height as u64).to_le_bytes());
+                        raw.extend_from_slice(img_bytes);
+                        crate::cache::record_clipboard_image(&raw, "local");
+                    }
+                    // Notify UI immediately, before the slow network upload
+                    if let Some(chan) = ui_tx.as_ref() {
+                        let preview = tokio::task::spawn_blocking({
+                            let width = image.width;
+                            let height = image.height;
+                            let bytes = image.bytes.clone().into_owned();
+                            move || {
+                                let img_data = arboard::ImageData {
+                                    width,
+                                    height,
+                                    bytes: std::borrow::Cow::Owned(bytes),
+                                };
+                                Self::generate_thumbnail_base64(&img_data)
+                            }
+                        }).await.unwrap_or_else(|_| format!("[Image {}x{}]", image.width, image.height));
+                        let _ = chan.send(ClipboardEvent {
+                            status: "sent".to_string(),
+                            preview,
+                        }).await;
+                    }
+                    // Background sync upload happens after UI notification
                     let (is_sync_enabled, _, _, _) = crate::config::get_settings();
                     if is_sync_enabled {
                         Self::secure_dispatch_image(image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
@@ -558,6 +605,7 @@ impl ClipboardMonitor {
         let client = self.http_client.clone();
         let srv_url = self.server_url.clone();
         let tok = self.token.clone();
+        let ws_tx = self.ws_tx.clone();
 
         tokio::spawn(async move {
             info!("Clipboard receiving daemon started.");
@@ -604,6 +652,8 @@ impl ClipboardMonitor {
                         };
 
                         info!("Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...", plaintext.len());
+
+                        crate::cache::record_clipboard_text(&plaintext, "sync");
 
                         // Set text with loopback protection
                         {
@@ -686,6 +736,14 @@ impl ClipboardMonitor {
                             Err(e) => { error!("Failed to parse decrypted image shape: {}", e); continue; }
                         };
 
+                        {
+                            let mut raw = Vec::with_capacity(16 + img_data.bytes.len());
+                            raw.extend_from_slice(&(img_data.w as u64).to_le_bytes());
+                            raw.extend_from_slice(&(img_data.h as u64).to_le_bytes());
+                            raw.extend_from_slice(&img_data.bytes);
+                            crate::cache::record_clipboard_image(&raw, "sync");
+                        }
+
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                             let arboard_img = arboard::ImageData {
                                 width: img_data.w,
@@ -722,6 +780,103 @@ impl ClipboardMonitor {
                         crate::p2p::handle_p2p_offer(offer, save_dir).await;
                     } else {
                         error!("Failed to parse p2p_file_offer payload.");
+                    }
+                } else if msg.r#type == "history_request" {
+                    info!("Received history_request from peer device");
+                    let items = {
+                        let history_lock = crate::cache::HISTORY_MANAGER.read().unwrap();
+                        if let Some(history) = history_lock.as_ref() {
+                            match history.get_today_entries() {
+                                Ok(entries) => {
+                                    let mut items = Vec::new();
+                                    for e in &entries {
+                                        let cache_lock = crate::cache::CACHE_MANAGER.read().unwrap();
+                                        let data_val = if e.entry_type == "text" {
+                                            cache_lock.as_ref().and_then(|c| c.read_text(&e.hash).ok())
+                                                .map(|content| serde_json::json!({
+                                                    "timestamp": e.timestamp,
+                                                    "type": "text",
+                                                    "hash": e.hash,
+                                                    "content": content,
+                                                }))
+                                        } else {
+                                            cache_lock.as_ref().and_then(|c| c.read_image(&e.hash).ok())
+                                                .map(|data| {
+                                                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                                    serde_json::json!({
+                                                        "timestamp": e.timestamp,
+                                                        "type": "image",
+                                                        "hash": e.hash,
+                                                        "data_b64": STANDARD.encode(&data),
+                                                    })
+                                                })
+                                        };
+                                        if let Some(val) = data_val {
+                                            items.push(val);
+                                        }
+                                    }
+                                    Some(items)
+                                }
+                                Err(e) => {
+                                    error!("Failed to get today entries: {}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(items) = items {
+                        let response = crate::ws::WsMessage {
+                            sender_uid: 0,
+                            sender_device_id: 0,
+                            target_devices: vec![],
+                            r#type: "history_response".to_string(),
+                            payload: serde_json::json!({
+                                "items": items,
+                                "has_more": false,
+                            }),
+                        };
+                        if let Err(e) = ws_tx.send(response).await {
+                            error!("Failed to send history_response: {}", e);
+                        } else {
+                            info!("Sent history_response with {} items", items.len());
+                        }
+                    }
+                } else if msg.r#type == "history_response" {
+                    info!("Received history_response from peer device");
+                    let items = match msg.payload["items"].as_array() {
+                        Some(arr) => arr,
+                        None => { error!("Invalid history_response: no items array"); continue; }
+                    };
+                    let mut imported = 0u32;
+                    for item in items {
+                        let entry_type = item["type"].as_str().unwrap_or("");
+                        let hash = item["hash"].as_str().unwrap_or("");
+                        let timestamp = item["timestamp"].as_i64().unwrap_or(0);
+                        if hash.is_empty() { continue; }
+
+                        if entry_type == "text" {
+                            if let Some(content) = item["content"].as_str() {
+                                crate::cache::record_clipboard_text(content, "pull");
+                                imported += 1;
+                            }
+                        } else if entry_type == "image" {
+                            if let Some(data_b64) = item["data_b64"].as_str() {
+                                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                if let Ok(data) = STANDARD.decode(data_b64) {
+                                    crate::cache::record_clipboard_image(&data, "pull");
+                                    imported += 1;
+                                }
+                            }
+                        }
+                    }
+                    info!("Imported {} history items from peer", imported);
+                    if let Some(chan) = ui_tx.as_ref() {
+                        let _ = chan.send(ClipboardEvent {
+                            status: "history_pulled".to_string(),
+                            preview: format!("Imported {} items", imported),
+                        }).await;
                     }
                 }
             }

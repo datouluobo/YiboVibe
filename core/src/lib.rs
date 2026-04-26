@@ -1,6 +1,8 @@
 pub mod api;
+pub mod cache;
 pub mod clipboard;
 pub mod crypto;
+pub mod history;
 pub mod hook_manager;
 pub mod ws;
 pub mod config;

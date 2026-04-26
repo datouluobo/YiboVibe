@@ -223,6 +223,11 @@ async fn connect_engine(
                 match WsClient::connect(&server_url, &d.access_token).await {
                     Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Handshake sent implicitly.");
+
+                        if let Err(e) = yiboflow_core::cache::init_cache_and_history() {
+                            log::warn!("Failed to re-initialize cache after login: {}", e);
+                        }
+
                         let arc_mk = Arc::new(mk);
                         let cb_monitor = ClipboardMonitor::new(
                             server_url.clone(),
@@ -231,7 +236,7 @@ async fn connect_engine(
                             ws_client.tx.clone(),
                             Some(ui_tx),
                         );
-                        cb_monitor.start_polling();
+                        cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
 
                         let mut connected_flag = state.is_connected.lock().await;
@@ -293,6 +298,11 @@ async fn connect_engine(
 
             // Offline mode: No WsClient, dummy channel for intercepting clipboard events
             let dummy_ws_tx = tokio::sync::mpsc::channel(1).0;
+
+            if let Err(e) = yiboflow_core::cache::init_cache_and_history() {
+                log::warn!("Failed to re-initialize cache after offline login: {}", e);
+            }
+
             let arc_mk = Arc::new(mk);
 
             let cb_monitor = ClipboardMonitor::new(
@@ -302,7 +312,7 @@ async fn connect_engine(
                 dummy_ws_tx,
                 Some(ui_tx),
             );
-            cb_monitor.start_polling();
+            cb_monitor.start_monitoring();
             // In offline mode we don't start WsClient RX receiving since there's no server
 
             let mut connected_flag = state.is_connected.lock().await;
@@ -1099,6 +1109,295 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
+// ─── Clipboard History Tauri Commands ───
+
+#[tauri::command]
+fn init_clipboard_history() -> Result<bool, String> {
+    yiboflow_core::cache::init_cache_and_history()?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn query_history(
+    type_filter: Option<String>,
+    time_from: Option<i64>,
+    time_to: Option<i64>,
+    source_filter: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+    let entries = history.query(
+        type_filter.as_deref(),
+        time_from,
+        time_to,
+        source_filter.as_deref(),
+        limit.unwrap_or(100),
+        offset.unwrap_or(0),
+    )?;
+    Ok(entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect())
+}
+
+#[tauri::command]
+fn search_history(query: String, limit: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+    let entries = history.search(&query, limit.unwrap_or(50))?;
+    Ok(entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect())
+}
+
+#[tauri::command]
+fn copy_history_to_clipboard(id: i64) -> Result<(), String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+
+    let entry = history.get_by_id(id)?
+        .ok_or(format!("Entry {} not found", id))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    if entry.entry_type == "text" {
+        let content = cache.read_text(&entry.hash)?;
+        {
+            if let Ok(mut last) = yiboflow_core::clipboard::LAST_TEXT.lock() {
+                *last = content.clone();
+            }
+        }
+        for attempt in 0..5 {
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                if cb.set_text(&content).is_ok() {
+                    break;
+                }
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    } else if entry.entry_type == "image" {
+        let data = cache.read_image(&entry.hash)?;
+        if data.len() < 16 {
+            return Err("Invalid image cache data".into());
+        }
+        let w = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
+        let h = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
+        let img_bytes = data[16..].to_vec();
+
+        let img_data = arboard::ImageData {
+            width: w,
+            height: h,
+            bytes: std::borrow::Cow::Owned(img_bytes),
+        };
+
+        {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            w.hash(&mut hasher);
+            h.hash(&mut hasher);
+            let raw: &[u8] = img_data.bytes.as_ref();
+            raw.len().hash(&mut hasher);
+            let sample_len = 1024;
+            if raw.len() > sample_len * 2 {
+                raw[..sample_len].hash(&mut hasher);
+                raw[raw.len()-sample_len..].hash(&mut hasher);
+            } else {
+                raw.hash(&mut hasher);
+            }
+            if let Ok(mut last) = yiboflow_core::clipboard::LAST_IMAGE_HASH.lock() {
+                *last = hasher.finish();
+            }
+        }
+
+        for attempt in 0..5 {
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                if cb.set_image(img_data.clone()).is_ok() {
+                    break;
+                }
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+
+    history.touch_by_id(id, now)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_history(ids: Vec<i64>) -> Result<u32, String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+
+    let entries: Vec<(String, String)> = ids.iter().filter_map(|&id| {
+        history.get_by_id(id).ok().flatten().map(|e| (e.entry_type, e.hash))
+    }).collect();
+
+    let count = history.delete_by_ids(&ids)?;
+    for (entry_type, hash) in entries {
+        let _ = cache.delete_file(&entry_type, &hash);
+    }
+    Ok(count)
+}
+
+#[tauri::command]
+fn clear_history(before_days: Option<u32>) -> Result<u32, String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+
+    let before_ts = match before_days {
+        Some(days) if days > 0 => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            now - (days as i64 * 86_400_000)
+        }
+        _ => 0,
+    };
+
+    let entries = history.query(None, None, Some(before_ts), None, 10000, 0)?;
+    let ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
+    let count = history.delete_by_ids(&ids)?;
+    for e in &entries {
+        let _ = cache.delete_file(&e.entry_type, &e.hash);
+    }
+    Ok(count)
+}
+
+#[tauri::command]
+fn toggle_history_pin(id: i64) -> Result<bool, String> {
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+    history.toggle_pin(id)
+}
+
+#[tauri::command]
+fn get_cache_stats() -> Result<serde_json::Value, String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+
+    let (total, text_count, image_count) = history.get_stats()?;
+    let total_size = cache.compute_total_size();
+    let (text_files, image_files) = cache.compute_file_count();
+
+    Ok(serde_json::json!({
+        "total_entries": total,
+        "text_count": text_count,
+        "image_count": image_count,
+        "total_size_bytes": total_size,
+        "total_size_mb": (total_size as f64 / 1_048_576.0 * 100.0).round() / 100.0,
+        "cache_dir": cache.base_dir().to_string_lossy().to_string(),
+        "max_size_mb": cache.max_size_mb(),
+        "text_files": text_files,
+        "image_files": image_files,
+    }))
+}
+
+#[tauri::command]
+fn set_cache_dir(path: String) -> Result<(), String> {
+    let mut cache_lock = yiboflow_core::cache::CACHE_MANAGER.write().unwrap();
+    let cache = cache_lock.as_mut()
+        .ok_or("Cache not initialized")?;
+    let new_dir = std::path::PathBuf::from(&path);
+    cache.migrate_to(new_dir)?;
+    if let Ok(mut cfg) = yiboflow_core::config::GLOBAL_CONFIG.write() {
+        cfg.cache.cache_dir = path;
+        cfg.save();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_cache_max_size(mb: u64) -> Result<(), String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    cache.set_max_size_mb(mb);
+    if let Ok(mut cfg) = yiboflow_core::config::GLOBAL_CONFIG.write() {
+        cfg.cache.cache_max_size_mb = mb;
+        cfg.save();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_history_content(id: i64) -> Result<serde_json::Value, String> {
+    let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+    let history = history_lock.as_ref().ok_or("History not initialized")?;
+
+    let entry = history.get_by_id(id)?
+        .ok_or(format!("Entry {} not found", id))?;
+
+    if entry.entry_type == "text" {
+        let content = cache.read_text(&entry.hash)?;
+        Ok(serde_json::json!({
+            "type": "text",
+            "content": content,
+        }))
+    } else {
+        let data = cache.read_image(&entry.hash)?;
+        if data.len() < 16 {
+            return Err("Invalid image cache data".into());
+        }
+        let w = u64::from_le_bytes(data[0..8].try_into().unwrap()) as u32;
+        let h = u64::from_le_bytes(data[8..16].try_into().unwrap()) as u32;
+        let img_bytes = &data[16..];
+
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        if let Some(img_buffer) = image::RgbaImage::from_raw(w, h, img_bytes.to_vec()) {
+            let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
+            let mut buf = std::io::Cursor::new(Vec::new());
+            if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                let encoded = STANDARD.encode(buf.into_inner());
+                return Ok(serde_json::json!({
+                    "type": "image",
+                    "content": format!("data:image/png;base64,{}", encoded),
+                    "width": w,
+                    "height": h,
+                }));
+            }
+        }
+        Err("Failed to decode image".into())
+    }
+}
+
+#[tauri::command]
+async fn pull_today_history(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    let ws_tx_lock = state.ws_tx.lock().await;
+    let tx = ws_tx_lock.as_ref()
+        .ok_or("Not connected to any device. Please connect first.")?
+        .clone();
+    drop(ws_tx_lock);
+
+    let request = yiboflow_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![],
+        r#type: "history_request".to_string(),
+        payload: serde_json::json!({
+            "date": "today",
+        }),
+    };
+
+    tx.send(request).await
+        .map_err(|e| format!("Failed to send history_request: {}", e))?;
+
+    Ok(0)
+}
+
 #[tauri::command]
 fn diagnose_flowhint() -> Result<String, String> {
     let dicts = yiboflow_core::dictionary::get_all_dictionaries();
@@ -1283,6 +1582,10 @@ pub fn run() {
     yiboflow_core::local_auth::load_session();
     yiboflow_core::dictionary::init_and_load_dictionaries();
     yiboflow_core::dictionary::load_freq_cache();
+
+    if let Err(e) = yiboflow_core::cache::init_cache_and_history() {
+        log::error!("Failed to initialize clipboard history: {}", e);
+    }
 
     #[cfg(target_os = "windows")]
     yiboflow_core::hook_manager::start_global_hook();
@@ -1563,6 +1866,18 @@ pub fn run() {
             read_clipboard_content,
             write_to_clipboard,
             write_image_to_clipboard,
+            init_clipboard_history,
+            query_history,
+            search_history,
+            copy_history_to_clipboard,
+            delete_history,
+            clear_history,
+            toggle_history_pin,
+            get_cache_stats,
+            set_cache_dir,
+            set_cache_max_size,
+            get_history_content,
+            pull_today_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

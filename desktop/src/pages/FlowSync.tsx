@@ -1,52 +1,29 @@
 import { useTranslation } from "react-i18next";
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo, useLayoutEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     ClipboardCopy, ArrowDownToLine, ArrowUpToLine,
-    Copy, Trash2, Check, ChevronDown, Settings2, ImageIcon, FileType, X
+    Copy, Trash2, Check, ChevronDown, ImageIcon, FileType, X, Search, Pin, PinOff, Download, Settings2
 } from "lucide-react";
 
-interface ClipboardLog {
+interface HistoryEntry {
     id: number;
-    timestamp: Date;
-    status: 'sent' | 'received';
-    type: 'text' | 'image';
-    preview: string;
-    imageWidth?: number;
-    imageHeight?: number;
+    timestamp: number;
+    type: "text" | "image";
+    hash: string;
+    size: number;
+    preview: string | null;
+    pinned: boolean;
+    source: string;
 }
 
-type TimeFilter = 'all' | 'today' | 'yesterday' | 'week' | 'month';
-type TypeFilter = 'all' | 'text' | 'image';
-type DirFilter = 'all' | 'sent' | 'received';
+type TimeFilter = "all" | "today" | "yesterday" | "week" | "month";
+type TypeFilter = "all" | "text" | "image";
 
-const STORAGE_KEY = 'yiboflow_sync_logs';
-const CLEANUP_KEY = 'yiboflow_sync_auto_cleanup_days';
-const MAX_RECORDS = 50;
 const ANIMATED_ITEMS = 8;
-
-function loadLogs(): ClipboardLog[] {
-    try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return parsed.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) }));
-    } catch { return []; }
-}
-
-function saveLogs(logs: ClipboardLog[]) {
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(logs.slice(0, MAX_RECORDS)));
-    } catch (e) {
-        console.warn('Storage full, pruning image logs:', e);
-        try {
-            const pruned = logs.filter(l => l.type !== 'image').slice(0, MAX_RECORDS);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
-        } catch { /* give up */ }
-    }
-}
+const PAGE_SIZE = 100;
 
 function getDayStart(d: Date): Date {
     const r = new Date(d);
@@ -54,40 +31,21 @@ function getDayStart(d: Date): Date {
     return r;
 }
 
-function isSameImage(a: string, b: string): boolean {
-    if (a === b) return true;
-    if (!a.startsWith('data:image/') || !b.startsWith('data:image/')) return false;
-    // For images, compare decoded content size as approximate fingerprint
-    // Extract base64 payload length (strip data URI prefix)
-    const aParts = a.split(',');
-    const bParts = b.split(',');
-    if (aParts.length < 2 || bParts.length < 2) return false;
-    // Quick size-based heuristic: if both base64 payloads are within 5% of each other's length
-    // and one starts with the same prefix (first 200 chars), consider them the same image
-    const aData = aParts[1];
-    const bData = bParts[1];
-    if (Math.abs(aData.length - bData.length) / Math.max(aData.length, bData.length) < 0.05) {
-        const prefixLen = Math.min(200, aData.length, bData.length);
-        if (aData.slice(0, prefixLen) === bData.slice(0, prefixLen)) return true;
-    }
-    return false;
-}
-
 const FilterChip = memo(function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
     return (
         <button
             onClick={onClick}
             style={{
-                padding: '3px 10px',
-                borderRadius: '100px',
-                fontSize: '11.5px',
+                padding: "3px 10px",
+                borderRadius: "100px",
+                fontSize: "11.5px",
                 fontWeight: active ? 600 : 400,
-                background: active ? 'var(--color-primary)' : 'transparent',
-                color: active ? '#fff' : 'var(--color-text-muted)',
-                border: 'none',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                whiteSpace: 'nowrap',
+                background: active ? "var(--color-primary)" : "transparent",
+                color: active ? "#fff" : "var(--color-text-muted)",
+                border: "none",
+                cursor: "pointer",
+                transition: "all 0.15s",
+                whiteSpace: "nowrap",
             }}
         >
             {label}
@@ -102,8 +60,8 @@ const FilterGroup = memo(function FilterGroup({ title, options, value, onChange 
     onChange: (v: string) => void;
 }) {
     return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginRight: '2px', whiteSpace: 'nowrap' }}>{title}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <span style={{ fontSize: "11px", color: "var(--color-text-muted)", marginRight: "2px", whiteSpace: "nowrap" }}>{title}</span>
             {options.map(o => (
                 <FilterChip key={o.key} label={o.label} active={value === o.key} onClick={() => onChange(o.key)} />
             ))}
@@ -113,325 +71,418 @@ const FilterGroup = memo(function FilterGroup({ title, options, value, onChange 
 
 export default function FlowSync() {
     const { t } = useTranslation();
-    const [logs, setLogs] = useState<ClipboardLog[]>(loadLogs);
+    const [logs, setLogs] = useState<HistoryEntry[]>([]);
     const [selectedId, setSelectedId] = useState<number | null>(null);
-    const [filterTime, setFilterTime] = useState<TimeFilter>('all');
-    const [filterType, setFilterType] = useState<TypeFilter>('all');
-    const [filterDir, setFilterDir] = useState<DirFilter>('all');
+    const [filterTime, setFilterTime] = useState<TimeFilter>("all");
+    const [filterType, setFilterType] = useState<TypeFilter>("all");
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchActive, setSearchActive] = useState(false);
     const [showClearMenu, setShowClearMenu] = useState(false);
-    const [showCleanupPicker, setShowCleanupPicker] = useState(false);
     const [confirmClear, setConfirmClear] = useState(false);
     const [copiedId, setCopiedId] = useState<number | null>(null);
     const [copiedPreview, setCopiedPreview] = useState(false);
+    const [copyFailed, setCopyFailed] = useState(false);
+    const [previewContent, setPreviewContent] = useState<string | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [totalCount, setTotalCount] = useState(0);
     const clearMenuRef = useRef<HTMLDivElement>(null);
-    const cleanupRef = useRef<HTMLDivElement>(null);
-    const lastPolledRef = useRef<string>('');
+    const searchInputRef = useRef<HTMLInputElement>(null);
 
-    const autoCleanupDays = parseInt(localStorage.getItem(CLEANUP_KEY) || '7');
-    const [cleanupDays, setCleanupDays] = useState(autoCleanupDays);
+    const [itemHeight, setItemHeight] = useState(() => {
+        const h = Number(localStorage.getItem('yiboflow_item_height') || 56);
+        return Number.isFinite(h) ? Math.max(48, h) : 56;
+    });
+    const [listWidthRatio, setListWidthRatio] = useState(() => {
+        const r = Number(localStorage.getItem('yiboflow_list_width_ratio'));
+        if (Number.isFinite(r) && r >= 0.25 && r <= 0.55) return r;
+        return 0.36;
+    });
+    const [showAppearancePanel, setShowAppearancePanel] = useState(false);
+    const appearanceRef = useRef<HTMLDivElement>(null);
 
     const selectedLog = useMemo(() => logs.find(l => l.id === selectedId) || null, [logs, selectedId]);
 
-    useEffect(() => { saveLogs(logs); }, [logs]);
+    useEffect(() => {
+        invoke("init_clipboard_history").catch(e => console.error("init_clipboard_history failed:", e));
+    }, []);
+
+    const fetchHistory = useCallback(async () => {
+        try {
+            const now = Date.now();
+            let timeFrom: number | null = null;
+            let timeTo: number | null = null;
+            const todayStart = getDayStart(new Date()).getTime();
+
+            if (filterTime === "today") {
+                timeFrom = todayStart;
+            } else if (filterTime === "yesterday") {
+                timeFrom = todayStart - 86400000;
+                timeTo = todayStart;
+            } else if (filterTime === "week") {
+                timeFrom = now - 7 * 86400000;
+            } else if (filterTime === "month") {
+                timeFrom = now - 30 * 86400000;
+            }
+
+            const results = await invoke<HistoryEntry[]>("query_history", {
+                typeFilter: filterType !== "all" ? filterType : null,
+                timeFrom,
+                timeTo,
+                limit: PAGE_SIZE,
+                offset: 0,
+            });
+            setLogs(results);
+            setTotalCount(results.length);
+        } catch (e) {
+            console.error("Failed to fetch history:", e);
+        }
+    }, [filterTime, filterType]);
+
+    const doSearch = useCallback(async () => {
+        if (!searchQuery.trim()) {
+            fetchHistory();
+            return;
+        }
+        try {
+            const results = await invoke<HistoryEntry[]>("search_history", {
+                query: searchQuery,
+                limit: 50,
+            });
+            setLogs(results);
+            setTotalCount(results.length);
+        } catch (e) {
+            console.error("Search failed:", e);
+        }
+    }, [searchQuery, fetchHistory]);
 
     useEffect(() => {
-        if (cleanupDays > 0) {
-            const cutoff = Date.now() - cleanupDays * 86400000;
-            setLogs(prev => prev.filter(l => l.timestamp.getTime() > cutoff));
+        if (searchActive) {
+            const timer = setTimeout(doSearch, 300);
+            return () => clearTimeout(timer);
+        } else {
+            fetchHistory();
         }
-    }, []);
+    }, [searchActive, doSearch, fetchHistory]);
 
     useEffect(() => {
         if (!(window as any).__TAURI_INTERNALS__) return;
+        let unlisten: (() => void) | null = null;
+        listen<any>("clipboard-event", () => {
+            if (!searchActive) {
+                fetchHistory();
+            }
+        }).then(fn => { unlisten = fn; });
+        return () => { if (unlisten) unlisten(); };
+    }, [searchActive, fetchHistory]);
 
-        const unlistenPromise = listen<any>("clipboard-event", (event) => {
-            const isImage = event.payload.preview?.startsWith('data:image/');
-            const newLog: ClipboardLog = {
-                id: Date.now() + Math.random(),
-                timestamp: new Date(),
-                status: event.payload.status,
-                type: isImage ? 'image' : 'text',
-                preview: event.payload.preview,
-            };
+    useEffect(() => {
+        if (!searchActive) {
+            fetchHistory();
+        }
+    }, [filterTime, filterType, fetchHistory, searchActive]);
 
-            setLogs(prev => {
-                const existingIdx = prev.findIndex(log => {
-                    if (log.type === 'image' && newLog.type === 'image') {
-                        return isSameImage(log.preview, newLog.preview);
-                    }
-                    return log.preview === newLog.preview;
-                });
-                if (existingIdx !== -1) {
-                    const updated = [...prev];
-                    updated.splice(existingIdx, 1);
-                    return [{ ...prev[existingIdx], timestamp: newLog.timestamp, status: newLog.status }, ...updated];
-                }
-                return [newLog, ...prev].slice(0, MAX_RECORDS);
-            });
-        }).catch(() => () => {});
-
-        const poll = setInterval(async () => {
-            try {
-                const result: any = await invoke("read_clipboard_content");
-                if (result.type === 'empty') return;
-                const content = result.content as string;
-                if (!content || content === lastPolledRef.current) return;
-                lastPolledRef.current = content;
-
-                const isImage = result.type === 'image';
-                const newLog: ClipboardLog = {
-                    id: Date.now() + Math.random(),
-                    timestamp: new Date(),
-                    status: 'sent',
-                    type: isImage ? 'image' : 'text',
-                    preview: content,
-                    imageWidth: result.width,
-                    imageHeight: result.height,
-                };
-
-                setLogs(prev => {
-                    const existingIdx = prev.findIndex(log => {
-                        if (log.type === 'image' && isImage) {
-                            return isSameImage(log.preview, content);
-                        }
-                        return log.preview === content;
-                    });
-                    if (existingIdx !== -1) {
-                        const updated = [...prev];
-                        updated.splice(existingIdx, 1);
-                        return [{ ...prev[existingIdx], timestamp: newLog.timestamp }, ...updated];
-                    }
-                    return [newLog, ...prev].slice(0, MAX_RECORDS);
-                });
-            } catch { /* ignore */ }
-        }, 3000);
-
-        return () => {
-            unlistenPromise.then(fn => { if (typeof fn === 'function') fn(); });
-            clearInterval(poll);
-        };
-    }, []);
+    useEffect(() => {
+        if (selectedLog) {
+            setPreviewLoading(true);
+            invoke<{ type: string; content: string; width?: number; height?: number }>("get_history_content", { id: selectedLog.id })
+                .then(result => {
+                    setPreviewContent(result.content);
+                })
+                .catch(e => {
+                    console.error("Failed to load preview:", e);
+                    setPreviewContent(null);
+                })
+                .finally(() => setPreviewLoading(false));
+        } else {
+            setPreviewContent(null);
+        }
+    }, [selectedLog]);
 
     useEffect(() => {
         const handler = (e: MouseEvent) => {
             if (clearMenuRef.current && !clearMenuRef.current.contains(e.target as Node)) setShowClearMenu(false);
-            if (cleanupRef.current && !cleanupRef.current.contains(e.target as Node)) setShowCleanupPicker(false);
+            if (appearanceRef.current && !appearanceRef.current.contains(e.target as Node)) setShowAppearancePanel(false);
         };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
     }, []);
 
-    const filteredLogs = useMemo(() => logs.filter(log => {
-        const now = new Date();
-        const todayStart = getDayStart(now);
-        if (filterTime === 'today' && log.timestamp < todayStart) return false;
-        if (filterTime === 'yesterday') {
-            const yStart = new Date(todayStart.getTime() - 86400000);
-            if (log.timestamp < yStart || log.timestamp >= todayStart) return false;
-        }
-        if (filterTime === 'week' && log.timestamp.getTime() < Date.now() - 7 * 86400000) return false;
-        if (filterTime === 'month' && log.timestamp.getTime() < Date.now() - 30 * 86400000) return false;
-        if (filterType === 'text' && log.type !== 'text') return false;
-        if (filterType === 'image' && log.type !== 'image') return false;
-        if (filterDir === 'sent' && log.status !== 'sent') return false;
-        if (filterDir === 'received' && log.status !== 'received') return false;
-        return true;
-    }), [logs, filterTime, filterType, filterDir]);
-
-    const [copyFailed, setCopyFailed] = useState(false);
-
-    const handleCopy = useCallback(async (log: ClipboardLog, e?: React.MouseEvent) => {
+    const handleCopy = useCallback(async (log: HistoryEntry, e?: React.MouseEvent) => {
         e?.stopPropagation();
         try {
-            if (log.type === 'image') {
-                const preview = log.preview || '';
-                if (!preview.startsWith('data:image/')) {
-                    console.error('Invalid image data: does not start with data:image/');
-                    setCopyFailed(true);
-                    setTimeout(() => setCopyFailed(false), 2000);
-                    return;
-                }
-                await invoke("write_image_to_clipboard", { imageBase64: preview });
-            } else {
-                await invoke("write_to_clipboard", { content: log.preview });
-            }
+            await invoke("copy_history_to_clipboard", { id: log.id });
             setCopiedId(log.id);
             setCopiedPreview(selectedId === log.id);
             setCopyFailed(false);
             setTimeout(() => { setCopiedId(null); setCopiedPreview(false); }, 1200);
+            fetchHistory();
         } catch (err) {
-            console.error('Copy failed:', err);
+            console.error("Copy failed:", err);
             setCopyFailed(true);
             setTimeout(() => setCopyFailed(false), 2000);
         }
-    }, [selectedId]);
+    }, [selectedId, fetchHistory]);
 
-    const handleDelete = useCallback((id: number, e?: React.MouseEvent) => {
+    const handleDelete = useCallback(async (id: number, e?: React.MouseEvent) => {
         e?.stopPropagation();
-        setLogs(prev => prev.filter(l => l.id !== id));
-        if (selectedId === id) setSelectedId(null);
-    }, [selectedId]);
+        try {
+            await invoke("delete_history", { ids: [id] });
+            if (selectedId === id) setSelectedId(null);
+            fetchHistory();
+        } catch (e) {
+            console.error("Delete failed:", e);
+        }
+    }, [selectedId, fetchHistory]);
 
-    const handleClearDays = useCallback((days: number) => {
-        const cutoff = Date.now() - days * 86400000;
-        setLogs(prev => prev.filter(l => l.timestamp.getTime() > cutoff));
-        setShowClearMenu(false);
-    }, []);
+    const handleTogglePin = useCallback(async (id: number, e?: React.MouseEvent) => {
+        e?.stopPropagation();
+        try {
+            await invoke("toggle_history_pin", { id });
+            fetchHistory();
+        } catch (e) {
+            console.error("Pin failed:", e);
+        }
+    }, [fetchHistory]);
 
-    const handleClearAll = useCallback(() => {
-        if (confirmClear) {
-            setLogs([]);
+    const handleClearDays = useCallback(async (days: number) => {
+        try {
+            await invoke("clear_history", { beforeDays: days });
             setSelectedId(null);
-            setConfirmClear(false);
             setShowClearMenu(false);
+            fetchHistory();
+        } catch (e) {
+            console.error("Clear failed:", e);
+        }
+    }, [fetchHistory]);
+
+    const handleClearAll = useCallback(async () => {
+        if (confirmClear) {
+            try {
+                await invoke("clear_history", {});
+                setLogs([]);
+                setSelectedId(null);
+                setConfirmClear(false);
+                setShowClearMenu(false);
+            } catch (e) {
+                console.error("Clear all failed:", e);
+            }
         } else {
             setConfirmClear(true);
         }
     }, [confirmClear]);
 
-    const handleSetCleanup = useCallback((days: number) => {
-        setCleanupDays(days);
-        localStorage.setItem(CLEANUP_KEY, String(days));
-        setShowCleanupPicker(false);
-        if (days > 0) {
-            const cutoff = Date.now() - days * 86400000;
-            setLogs(prev => prev.filter(l => l.timestamp.getTime() > cutoff));
+    const [pulling, setPulling] = useState(false);
+    const handlePull = useCallback(async () => {
+        setPulling(true);
+        try {
+            await invoke("pull_today_history");
+            await new Promise(r => setTimeout(r, 3000));
+            fetchHistory();
+        } catch (e) {
+            console.error("Pull failed:", e);
+        } finally {
+            setPulling(false);
+        }
+    }, [fetchHistory]);
+
+    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key === "Enter") {
+            setSearchActive(true);
+        } else if (e.key === "Escape") {
+            setSearchQuery("");
+            setSearchActive(false);
         }
     }, []);
 
+    // Layout: list column width from user ratio; preview panel fills the rest
+    const contentRef = useRef<HTMLDivElement>(null);
+    const [layout, setLayout] = useState({ contentH: 400, listW: 400 });
+    useLayoutEffect(() => {
+        const el = contentRef.current;
+        if (!el) return;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const h = entry.contentRect.height;
+                const totalW = entry.contentRect.width;
+                const gap = 12;
+                const minListW = 240;
+                const minPreviewW = 260;
+                let listW = Math.round(totalW * listWidthRatio);
+                const maxListW = Math.max(minListW, totalW - gap - minPreviewW);
+                listW = Math.max(minListW, Math.min(listW, maxListW));
+                setLayout({ contentH: Math.floor(h), listW });
+            }
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [listWidthRatio]);
+
     return (
-        <div style={{ width: '100%', paddingBottom: '0', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 42px)' }}>
+        <div style={{ width: "100%", flex: "1", minHeight: 0, paddingBottom: "0", display: "flex", flexDirection: "column" }}>
             {/* Header */}
-            <div style={{ marginBottom: '16px', flexShrink: 0 }}>
-                <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
-                    <ClipboardCopy size={22} color="var(--color-primary)" />
-                    {t('sync.title')}
+            <div style={{ marginBottom: "10px", flexShrink: 0 }}>
+                <h1 style={{ fontSize: "18px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px", margin: 0 }}>
+                    <ClipboardCopy size={18} color="var(--color-primary)" />
+                    {t("sync.title")}
                 </h1>
-                <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
-                    {t('sync.subtitle')}
-                </p>
             </div>
 
             {/* Filter Bar */}
             <div style={{
-                display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '12px',
-                padding: '10px 14px', background: 'var(--color-surface-elevated)',
-                borderRadius: 'var(--radius-md)', border: '1px solid var(--color-glass-border)',
-                flexShrink: 0,
+                display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "8px",
+                padding: "8px 12px", background: "var(--color-surface-elevated)",
+                borderRadius: "var(--radius-md)", border: "1px solid var(--color-glass-border)",
+                flexShrink: 0, alignItems: "center",
             }}>
-                <FilterGroup title={t('sync.filter_time_label')} value={filterTime} onChange={v => setFilterTime(v as TimeFilter)} options={[
-                    { key: 'all', label: t('sync.filter_all') },
-                    { key: 'today', label: t('sync.filter_today') },
-                    { key: 'yesterday', label: t('sync.filter_yesterday') },
-                    { key: 'week', label: t('sync.filter_week') },
-                    { key: 'month', label: t('sync.filter_month') },
+                <FilterGroup title={t("sync.filter_time_label")} value={filterTime} onChange={v => { setFilterTime(v as TimeFilter); setSearchActive(false); }} options={[
+                    { key: "all", label: t("sync.filter_all") },
+                    { key: "today", label: t("sync.filter_today") },
+                    { key: "yesterday", label: t("sync.filter_yesterday") },
+                    { key: "week", label: t("sync.filter_week") },
+                    { key: "month", label: t("sync.filter_month") },
                 ]} />
-                <div style={{ width: '1px', background: 'var(--color-border)', margin: '0 2px' }} />
-                <FilterGroup title={t('sync.filter_type_label')} value={filterType} onChange={v => setFilterType(v as TypeFilter)} options={[
-                    { key: 'all', label: t('sync.filter_all') },
-                    { key: 'text', label: t('sync.filter_text') },
-                    { key: 'image', label: t('sync.filter_image') },
+                <div style={{ width: "1px", background: "var(--color-border)", margin: "0 2px" }} />
+                <FilterGroup title={t("sync.filter_type_label")} value={filterType} onChange={v => { setFilterType(v as TypeFilter); setSearchActive(false); }} options={[
+                    { key: "all", label: t("sync.filter_all") },
+                    { key: "text", label: t("sync.filter_text") },
+                    { key: "image", label: t("sync.filter_image") },
                 ]} />
-                <div style={{ width: '1px', background: 'var(--color-border)', margin: '0 2px' }} />
-                <FilterGroup title={t('sync.filter_direction_label')} value={filterDir} onChange={v => setFilterDir(v as DirFilter)} options={[
-                    { key: 'all', label: t('sync.filter_all') },
-                    { key: 'sent', label: t('sync.filter_sent') },
-                    { key: 'received', label: t('sync.filter_received') },
-                ]} />
+                <div style={{ width: "1px", background: "var(--color-border)", margin: "0 2px" }} />
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", flex: 1, minWidth: "160px" }}>
+                    <Search size={13} color="var(--color-text-muted)" />
+                    <input
+                        ref={searchInputRef}
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => { setSearchQuery(e.target.value); if (e.target.value) setSearchActive(true); }}
+                        onKeyDown={handleSearchKeyDown}
+                        placeholder={t("sync.search_placeholder", "搜索文本内容...")}
+                        style={{
+                            flex: 1, background: "transparent", border: "none", outline: "none",
+                            fontSize: "12px", color: "var(--color-text-main)",
+                            fontFamily: "inherit",
+                        }}
+                    />
+                    {searchQuery && (
+                        <button onClick={() => { setSearchQuery(""); setSearchActive(false); }} style={{
+                            background: "none", border: "none", cursor: "pointer", padding: "2px",
+                            color: "var(--color-text-muted)", display: "flex",
+                        }}>
+                            <X size={12} />
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Main Content: List + Preview */}
-            <div style={{ display: 'grid', gridTemplateColumns: '45% 55%', gap: '12px', flex: 1, minHeight: 0 }}>
-                {/* Left: Activity List */}
-                <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-                        {filteredLogs.length === 0 ? (
-                            <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-                                <ClipboardCopy size={40} style={{ opacity: 0.15, marginBottom: '12px', margin: '0 auto', display: 'block' }} />
-                                <p style={{ fontSize: '13px' }}>{t('sync.no_activity_message')}</p>
+            <div ref={contentRef} style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0, minWidth: 0 }}>
+                {/* Left: Activity List (width from settings) */}
+                <div className="glass-panel" style={{ borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", overflow: "hidden", flex: `0 0 ${layout.listW}px`, minWidth: 0, maxWidth: "100%" }}>
+                    <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
+                        {logs.length === 0 ? (
+                            <div style={{ padding: "60px 20px", textAlign: "center", color: "var(--color-text-muted)" }}>
+                                <ClipboardCopy size={40} style={{ opacity: 0.15, marginBottom: "12px", margin: "0 auto", display: "block" }} />
+                                <p style={{ fontSize: "13px" }}>{t("sync.no_activity_message")}</p>
                             </div>
                         ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                 <AnimatePresence>
-                                    {filteredLogs.map((log, index) => {
+                                    {logs.map((log, index) => {
                                         const isSelected = selectedId === log.id;
                                         const isCopied = copiedId === log.id;
                                         const shouldAnimate = index < ANIMATED_ITEMS;
+                                        const textLineClamp = Math.max(2, Math.min(12, Math.floor(itemHeight / 16)));
                                         const inner = (
-                                            <>
-                                                {/* Top row: status + time */}
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <div style={{ display: "flex", gap: "10px", alignItems: "stretch", minHeight: `${itemHeight}px`, height: `${itemHeight}px` }}>
+                                                {/* Left: Info column */}
+                                                <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: "5px", width: "120px", minHeight: 0 }}>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
                                                         <div style={{
-                                                            padding: '3px', borderRadius: '5px',
-                                                            background: log.status === 'sent' ? 'var(--color-primary-glow)' : 'rgba(34, 197, 94, 0.15)',
-                                                            color: log.status === 'sent' ? 'var(--color-primary)' : '#22c55e',
-                                                            display: 'flex',
+                                                            padding: "3px", borderRadius: "4px",
+                                                            background: log.source === "local" ? "var(--color-primary-glow)" : "rgba(34, 197, 94, 0.15)",
+                                                            color: log.source === "local" ? "var(--color-primary)" : "#22c55e",
+                                                            display: "flex", flexShrink: 0,
                                                         }}>
-                                                            {log.status === 'sent' ? <ArrowUpToLine size={13} /> : <ArrowDownToLine size={13} />}
+                                                            {log.source === "local" ? <ArrowUpToLine size={14} /> : <ArrowDownToLine size={14} />}
                                                         </div>
-                                                        <span style={{
-                                                            fontSize: '11.5px', fontWeight: 600,
-                                                            color: log.status === 'sent' ? 'var(--color-primary)' : '#22c55e',
-                                                            letterSpacing: '0.3px',
-                                                        }}>
-                                                            {log.status === 'sent' ? t('sync.status_sent') : t('sync.status_received')}
+                                                        {log.pinned && <Pin size={13} color="var(--color-primary)" />}
+                                                        <span style={{ fontSize: "12px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+                                                            {new Date(log.timestamp).toLocaleTimeString()}
                                                         </span>
                                                     </div>
-                                                    <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                                                        {log.timestamp.toLocaleTimeString()}
+                                                    <span style={{ fontSize: "12px", color: "var(--color-text-muted)" }}>
+                                                        {log.type === "image" ? (
+                                                            <>
+                                                                <ImageIcon size={13} style={{ marginRight: "3px", verticalAlign: "middle" }} />
+                                                                {(log.size / 1024).toFixed(0)} KB
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <FileType size={13} style={{ marginRight: "3px", verticalAlign: "middle" }} />
+                                                                {(log.size / 1024).toFixed(0)} KB
+                                                            </>
+                                                        )}
                                                     </span>
-                                                </div>
-
-                                                {/* Content preview */}
-                                                {log.type === 'image' ? (
-                                                    <img src={log.preview} alt="" style={{
-                                                        height: '80px', width: '100%', objectFit: 'cover',
-                                                        borderRadius: '6px',
-                                                    }} />
-                                                ) : (
-                                                    <div style={{
-                                                        fontSize: '12px', color: 'var(--color-text-main)',
-                                                        lineHeight: '1.4',
-                                                        display: '-webkit-box', WebkitLineClamp: 2,
-                                                        WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                                                        fontFamily: '"Fira Code", monospace, Consolas',
-                                                        wordBreak: 'break-word',
-                                                    }}>
-                                                        {log.preview}
+                                                    <div style={{ display: "flex", gap: "3px" }}>
+                                                        <button onClick={(e) => handleTogglePin(log.id, e)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px", borderRadius: "3px", display: "flex", color: log.pinned ? "var(--color-primary)" : "var(--color-text-muted)" }} title={log.pinned ? "Unpin" : "Pin"}>
+                                                            {log.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+                                                        </button>
+                                                        <button onClick={(e) => handleCopy(log, e)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px", borderRadius: "3px", display: "flex", color: isCopied ? "#22c55e" : "var(--color-text-muted)" }} title={t("sync.btn_copy")}>
+                                                            {isCopied ? <Check size={15} /> : <Copy size={15} />}
+                                                        </button>
+                                                        <button onClick={(e) => handleDelete(log.id, e)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px", borderRadius: "3px", display: "flex", color: "var(--color-text-muted)" }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = "var(--color-text-muted)")} title={t("sync.btn_delete")}>
+                                                            <Trash2 size={15} />
+                                                        </button>
                                                     </div>
-                                                )}
-
-                                                {/* Bottom right action buttons */}
-                                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '-2px' }}>
-                                                    <button
-                                                        onClick={(e) => handleCopy(log, e)}
-                                                        style={{
-                                                            background: 'none', border: 'none', cursor: 'pointer',
-                                                            padding: '3px', borderRadius: '4px', display: 'flex',
-                                                            color: isCopied ? '#22c55e' : 'var(--color-text-muted)',
-                                                            transition: 'color 0.15s',
-                                                        }}
-                                                        title={t('sync.btn_copy')}
-                                                    >
-                                                        {isCopied ? <Check size={14} /> : <Copy size={14} />}
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => handleDelete(log.id, e)}
-                                                        style={{
-                                                            background: 'none', border: 'none', cursor: 'pointer',
-                                                            padding: '3px', borderRadius: '4px', display: 'flex',
-                                                            color: 'var(--color-text-muted)', transition: 'color 0.15s',
-                                                        }}
-                                                        onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
-                                                        onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text-muted)')}
-                                                        title={t('sync.btn_delete')}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
                                                 </div>
-                                            </>
+                                                {/* Right: Content area */}
+                                                <div style={{
+                                                    flex: 1, minWidth: 0, minHeight: 0, height: "100%", alignSelf: "stretch", borderRadius: "6px",
+                                                    overflow: "hidden",
+                                                    background: log.type === "image" ? "var(--color-surface)" : "var(--color-surface)",
+                                                    display: "flex", alignItems: "center",
+                                                    justifyContent: log.type === "image" ? "flex-end" : "flex-start",
+                                                }}>
+                                                    {log.type === "image" ? (
+                                                        log.preview ? (
+                                                            <img
+                                                                src={log.preview}
+                                                                alt=""
+                                                                style={{ height: "100%", maxHeight: "100%", width: "auto", maxWidth: "100%", objectFit: "contain", display: "block" }}
+                                                            />
+                                                        ) : (
+                                                            <ImageIcon size={24} color="var(--color-text-muted)" style={{ opacity: 0.4 }} />
+                                                        )
+                                                    ) : (
+                                                        <div style={{
+                                                            fontSize: "12.5px", color: "var(--color-text-main)",
+                                                            lineHeight: "1.45",
+                                                            display: "-webkit-box", WebkitLineClamp: textLineClamp,
+                                                            WebkitBoxOrient: "vertical", overflow: "hidden",
+                                                            fontFamily: '"Fira Code", monospace, Consolas',
+                                                            wordBreak: "break-word",
+                                                            width: "100%", maxHeight: "100%", alignSelf: "flex-start", padding: "0 2px", boxSizing: "border-box",
+                                                        }}>
+                                                            {log.preview || "..."}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
                                         );
+
+                                        const cardStyle: React.CSSProperties = {
+                                            padding: "8px 10px",
+                                            background: isSelected ? "rgba(94, 106, 210, 0.12)" : "var(--color-surface-elevated)",
+                                            border: isSelected
+                                                ? "1px solid rgba(94, 106, 210, 0.35)"
+                                                : "1px solid var(--color-glass-border)",
+                                            borderLeft: isSelected ? "3px solid var(--color-primary)" : "1px solid var(--color-glass-border)",
+                                            borderRadius: "var(--radius-sm)",
+                                            boxShadow: isSelected ? "0 1px 3px rgba(0,0,0,0.12)" : "0 1px 2px rgba(0,0,0,0.06)",
+                                            cursor: "pointer",
+                                            transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s",
+                                            position: "relative",
+                                        };
 
                                         return shouldAnimate ? (
                                             <motion.div
@@ -441,36 +492,12 @@ export default function FlowSync() {
                                                 exit={{ opacity: 0, scale: 0.96 }}
                                                 transition={{ duration: 0.18 }}
                                                 onClick={() => setSelectedId(log.id)}
-                                                style={{
-                                                    display: 'flex', flexDirection: 'column', gap: '6px',
-                                                    padding: '10px 12px',
-                                                    background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
-                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
-                                                    borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
-                                                    borderRadius: 'var(--radius-sm)',
-                                                    cursor: 'pointer',
-                                                    transition: 'background 0.15s, border-color 0.15s',
-                                                    position: 'relative',
-                                                }}
+                                                style={cardStyle}
                                             >
                                                 {inner}
                                             </motion.div>
                                         ) : (
-                                            <div
-                                                key={log.id}
-                                                onClick={() => setSelectedId(log.id)}
-                                                style={{
-                                                    display: 'flex', flexDirection: 'column', gap: '6px',
-                                                    padding: '10px 12px',
-                                                    background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
-                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
-                                                    borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
-                                                    borderRadius: 'var(--radius-sm)',
-                                                    cursor: 'pointer',
-                                                    transition: 'background 0.15s, border-color 0.15s',
-                                                    position: 'relative',
-                                                }}
-                                            >
+                                            <div key={log.id} onClick={() => setSelectedId(log.id)} style={cardStyle}>
                                                 {inner}
                                             </div>
                                         );
@@ -481,100 +508,112 @@ export default function FlowSync() {
                     </div>
                 </div>
 
-                {/* Right: Preview Panel */}
+                {/* Right: Preview Panel — fills remaining width */}
                 <div className="glass-panel" style={{
-                    borderRadius: 'var(--radius-lg)', padding: '20px',
-                    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                    borderRadius: "var(--radius-lg)", padding: "20px",
+                    display: "flex", flexDirection: "column", overflow: "hidden",
+                    flex: 1, minWidth: 0,
                 }}>
                     {selectedLog ? (
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                            {/* Content Area */}
-                            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                {selectedLog.type === 'image' ? (
-                                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', padding: '8px' }}>
+                        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                                {previewLoading ? (
+                                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-muted)", fontSize: "13px" }}>
+                                        Loading...
+                                    </div>
+                                ) : selectedLog.type === "image" && previewContent ? (
+                                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: "8px" }}>
                                         <img
-                                            src={selectedLog.preview}
+                                            src={previewContent}
                                             alt="Preview"
                                             style={{
-                                                maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
-                                                borderRadius: 'var(--radius-md)',
+                                                maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                                                borderRadius: "var(--radius-md)",
                                             }}
                                         />
                                     </div>
-                                ) : (
+                                ) : previewContent ? (
                                     <div style={{
-                                        flex: 1, overflow: 'auto', background: 'var(--color-surface)',
-                                        padding: '14px', borderRadius: 'var(--radius-sm)',
-                                        border: '1px solid var(--color-border)',
-                                        userSelect: 'text', WebkitUserSelect: 'text',
+                                        flex: 1, overflow: "auto", background: "var(--color-surface)",
+                                        padding: "14px", borderRadius: "var(--radius-sm)",
+                                        border: "1px solid var(--color-border)",
+                                        userSelect: "text", WebkitUserSelect: "text",
                                     }}>
                                         <pre style={{
-                                            color: 'var(--color-text-main)', fontFamily: '"Fira Code", monospace, Consolas',
-                                            fontSize: '13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                                            margin: 0, lineHeight: '1.5',
+                                            color: "var(--color-text-main)", fontFamily: '"Fira Code", monospace, Consolas',
+                                            fontSize: "13px", whiteSpace: "pre-wrap", wordBreak: "break-word",
+                                            margin: 0, lineHeight: "1.5",
                                         }}>
-                                            {selectedLog.preview}
+                                            {previewContent}
                                         </pre>
                                     </div>
-                                )}
+                                ) : null}
                             </div>
 
                             {/* Meta Info */}
                             <div style={{
-                                marginTop: '14px', padding: '10px 14px',
-                                background: 'var(--color-surface-elevated)', borderRadius: 'var(--radius-sm)',
-                                display: 'flex', flexWrap: 'wrap', gap: '16px',
-                                fontSize: '12px', color: 'var(--color-text-muted)',
+                                marginTop: "14px", padding: "10px 14px",
+                                background: "var(--color-surface-elevated)", borderRadius: "var(--radius-sm)",
+                                display: "flex", flexWrap: "wrap", gap: "16px",
+                                fontSize: "12px", color: "var(--color-text-muted)",
                             }}>
-                                <span>{t('sync.meta_time')}：{selectedLog.timestamp.toLocaleString()}</span>
+                                <span>{t("sync.meta_time")}：{new Date(selectedLog.timestamp).toLocaleString()}</span>
                                 <span>
-                                    {t('sync.meta_status')}：
-                                    <span style={{ color: selectedLog.status === 'sent' ? 'var(--color-primary)' : '#22c55e', fontWeight: 500 }}>
-                                        {selectedLog.status === 'sent' ? t('sync.status_sent') : t('sync.status_received')}
+                                    {t("sync.meta_status")}：
+                                    <span style={{ color: selectedLog.source === "local" ? "var(--color-primary)" : "#22c55e", fontWeight: 500 }}>
+                                        {selectedLog.source === "local" ? t("sync.status_sent") : t("sync.status_received")}
                                     </span>
                                 </span>
                                 <span>
-                                    {t('sync.meta_type')}：
-                                    {selectedLog.type === 'image' ? (
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                            <ImageIcon size={12} /> {t('sync.type_image')}
-                                            {selectedLog.imageWidth ? ` (${selectedLog.imageWidth}×${selectedLog.imageHeight})` : ''}
+                                    {t("sync.meta_type")}：
+                                    {selectedLog.type === "image" ? (
+                                        <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                                            <ImageIcon size={12} /> {t("sync.type_image")}
                                         </span>
                                     ) : (
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                            <FileType size={12} /> {t('sync.type_text')}
+                                        <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                                            <FileType size={12} /> {t("sync.type_text")}
                                         </span>
                                     )}
                                 </span>
+                                <span>{(selectedLog.size / 1024).toFixed(1)} KB</span>
                             </div>
 
                             {/* Action Buttons */}
-                            <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                            <div style={{ marginTop: "12px", display: "flex", gap: "8px" }}>
                                 <button
                                     className="btn-primary"
                                     onClick={() => handleCopy(selectedLog)}
-                                    style={{ padding: '7px 16px', fontSize: '12.5px', gap: '6px', background: copyFailed ? '#ef4444' : undefined }}
+                                    style={{ padding: "7px 16px", fontSize: "12.5px", gap: "6px", background: copyFailed ? "#ef4444" : undefined }}
                                 >
                                     {copyFailed ? <X size={14} /> : (copiedPreview ? <Check size={14} /> : <Copy size={14} />)}
-                                    {copyFailed ? t('sync.copy_failed') : (copiedPreview ? t('sync.copy_success') : (selectedLog.type === 'image' ? `${t('sync.btn_copy')} · ${t('sync.type_image')}` : `${t('sync.btn_copy')} · ${t('sync.type_text')}`))}
+                                    {copyFailed ? t("sync.copy_failed") : (copiedPreview ? t("sync.copy_success") : t("sync.btn_copy"))}
+                                </button>
+                                <button
+                                    className="btn-ghost"
+                                    onClick={(e) => handleTogglePin(selectedLog.id, e)}
+                                    style={{ padding: "7px 16px", fontSize: "12.5px", gap: "6px", display: "flex", alignItems: "center" }}
+                                >
+                                    {selectedLog.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                                    {selectedLog.pinned ? "Unpin" : "Pin"}
                                 </button>
                                 <button
                                     className="btn-ghost"
                                     onClick={() => handleDelete(selectedLog.id)}
-                                    style={{ padding: '7px 16px', fontSize: '12.5px', gap: '6px', color: '#ef4444', display: 'flex', alignItems: 'center' }}
+                                    style={{ padding: "7px 16px", fontSize: "12.5px", gap: "6px", color: "#ef4444", display: "flex", alignItems: "center" }}
                                 >
-                                    <Trash2 size={14} /> {t('sync.btn_delete')}
+                                    <Trash2 size={14} /> {t("sync.btn_delete")}
                                 </button>
                             </div>
                         </div>
                     ) : (
                         <div style={{
-                            flex: 1, display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'center',
-                            color: 'var(--color-text-muted)',
+                            flex: 1, display: "flex", flexDirection: "column",
+                            alignItems: "center", justifyContent: "center",
+                            color: "var(--color-text-muted)",
                         }}>
-                            <ClipboardCopy size={44} style={{ opacity: 0.12, marginBottom: '14px' }} />
-                            <p style={{ fontSize: '14px' }}>{t('sync.preview_empty')}</p>
+                            <ClipboardCopy size={44} style={{ opacity: 0.12, marginBottom: "14px" }} />
+                            <p style={{ fontSize: "14px" }}>{t("sync.preview_empty")}</p>
                         </div>
                     )}
                 </div>
@@ -582,85 +621,108 @@ export default function FlowSync() {
 
             {/* Bottom Toolbar */}
             <div style={{
-                marginTop: '10px', padding: '8px 14px', flexShrink: 0,
-                background: 'var(--color-surface-elevated)', borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--color-glass-border)',
-                display: 'flex', alignItems: 'center', gap: '16px',
-                fontSize: '12px', color: 'var(--color-text-muted)',
+                marginTop: "6px", padding: "6px 12px", flexShrink: 0,
+                background: "var(--color-surface-elevated)", borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--color-glass-border)",
+                display: "flex", alignItems: "center", gap: "16px",
+                fontSize: "12px", color: "var(--color-text-muted)",
             }}>
-                <span>{t('sync.record_count', { count: filteredLogs.length })}</span>
-
-                <div style={{ position: 'relative' }} ref={clearMenuRef}>
+                <div style={{ position: "relative" }} ref={appearanceRef}>
                     <button
                         className="btn-ghost"
-                        onClick={() => { setShowClearMenu(!showClearMenu); setConfirmClear(false); }}
-                        style={{ padding: '4px 10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        onClick={() => setShowAppearancePanel(!showAppearancePanel)}
+                        style={{ padding: "4px 10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", color: showAppearancePanel ? "var(--color-primary)" : undefined }}
                     >
-                        <Trash2 size={13} /> {t('sync.clear_button')} <ChevronDown size={12} />
+                        <Settings2 size={13} /> 外观
                     </button>
-                    {showClearMenu && (
+                    {showAppearancePanel && (
                         <div style={{
-                            position: 'absolute', bottom: '100%', left: 0, marginBottom: '4px',
-                            background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)',
-                            borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-glass)', zIndex: 100,
-                            minWidth: '180px', overflow: 'hidden',
+                            position: "absolute", bottom: "100%", left: 0, marginBottom: "4px",
+                            background: "var(--color-bg-base)", border: "1px solid var(--color-glass-border)",
+                            borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-glass)", zIndex: 100,
+                            padding: "14px 16px", minWidth: "260px",
                         }}>
-                            {[3, 7, 30].map(d => (
-                                <button key={d} onClick={() => handleClearDays(d)} style={{
-                                    display: 'block', width: '100%', textAlign: 'left',
-                                    padding: '8px 14px', background: 'none', border: 'none',
-                                    color: 'var(--color-text-main)', fontSize: '12px', cursor: 'pointer',
-                                }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface)'}
-                                   onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-                                    {t(`sync.clear_${d}d`)}
-                                </button>
-                            ))}
-                            <div style={{ borderTop: '1px solid var(--color-glass-border)' }} />
-                            <button onClick={handleClearAll} style={{
-                                display: 'block', width: '100%', textAlign: 'left',
-                                padding: '8px 14px', background: confirmClear ? 'rgba(239,68,68,0.1)' : 'none',
-                                border: 'none', color: confirmClear ? '#ef4444' : '#ef4444',
-                                fontSize: '12px', cursor: 'pointer', fontWeight: 600,
-                            }}>
-                                {confirmClear ? '⚠ 确认？' : t('sync.clear_all')}
-                            </button>
+                            <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--color-text-main)", marginBottom: "10px" }}>
+                                活动流设置
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <span style={{ fontSize: "11px", color: "var(--color-text-muted)", whiteSpace: "nowrap", width: "70px" }}>条目高度</span>
+                                    <input type="range" min={48} max={200} value={itemHeight} onChange={e => {
+                                        const v = Math.max(48, Math.min(200, Number(e.target.value)));
+                                        setItemHeight(v);
+                                        localStorage.setItem('yiboflow_item_height', String(v));
+                                    }} style={{ flex: 1, accentColor: "var(--color-primary)" }} />
+                                    <span style={{ fontSize: "11px", color: "var(--color-text-main)", fontWeight: 600, minWidth: "36px", textAlign: "right" }}>{itemHeight}px</span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <span style={{ fontSize: "11px", color: "var(--color-text-muted)", whiteSpace: "nowrap", width: "70px" }}>条目宽度</span>
+                                    <input
+                                        type="range"
+                                        min={25}
+                                        max={55}
+                                        value={Math.round(listWidthRatio * 100)}
+                                        onChange={e => {
+                                            const p = Math.max(25, Math.min(55, Number(e.target.value))) / 100;
+                                            setListWidthRatio(p);
+                                            localStorage.setItem('yiboflow_list_width_ratio', String(p));
+                                        }}
+                                        style={{ flex: 1, accentColor: "var(--color-primary)" }}
+                                    />
+                                    <span style={{ fontSize: "11px", color: "var(--color-text-main)", fontWeight: 600, minWidth: "44px", textAlign: "right" }}>
+                                        {Math.round(listWidthRatio * 100)}% · {layout.listW}px
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
 
-                <div style={{ flex: 1 }} />
+                <span>{t("sync.record_count", { count: totalCount })}</span>
 
-                <div style={{ position: 'relative' }} ref={cleanupRef}>
-                    <span style={{ marginRight: '4px' }}>{t('sync.auto_cleanup_label')}：</span>
+                <button
+                    className="btn-ghost"
+                    onClick={handlePull}
+                    disabled={pulling}
+                    style={{ padding: "4px 10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", opacity: pulling ? 0.5 : 1 }}
+                >
+                    <Download size={13} /> {pulling ? "拉取中..." : "拉取今天"}
+                </button>
+
+                <div style={{ position: "relative" }} ref={clearMenuRef}>
                     <button
-                        onClick={() => setShowCleanupPicker(!showCleanupPicker)}
-                        style={{
-                            background: 'var(--color-surface)', border: '1px solid var(--color-border)',
-                            borderRadius: '4px', padding: '2px 8px', color: 'var(--color-text-main)',
-                            fontSize: '12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px',
-                        }}
+                        className="btn-ghost"
+                        onClick={() => { setShowClearMenu(!showClearMenu); setConfirmClear(false); }}
+                        style={{ padding: "4px 10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
                     >
-                        {cleanupDays > 0 ? `${cleanupDays}天` : t('sync.auto_cleanup_off')}
-                        <Settings2 size={11} />
+                        <Trash2 size={13} /> {t("sync.clear_button")} <ChevronDown size={12} />
                     </button>
-                    {showCleanupPicker && (
+                    {showClearMenu && (
                         <div style={{
-                            position: 'absolute', bottom: '100%', right: 0, marginBottom: '4px',
-                            background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)',
-                            borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-glass)', zIndex: 100,
-                            overflow: 'hidden',
+                            position: "absolute", bottom: "100%", left: 0, marginBottom: "4px",
+                            background: "var(--color-surface-elevated)", border: "1px solid var(--color-glass-border)",
+                            borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-glass)", zIndex: 100,
+                            minWidth: "180px", overflow: "hidden",
                         }}>
-                            {[0, 1, 3, 7, 14, 30].map(d => (
-                                <button key={d} onClick={() => handleSetCleanup(d)} style={{
-                                    display: 'block', width: '100%', textAlign: 'left',
-                                    padding: '6px 14px', background: cleanupDays === d ? 'var(--color-primary-glow)' : 'none',
-                                    border: 'none', color: 'var(--color-text-main)', fontSize: '12px', cursor: 'pointer',
-                                    fontWeight: cleanupDays === d ? 600 : 400,
-                                }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface)'}
-                                   onMouseLeave={e => e.currentTarget.style.background = cleanupDays === d ? 'var(--color-primary-glow)' : 'none'}>
-                                    {d === 0 ? t('sync.auto_cleanup_off') : `${d}天`}
+                            {[3, 7, 30].map(d => (
+                                <button key={d} onClick={() => handleClearDays(d)} style={{
+                                    display: "block", width: "100%", textAlign: "left",
+                                    padding: "8px 14px", background: "none", border: "none",
+                                    color: "var(--color-text-main)", fontSize: "12px", cursor: "pointer",
+                                }} onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface)"}
+                                   onMouseLeave={e => e.currentTarget.style.background = "none"}>
+                                    {t(`sync.clear_${d}d`)}
                                 </button>
                             ))}
+                            <div style={{ borderTop: "1px solid var(--color-glass-border)" }} />
+                            <button onClick={handleClearAll} style={{
+                                display: "block", width: "100%", textAlign: "left",
+                                padding: "8px 14px", background: confirmClear ? "rgba(239,68,68,0.1)" : "none",
+                                border: "none", color: confirmClear ? "#ef4444" : "#ef4444",
+                                fontSize: "12px", cursor: "pointer", fontWeight: 600,
+                            }}>
+                                {confirmClear ? "⚠ 确认？" : t("sync.clear_all")}
+                            </button>
                         </div>
                     )}
                 </div>

@@ -81,6 +81,20 @@ pub struct SearchEngine {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CacheConfig {
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: String,
+    #[serde(default = "default_cache_max_size")]
+    pub cache_max_size_mb: u64,
+    #[serde(default = "default_cleanup_days")]
+    pub auto_cleanup_days: u32,
+}
+
+fn default_cache_dir() -> String { String::new() }
+fn default_cache_max_size() -> u64 { 200 }
+fn default_cleanup_days() -> u32 { 7 }
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AppConfig {
     #[serde(default = "default_true")]
     pub is_sync_enabled: bool,
@@ -106,6 +120,8 @@ pub struct AppConfig {
     pub hint_window: WindowConfig,
     #[serde(default)]
     pub is_window_config_unified: bool,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 fn default_min_chars() -> usize { 2 }
@@ -198,6 +214,7 @@ impl AppConfig {
             device_fingerprint: default_fingerprint(),
             hint_window: WindowConfig::default(),
             is_window_config_unified: false,
+            cache: CacheConfig::default(),
         };
         cfg.save();
         cfg

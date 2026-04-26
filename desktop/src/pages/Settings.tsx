@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
-import { Palette, Monitor, Laptop, Zap, CheckCircle2, Save, UploadCloud, AlertTriangle, AlertCircle, ToggleRight, ToggleLeft, RefreshCw } from "lucide-react";
+import { Palette, Monitor, Laptop, Zap, CheckCircle2, Save, UploadCloud, AlertTriangle, AlertCircle, ToggleRight, ToggleLeft, RefreshCw, HardDrive, FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 
@@ -165,6 +165,45 @@ export default function Settings() {
         { id: "en", name: t('settings.language_english') }
     ];
 
+    const [cacheStats, setCacheStats] = useState<any>(null);
+    const [cacheMaxSize, setCacheMaxSize] = useState(200);
+
+    const fetchCacheStats = () => {
+        invoke("get_cache_stats").then((stats: any) => {
+            setCacheStats(stats);
+            setCacheMaxSize(stats.max_size_mb);
+        }).catch(console.error);
+    };
+
+    useEffect(() => { fetchCacheStats(); }, []);
+
+    const handleCacheDirChange = async () => {
+        try {
+            const selected = await open({
+                title: "选择缓存目录",
+                directory: true,
+                multiple: false,
+            });
+            if (selected && typeof selected === "string") {
+                await invoke("set_cache_dir", { path: selected });
+                fetchCacheStats();
+                setAlertDialog({ isOpen: true, message: "缓存目录已迁移！", type: 'success' });
+            }
+        } catch (e) {
+            setAlertDialog({ isOpen: true, message: "迁移失败: " + String(e), type: 'error' });
+        }
+    };
+
+    const handleCacheMaxSizeChange = async (mb: number) => {
+        try {
+            await invoke("set_cache_max_size", { mb });
+            setCacheMaxSize(mb);
+            fetchCacheStats();
+        } catch (e) {
+            setAlertDialog({ isOpen: true, message: "设置失败: " + String(e), type: 'error' });
+        }
+    };
+
     const toggleAutostart = async () => {
         try {
             if (isAutostartEnabled) {
@@ -262,6 +301,56 @@ export default function Settings() {
                             {isAutostartEnabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
                             {isAutostartEnabled ? '开机自启: 已开启' : '开机自启: 已关闭'}
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Clipboard History Cache */}
+            <div className="glass-panel" style={{ padding: '18px 24px', borderRadius: 'var(--radius-lg)', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                    <HardDrive size={16} color="var(--color-primary)" />
+                    <span style={{ fontSize: '14px', fontWeight: 600 }}>剪贴板历史缓存</span>
+                    {cacheStats && (
+                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginLeft: 'auto' }}>
+                            {cacheStats.total_entries} 条 · {cacheStats.total_size_mb} MB / {cacheStats.max_size_mb} MB
+                        </span>
+                    )}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '200px' }}>
+                        <FolderOpen size={14} color="var(--color-text-muted)" />
+                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+                            {cacheStats?.cache_dir || '...'}
+                        </span>
+                        <button
+                            onClick={handleCacheDirChange}
+                            className="btn-ghost"
+                            style={{ padding: '4px 10px', fontSize: '11px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
+                        >
+                            更改目录
+                        </button>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>空间上限：</span>
+                        {[100, 200, 500, 1000].map(mb => (
+                            <button
+                                key={mb}
+                                onClick={() => handleCacheMaxSizeChange(mb)}
+                                style={{
+                                    padding: '3px 10px',
+                                    borderRadius: '4px',
+                                    fontSize: '11px',
+                                    fontWeight: cacheMaxSize === mb ? 600 : 400,
+                                    background: cacheMaxSize === mb ? 'var(--color-primary-glow)' : 'transparent',
+                                    color: cacheMaxSize === mb ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                    border: cacheMaxSize === mb ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {mb >= 1000 ? `${mb / 1000}G` : `${mb}M`}
+                            </button>
+                        ))}
                     </div>
                 </div>
             </div>
