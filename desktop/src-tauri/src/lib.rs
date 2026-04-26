@@ -309,7 +309,8 @@ async fn connect_engine(
 struct SettingsPayload {
     is_sync_enabled: bool,
     flowhint_min_chars: usize,
-    flowhint_accept_key: u32,
+    flowhint_accept_tab: bool,
+    flowhint_accept_right: bool,
     dictionary_order: Vec<String>,
 }
 
@@ -386,7 +387,8 @@ fn get_settings() -> Result<SettingsPayload, String> {
     Ok(SettingsPayload {
         is_sync_enabled: cfg.is_sync_enabled,
         flowhint_min_chars: cfg.flowhint_min_chars,
-        flowhint_accept_key: cfg.flowhint_accept_key,
+        flowhint_accept_tab: cfg.flowhint_accept_tab,
+        flowhint_accept_right: cfg.flowhint_accept_right,
         dictionary_order: cfg.dictionary_order.clone(),
     })
 }
@@ -394,13 +396,15 @@ fn get_settings() -> Result<SettingsPayload, String> {
 #[tauri::command]
 fn update_settings(
     is_sync_enabled: bool, 
-    flowhint_min_chars: usize, 
-    flowhint_accept_key: u32, 
+    flowhint_min_chars: usize,
+    flowhint_accept_tab: bool,
+    flowhint_accept_right: bool,
 ) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
-    cfg.flowhint_accept_key = flowhint_accept_key;
+    cfg.flowhint_accept_tab = flowhint_accept_tab;
+    cfg.flowhint_accept_right = flowhint_accept_right;
     cfg.save();
     Ok(())
 }
@@ -982,8 +986,26 @@ fn read_clipboard_content() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn write_to_clipboard(content: String) -> Result<(), String> {
-    let mut cb = arboard::Clipboard::new().map_err(|e| format!("Clipboard open failed: {}", e))?;
-    cb.set_text(content).map_err(|e| format!("Clipboard write failed: {}", e))
+    for attempt in 0..10 {
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => {
+                match cb.set_text(&content) {
+                    Ok(()) => return Ok(()),
+                    Err(e) if attempt < 9 => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                }
+            }
+            Err(e) if attempt < 9 => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(format!("Clipboard open failed: {}", e)),
+        }
+    }
+    Err("Clipboard write failed after retries".into())
 }
 
 #[tauri::command]
@@ -1008,8 +1030,26 @@ fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
         bytes: std::borrow::Cow::Owned(rgba.into_raw()),
     };
 
-    let mut cb = arboard::Clipboard::new().map_err(|e| format!("Clipboard open failed: {}", e))?;
-    cb.set_image(img_data).map_err(|e| format!("Clipboard write failed: {}", e))
+    for attempt in 0..10 {
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => {
+                match cb.set_image(img_data.clone()) {
+                    Ok(()) => return Ok(()),
+                    Err(e) if attempt < 9 => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                }
+            }
+            Err(e) if attempt < 9 => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(format!("Clipboard open failed: {}", e)),
+        }
+    }
+    Err("Clipboard write failed after retries".into())
 }
 
 #[tauri::command]
@@ -1086,15 +1126,95 @@ fn move_hint_window(x: i32, y: i32) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn reset_hint_position() -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    cfg.hint_window.fixed_x = -1;
-    cfg.hint_window.fixed_y = -1;
-    cfg.hint_window.offset_x = 0;
-    cfg.hint_window.offset_y = 0;
-    cfg.hint_window.pos_type = 0;
+fn reset_hint_position(app: tauri::AppHandle) -> Result<(), String> {
+    let pos_type;
+    {
+        let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+        pos_type = cfg.hint_window.pos_type;
+        cfg.hint_window.offset_x = 0;
+        cfg.hint_window.offset_y = 0;
+        cfg.save();
+    }
+    info!("Hint window position has been reset to defaults.");
+
+    // Move the window to the default position based on current mode
+    let target_x;
+    let target_y;
+    if pos_type == 0 {
+        // Follow mode: use last known anchor (cursor position)
+        let anchor = LAST_HINT_ANCHOR.lock().unwrap();
+        target_x = anchor.0;
+        target_y = anchor.1 + 20;
+    } else {
+        // Fixed mode: reset fixed position and use last anchor as new default
+        let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
+        let anchor = LAST_HINT_ANCHOR.lock().unwrap();
+        target_x = anchor.0;
+        target_y = anchor.1 + 20;
+        cfg.hint_window.fixed_x = target_x;
+        cfg.hint_window.fixed_y = target_y;
+        cfg.save();
+    }
+
+    if target_x != 0 || target_y != 0 {
+        if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
+            let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow { x: target_x, y: target_y });
+        }
+    }
+
+    let _ = app.emit("config-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn set_hint_window_mode(app: tauri::AppHandle, pos_type: i32) -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    if pos_type == 1 && cfg.hint_window.fixed_x == -1 {
+        // Switching to Fixed mode for the first time: snapshot last anchor as fixed position
+        if let Ok(anchor) = LAST_HINT_ANCHOR.lock() {
+            if anchor.0 != 0 || anchor.1 != 0 {
+                cfg.hint_window.fixed_x = anchor.0;
+                cfg.hint_window.fixed_y = anchor.1 + 20;
+            }
+        }
+    }
+    cfg.hint_window.pos_type = pos_type;
     cfg.save();
-    info!("Hint window position has been force-reset to defaults.");
+    drop(cfg);
+    info!("Hint window mode set to: {}", if pos_type == 0 { "Follow" } else { "Fixed" });
+    let _ = app.emit("config-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_hint_window(width: i32, height: i32) -> Result<(), String> {
+    if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
+        let _ = tx.send(yiboflow_core::hook_manager::HintEvent::Resize { width, height });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_hint_window_size(app: tauri::AppHandle, width: i32, height: i32) -> Result<(), String> {
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.hint_window.width = width;
+    cfg.hint_window.height = height;
+    cfg.save();
+    drop(cfg);
+    info!("Hint window size set to: {}x{}", width, height);
+    let _ = app.emit("config-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn set_hint_window_scale(app: tauri::AppHandle, scale: f32) -> Result<(), String> {
+    let s = scale.max(0.6).min(1.8);
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.hint_window.scale = s;
+    cfg.save();
+    drop(cfg);
+    info!("Hint window scale set to: {:.1}", s);
+    let _ = app.emit("config-updated", ());
     Ok(())
 }
 
@@ -1248,24 +1368,31 @@ pub fn run() {
                             use windows::Win32::UI::WindowsAndMessaging::{
                                 ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
                                 HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOZORDER, SWP_NOSIZE,
+                                SWP_NOMOVE,
                             };
                             match &ev_clone {
                                 HintEvent::Show { candidates, x, y, .. } => {
                                     let visible_count = candidates.len().min(8) as i32;
-                                    let inner_height = 95 + (visible_count * 38);
-                                    let outer_height = inner_height;
-                                    let outer_width = 300;
 
-                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy) = {
+                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy, cfg_scale, cfg_w, cfg_h) = {
                                         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
                                         (
                                             cfg.hint_window.pos_type,
                                             cfg.hint_window.fixed_x,
                                             cfg.hint_window.fixed_y,
                                             cfg.hint_window.offset_x,
-                                            cfg.hint_window.offset_y
+                                            cfg.hint_window.offset_y,
+                                            cfg.hint_window.scale,
+                                            cfg.hint_window.width,
+                                            cfg.hint_window.height
                                         )
                                     };
+
+                                    let scale = cfg_scale.max(0.6).min(1.8);
+                                    let auto_w = (300.0 * scale) as i32;
+                                    let auto_h = ((68 + visible_count * 34) as f32 * scale) as i32;
+                                    let outer_width = if cfg_w > 0 { cfg_w.max(200) } else { auto_w };
+                                    let outer_height = if cfg_h > 0 { cfg_h.max(auto_h) } else { auto_h };
 
                                     let mut pos_x = *x;
                                     let mut pos_y = *y;
@@ -1328,6 +1455,17 @@ pub fn run() {
                                         );
                                     }
                                 }
+                                HintEvent::Resize { width, height } => {
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            hint_hwnd,
+                                            None,
+                                            0, 0,
+                                            *width, *height,
+                                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                                        );
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -1379,6 +1517,10 @@ pub fn run() {
             update_hint_position,
             move_hint_window,
             reset_hint_position,
+            set_hint_window_mode,
+            resize_hint_window,
+            set_hint_window_size,
+            set_hint_window_scale,
             read_clipboard_content,
             write_to_clipboard,
             write_image_to_clipboard,

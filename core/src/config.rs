@@ -48,7 +48,16 @@ pub struct WindowConfig {
     pub fixed_y: i32,
     pub offset_x: i32,
     pub offset_y: i32,
+    #[serde(default = "default_scale")]
+    pub scale: f32,
+    #[serde(default = "default_neg1")]
+    pub width: i32,  // -1 = auto (300 * scale)
+    #[serde(default = "default_neg1")]
+    pub height: i32, // -1 = auto (base * scale)
 }
+
+fn default_scale() -> f32 { 1.0 }
+fn default_neg1() -> i32 { -1 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
@@ -58,6 +67,9 @@ impl Default for WindowConfig {
             fixed_y: -1,
             offset_x: 0,
             offset_y: 0,
+            scale: default_scale(),
+            width: -1,
+            height: -1,
         }
     }
 }
@@ -78,8 +90,10 @@ pub struct AppConfig {
     pub local_kdf_salt: String,
     #[serde(default = "default_min_chars")]
     pub flowhint_min_chars: usize,
-    #[serde(default = "default_tab_key")]
-    pub flowhint_accept_key: u32,
+    #[serde(default = "default_true")]
+    pub flowhint_accept_tab: bool,
+    #[serde(default = "default_true")]
+    pub flowhint_accept_right: bool,
     #[serde(default)]
     pub sync_meta: crate::sync::SyncMeta,
     #[serde(default)]
@@ -95,7 +109,6 @@ pub struct AppConfig {
 }
 
 fn default_min_chars() -> usize { 2 }
-fn default_tab_key() -> u32 { 0x09 }
 
 
 fn default_true() -> bool { true }
@@ -156,7 +169,8 @@ impl AppConfig {
             local_password_hash: default_empty_string(),
             local_kdf_salt: default_empty_string(),
             flowhint_min_chars: 2,
-            flowhint_accept_key: 0x09,
+            flowhint_accept_tab: true,
+            flowhint_accept_right: true,
             ai_engine: AiEngineConfig {
                 endpoints: vec![
                     AiEndpoint {
@@ -208,20 +222,22 @@ impl AppConfig {
     }
 }
 
-pub fn get_settings() -> (bool, usize, u32) {
+pub fn get_settings() -> (bool, usize, bool, bool) {
     let cfg = GLOBAL_CONFIG.read().unwrap();
-    (cfg.is_sync_enabled, cfg.flowhint_min_chars, cfg.flowhint_accept_key)
+    (cfg.is_sync_enabled, cfg.flowhint_min_chars, cfg.flowhint_accept_tab, cfg.flowhint_accept_right)
 }
 
 pub fn update_settings(
     is_sync_enabled: bool,
     flowhint_min_chars: usize,
-    flowhint_accept_key: u32,
+    flowhint_accept_tab: bool,
+    flowhint_accept_right: bool,
 ) -> Result<(), String> {
     let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
-    cfg.flowhint_accept_key = flowhint_accept_key;
+    cfg.flowhint_accept_tab = flowhint_accept_tab;
+    cfg.flowhint_accept_right = flowhint_accept_right;
     cfg.save();
     Ok(())
 }

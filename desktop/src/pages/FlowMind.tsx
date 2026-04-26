@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle, GripVertical } from "lucide-react";
+import { Sparkles, ToggleRight, ToggleLeft, Edit, Trash2, Plus, X, Save, Eye, AlertCircle, AlertTriangle, GripVertical, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Reorder } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
@@ -27,7 +27,10 @@ export default function FlowMind() {
     const { t } = useTranslation();
     const [engineOn, setEngineOn] = useState(false);
     const [minChars, setMinChars] = useState(2);
-    const [acceptKey, setAcceptKey] = useState(9);
+    const [posType, setPosType] = useState(0);
+    const [hintScale, setHintScale] = useState(1.0);
+    const [acceptTab, setAcceptTab] = useState(true);
+    const [acceptRight, setAcceptRight] = useState(true);
     const [dicts, setDicts] = useState<SmartDictionary[]>([]);
     const [diagReport, setDiagReport] = useState("");
 
@@ -35,8 +38,36 @@ export default function FlowMind() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingDict, setEditingDict] = useState<SmartDictionary | null>(null);
     const [isReadOnly, setIsReadOnly] = useState(false);
+    const [sortField, setSortField] = useState<'trigger_key' | 'keyword' | 'content' | null>(null);
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-    const [conflictWarning, setConflictWarning] = useState<string>("");
+    // Sort logic for entries
+    const handleSort = (field: 'trigger_key' | 'keyword' | 'content') => {
+        if (sortField === field) {
+            if (sortDir === 'asc') {
+                setSortDir('desc');
+            } else {
+                // desc → null (reset)
+                setSortField(null);
+                setSortDir('asc');
+            }
+        } else {
+            setSortField(field);
+            setSortDir('asc');
+        }
+    };
+
+    const getSortedEntries = () => {
+        if (!editingDict || !sortField) return editingDict?.entries || [];
+        const sorted = [...editingDict.entries];
+        sorted.sort((a, b) => {
+            const va = (a[sortField] || '').toString().toLowerCase();
+            const vb = (b[sortField] || '').toString().toLowerCase();
+            const cmp = va.localeCompare(vb, 'zh-CN');
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+        return sorted;
+    };
 
     // Custom confirm dialog for delete
     const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean, targetId: string | null }>({ isOpen: false, targetId: null });
@@ -77,26 +108,6 @@ export default function FlowMind() {
         { val: "_", label: "_ (下划线)" },
     ];
 
-    const ALL_KEYS = [
-        { val: 9, label: "Tab 键" },
-        { val: 13, label: "Enter (回车键)" },
-        { val: 32, label: "Space (空格键)" },
-        { val: 37, label: "Left (左方向键)" },
-        { val: 38, label: "Up (上方向键)" },
-        { val: 39, label: "Right (右方向键)" },
-        { val: 40, label: "Down (下方向键)" },
-        { val: 112, label: "F1 键" }, { val: 113, label: "F2 键" }, { val: 114, label: "F3 键" },
-        { val: 115, label: "F4 键" }, { val: 116, label: "F5 键" }, { val: 117, label: "F6 键" },
-        { val: 118, label: "F7 键" }, { val: 119, label: "F8 键" }, { val: 120, label: "F9 键" },
-        { val: 121, label: "F10 键" }, { val: 122, label: "F11 键" }, { val: 123, label: "F12 键" },
-        { val: 186, label: "; (分号键)", char: ";" }, { val: 187, label: "= (等号键)", char: "=" },
-        { val: 188, label: ", (逗号键)", char: "," }, { val: 189, label: "- (减号键)", char: "-" },
-        { val: 190, label: ". (句号键)", char: "." }, { val: 191, label: "/ (斜杠键)", char: "/" },
-        { val: 192, label: "` (反引号键)", char: "`" }, { val: 219, label: "[ (左方括号)", char: "[" },
-        { val: 220, label: "\\ (反斜杠)", char: "\\" }, { val: 221, label: "] (右方括号)", char: "]" },
-        { val: 222, label: "' (单引号)", char: "'" }
-    ];
-
     useEffect(() => {
         loadData();
     }, []);
@@ -108,31 +119,15 @@ export default function FlowMind() {
 
             const settings: any = await invoke("get_settings");
             setMinChars(settings.flowhint_min_chars);
-            setAcceptKey(settings.flowhint_accept_key);
+            setPosType(settings.hint_window?.pos_type ?? 0);
+            setHintScale(settings.hint_window?.scale ?? 1.0);
+            setAcceptTab(settings.flowhint_accept_tab ?? true);
+            setAcceptRight(settings.flowhint_accept_right ?? true);
 
             const allDicts: SmartDictionary[] = await invoke("get_all_dictionaries");
             const processed = allDicts.map(d => ({
                 ...d,
             }));
-
-            // Find all conflict keys used in SmartDictionary (trigger keys)
-            const usedPrefixes = new Set<string>();
-            for (const d of processed) {
-                if (d.dict_type !== 'builtin') {
-                    for (const e of d.entries) {
-                        if (e.trigger_key && e.trigger_key.length > 0) {
-                            usedPrefixes.add(e.trigger_key[0]);
-                        }
-                    }
-                }
-            }
-
-            const selectedKey = ALL_KEYS.find(k => k.val === settings.flowhint_accept_key);
-            if (selectedKey && selectedKey.char && usedPrefixes.has(selectedKey.char)) {
-                setConflictWarning(`⚠️ 提示：您选的按键「${selectedKey.char}」被当作替换词条触发键(Trigger Key)，可能导致冲突冲突。`);
-            } else {
-                setConflictWarning("");
-            }
 
             const order = settings.dictionary_order || [];
             processed.sort((a, b) => {
@@ -169,36 +164,41 @@ export default function FlowMind() {
     const updateMinChars = async (val: number) => {
         setMinChars(val);
         try {
-            const settings: any = await invoke("get_settings");
             await invoke("update_settings", {
-                isSyncEnabled: settings.is_sync_enabled,
+                isSyncEnabled: engineOn,
                 flowhintMinChars: val,
-                flowhintAcceptKey: settings.flowhint_accept_key,
-                hintWindow: settings.hint_window,
-                writerWindow: settings.writer_window,
-                isWindowConfigUnified: settings.is_window_config_unified
+                flowhintAcceptTab: acceptTab,
+                flowhintAcceptRight: acceptRight,
             });
         } catch (e) {
             console.error(e);
         }
     };
 
-    const updateAcceptKey = async (val: number) => {
-        setAcceptKey(val);
+    const toggleAcceptTab = async () => {
+        const newVal = !acceptTab;
+        setAcceptTab(newVal);
         try {
-            const settings: any = await invoke("get_settings");
             await invoke("update_settings", {
-                isSyncEnabled: settings.is_sync_enabled,
-                flowhintAcceptKey: val,
-                flowhintMinChars: settings.flowhint_min_chars,
-                hintWindow: settings.hint_window,
-                writerWindow: settings.writer_window,
-                isWindowConfigUnified: settings.is_window_config_unified
+                isSyncEnabled: engineOn,
+                flowhintMinChars,
+                flowhintAcceptTab: newVal,
+                flowhintAcceptRight: acceptRight,
             });
-            await loadData();
-        } catch (e) {
-            console.error(e);
-        }
+        } catch (e) { console.error(e); }
+    };
+
+    const toggleAcceptRight = async () => {
+        const newVal = !acceptRight;
+        setAcceptRight(newVal);
+        try {
+            await invoke("update_settings", {
+                isSyncEnabled: engineOn,
+                flowhintMinChars,
+                flowhintAcceptTab: acceptTab,
+                flowhintAcceptRight: newVal,
+            });
+        } catch (e) { console.error(e); }
     };
 
     const handleReorderDicts = async (newDicts: SmartDictionary[]) => {
@@ -208,6 +208,24 @@ export default function FlowMind() {
             await invoke("set_dictionary_order", { order });
         } catch (e) {
             console.error("Failed to save dictionary order:", e);
+        }
+    };
+
+    const updatePosType = async (val: number) => {
+        setPosType(val);
+        try {
+            await invoke("set_hint_window_mode", { posType: val });
+        } catch (e) {
+            console.error("Failed to update hint window mode:", e);
+        }
+    };
+
+    const updateHintScale = async (val: number) => {
+        setHintScale(val);
+        try {
+            await invoke("set_hint_window_scale", { scale: val });
+        } catch (e) {
+            console.error("Failed to update hint window scale:", e);
         }
     };
 
@@ -232,6 +250,7 @@ export default function FlowMind() {
             dict_type: "custom",
         });
         setIsReadOnly(false);
+        setSortField(null);
         setIsModalOpen(true);
     };
 
@@ -241,6 +260,7 @@ export default function FlowMind() {
         d.entries = d.entries.map((e: any) => ({ ...e, _id: crypto.randomUUID() }));
         setEditingDict(d);
         setIsReadOnly(readOnly);
+        setSortField(null);
         setIsModalOpen(true);
     };
 
@@ -318,88 +338,182 @@ export default function FlowMind() {
                     </div>
                 </div>
 
-                <button
-                    onClick={toggleEngine}
-                    style={{
-                        background: engineOn ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-surface-elevated)',
-                        border: `1px solid ${engineOn ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
-                        color: engineOn ? '#22c55e' : 'var(--color-text-muted)',
-                        padding: '10px 16px',
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: 'var(--color-text-muted)',
+                        background: 'var(--color-surface)',
+                        padding: '8px 16px',
                         borderRadius: '100px',
-                        display: 'flex',
+                        border: '1px solid var(--color-border)',
+                        whiteSpace: 'nowrap',
+                        lineHeight: '20px',
+                        height: '36px',
+                        display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        transition: 'all var(--transition-fast)'
-                    }}
-                >
-                    {engineOn ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
-                    {engineOn ? '全局引擎: 已开启' : '全局引擎: 已关闭'}
-                </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-                <div className="glass-panel" style={{ padding: '16px 20px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
-                        词库触发最小字数
-                    </p>
-                    <div style={{ flexShrink: 0, marginLeft: '16px' }}>
-                        <input
-                            type="number"
-                            min={1}
-                            max={10}
-                            value={minChars}
-                            onChange={(e) => updateMinChars(parseInt(e.target.value) || 2)}
-                            className="modern-input"
-                            style={{ width: '80px', textAlign: 'center' }}
-                        />
-                    </div>
-                </div>
-
-                <div className="glass-panel" style={{ padding: '16px 20px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
-                        候选词上屏快捷键
-                    </p>
-                    <div style={{ flexShrink: 0, marginLeft: '16px', width: '160px' }}>
-                        <CustomSelect
-                            options={ALL_KEYS}
-                            value={acceptKey}
-                            onChange={(val) => updateAcceptKey(val)}
-                        />
-                    </div>
-                </div>
-            </div>
-
-            {conflictWarning && (
-                <div style={{
-                    padding: '12px 16px',
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#ef4444',
-                    borderRadius: 'var(--radius-md)',
-                    marginBottom: '20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    fontSize: '13px',
-                    fontWeight: 500
-                }}>
-                    <AlertCircle size={18} />
-                    {conflictWarning}
-                </div>
-            )}
-
-            <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-                <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-glass-border)' }}>
-                    <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', background: 'var(--color-surface)', padding: '4px 10px', borderRadius: '100px', border: '1px solid var(--color-border)' }}>
+                    }}>
                         {dicts.length} 个词库
                     </span>
-                    <button onClick={openCreateModal} className="btn-ghost" style={{ padding: '5px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--color-surface-elevated)' }}>
-                        <Plus size={13} />新建词库
+                    <button
+                        onClick={openCreateModal}
+                        style={{
+                            padding: '8px 16px',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            background: 'var(--color-surface-elevated)',
+                            color: 'var(--color-text-main)',
+                            border: '1px solid var(--color-border)',
+                            borderRadius: '100px',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            transition: 'all 0.15s',
+                            lineHeight: '20px',
+                            height: '36px',
+                        }}
+                    >
+                        <Plus size={16} />新建词库
+                    </button>
+                    <button
+                        onClick={toggleEngine}
+                        style={{
+                            background: engineOn ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${engineOn ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                            color: engineOn ? '#22c55e' : 'var(--color-text-muted)',
+                            padding: '8px 16px',
+                            borderRadius: '100px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            fontSize: '13px',
+                            whiteSpace: 'nowrap',
+                            lineHeight: '20px',
+                            height: '36px',
+                            transition: 'all 0.15s'
+                        }}
+                    >
+                        {engineOn ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
+                        {engineOn ? '已开启' : '已关闭'}
                     </button>
                 </div>
+            </div>
 
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginBottom: '20px' }}>
+                {/* 触发最小字数 */}
+                <div className="glass-panel" style={{ padding: '14px 18px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: '1 1 180px', minWidth: '180px' }}>
+                    <span style={{ fontSize: '13px', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>触发最小字数</span>
+                    <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={minChars}
+                        onChange={(e) => updateMinChars(parseInt(e.target.value) || 2)}
+                        className="modern-input"
+                        style={{ width: '64px', textAlign: 'center' }}
+                    />
+                </div>
+
+                {/* 弹窗位置 - 双向切换 */}
+                <div className="glass-panel" style={{ padding: '14px 18px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: '1 1 220px', minWidth: '220px' }}>
+                    <span style={{ fontSize: '13px', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>弹窗位置</span>
+                    <div style={{
+                        display: 'flex',
+                        background: 'var(--color-surface)',
+                        borderRadius: '8px',
+                        overflow: 'hidden',
+                        border: '1px solid var(--color-border)',
+                    }}>
+                        <button
+                            onClick={() => updatePosType(0)}
+                            style={{
+                                padding: '6px 14px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                border: 'none',
+                                background: posType === 0 ? 'var(--color-primary)' : 'transparent',
+                                color: posType === 0 ? '#fff' : 'var(--color-text-muted)',
+                                transition: 'all 0.15s',
+                            }}
+                        >跟随光标</button>
+                        <button
+                            onClick={() => updatePosType(1)}
+                            style={{
+                                padding: '6px 14px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                border: 'none',
+                                borderLeft: '1px solid var(--color-border)',
+                                background: posType === 1 ? 'var(--color-primary)' : 'transparent',
+                                color: posType === 1 ? '#fff' : 'var(--color-text-muted)',
+                                transition: 'all 0.15s',
+                            }}
+                        >固定位置</button>
+                    </div>
+                </div>
+
+                {/* 上屏键 - 可开关按钮 */}
+                <div className="glass-panel" style={{ padding: '14px 18px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: '1 1 200px', minWidth: '200px' }}>
+                    <span style={{ fontSize: '13px', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>上屏键</span>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                            onClick={toggleAcceptTab}
+                            style={{
+                                padding: '4px 12px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                border: acceptTab ? '1px solid rgba(94, 106, 210, 0.5)' : '1px solid var(--color-border)',
+                                background: acceptTab ? 'rgba(94, 106, 210, 0.2)' : 'transparent',
+                                color: acceptTab ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                transition: 'all 0.15s',
+                            }}
+                        >Tab</button>
+                        <button
+                            onClick={toggleAcceptRight}
+                            style={{
+                                padding: '4px 12px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                border: acceptRight ? '1px solid rgba(94, 106, 210, 0.5)' : '1px solid var(--color-border)',
+                                background: acceptRight ? 'rgba(94, 106, 210, 0.2)' : 'transparent',
+                                color: acceptRight ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                transition: 'all 0.15s',
+                            }}
+                        >→</button>
+                    </div>
+                </div>
+
+                {/* 弹窗大小滑块 */}
+                <div className="glass-panel" style={{ padding: '14px 18px', borderRadius: 'var(--radius-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: '1 1 280px', minWidth: '280px' }}>
+                    <span style={{ fontSize: '13px', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>弹窗大小</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, marginLeft: '12px', minWidth: '120px' }}>
+                        <input
+                            type="range"
+                            min={0.6}
+                            max={1.8}
+                            step={0.1}
+                            value={hintScale}
+                            onChange={(e) => updateHintScale(parseFloat(e.target.value))}
+                            style={{ flex: 1, accentColor: 'var(--color-primary)', cursor: 'pointer', minWidth: '60px' }}
+                        />
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-primary)', minWidth: '36px', textAlign: 'right' }}>
+                            {Math.round(hintScale * 100)}%
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <Reorder.Group axis="y" values={dicts} onReorder={handleReorderDicts} style={{ padding: '12px', listStyleType: 'none', margin: 0 }}>
                     {dicts.length === 0 && <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>暂无词库</div>}
                     {dicts.map(d => (
@@ -525,14 +639,41 @@ export default function FlowMind() {
                                     <h4 style={{ margin: 0, fontSize: '14px' }}>词条配置 ({editingDict.entries.length})</h4>
                                     {!isReadOnly && (
                                         <button onClick={() => setEditingDict({ ...editingDict, entries: [{ trigger_key: '', keyword: '', content: '', _id: crypto.randomUUID() }, ...editingDict.entries] })}
-                                            className="btn-ghost" style={{ padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                            <Plus size={14} /> 新增词条
+                                            style={{ padding: '6px 14px', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.15s' }}>
+                                            <Plus size={15} /> 新增词条
                                         </button>
                                     )}
                                 </div>
 
-                                <Reorder.Group axis="y" values={editingDict.entries} onReorder={(newEntries) => setEditingDict({ ...editingDict, entries: newEntries })} style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyleType: 'none', margin: 0, padding: 0 }}>
-                                    {editingDict.entries.map((entry, idx) => (
+                                {/* Column headers with sort - aligned with entry rows */}
+                                <div style={{ display: 'flex', gap: '8px', padding: '0 10px' }}>
+                                    {!isReadOnly && <div style={{ width: '20px', flexShrink: 0 }} />}
+                                    <div style={{ width: '135px' }}>
+                                        <button onClick={() => handleSort('trigger_key')} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: sortField === 'trigger_key' ? 'var(--color-primary)' : 'var(--color-text-muted)', padding: '2px 0' }}>
+                                            前缀
+                                            {sortField === 'trigger_key' ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} />}
+                                        </button>
+                                    </div>
+                                    <div style={{ width: '100px' }}>
+                                        <button onClick={() => handleSort('keyword')} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: sortField === 'keyword' ? 'var(--color-primary)' : 'var(--color-text-muted)', padding: '2px 0' }}>
+                                            缩略词
+                                            {sortField === 'keyword' ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} />}
+                                        </button>
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <button onClick={() => handleSort('content')} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: sortField === 'content' ? 'var(--color-primary)' : 'var(--color-text-muted)', padding: '2px 0' }}>
+                                            内容
+                                            {sortField === 'content' ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} />}
+                                        </button>
+                                    </div>
+                                    {!isReadOnly && <div style={{ width: '34px', flexShrink: 0 }} />}
+                                </div>
+
+                                <Reorder.Group axis="y" values={getSortedEntries()} onReorder={(newEntries) => { setSortField(null); setEditingDict({ ...editingDict, entries: newEntries }); }} style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyleType: 'none', margin: 0, padding: 0 }}>
+                                    {getSortedEntries().map((entry, idx) => {
+                                        // Find real index in editingDict.entries by _id
+                                        const realIdx = editingDict.entries.findIndex(e => e._id === entry._id);
+                                        return (
                                         <Reorder.Item key={entry._id} value={entry} style={{ display: 'flex', gap: '8px', background: 'var(--color-surface)', padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)', cursor: 'default' }}>
                                             {!isReadOnly && (
                                                 <div style={{ display: 'flex', alignItems: 'center', cursor: 'grab', color: 'var(--color-text-muted)', paddingRight: '4px' }}>
@@ -554,9 +695,9 @@ export default function FlowMind() {
                                                         onChange={val => {
                                                             const newEntries = [...editingDict.entries];
                                                             const newTrigger = val === '' ? null : val;
-                                                            newEntries[idx] = { ...newEntries[idx], trigger_key: newTrigger };
+                                                            newEntries[realIdx] = { ...newEntries[realIdx], trigger_key: newTrigger };
                                                             if (!newTrigger) {
-                                                                newEntries[idx].keyword = null; // cascade clear keyword
+                                                                newEntries[realIdx].keyword = null;
                                                             }
                                                             setEditingDict({ ...editingDict, entries: newEntries });
                                                         }}
@@ -569,7 +710,7 @@ export default function FlowMind() {
                                                     disabled={!entry.trigger_key}
                                                     onChange={e => {
                                                         const newEntries = [...editingDict.entries];
-                                                        newEntries[idx] = { ...newEntries[idx], keyword: e.target.value || null };
+                                                        newEntries[realIdx] = { ...newEntries[realIdx], keyword: e.target.value || null };
                                                         setEditingDict({ ...editingDict, entries: newEntries });
                                                     }} style={{ padding: '0 8px', height: '34px', width: '100%', fontSize: '12px', opacity: (!entry.trigger_key) ? 0.5 : 1 }} />
                                             </div>
@@ -578,21 +719,22 @@ export default function FlowMind() {
                                                     value={entry.content} readOnly={isReadOnly}
                                                     onChange={e => {
                                                         const newEntries = [...editingDict.entries];
-                                                        newEntries[idx] = { ...newEntries[idx], content: e.target.value };
+                                                        newEntries[realIdx] = { ...newEntries[realIdx], content: e.target.value };
                                                         setEditingDict({ ...editingDict, entries: newEntries });
                                                     }} style={{ padding: '0 8px', height: '34px', width: '100%', fontSize: '12px' }} />
                                             </div>
                                             {!isReadOnly && (
                                                 <button onClick={() => {
                                                     const newEntries = [...editingDict.entries];
-                                                    newEntries.splice(idx, 1);
+                                                    newEntries.splice(realIdx, 1);
                                                     setEditingDict({ ...editingDict, entries: newEntries });
                                                 }} className="btn-ghost" style={{ padding: '0', height: '34px', width: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444', flexShrink: 0 }}>
                                                     <Trash2 size={16} />
                                                 </button>
                                             )}
                                         </Reorder.Item>
-                                    ))}
+                                    );
+                                    })}
                                     {editingDict.entries.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: 'var(--color-text-muted)' }}>暂无条目，请点击上方按钮添加。</div>}
                                 </Reorder.Group>
                             </div>

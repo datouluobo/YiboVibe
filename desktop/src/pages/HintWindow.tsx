@@ -26,12 +26,86 @@ interface HintEventHide {
 
 type HintEvent = HintEventShow | HintEventUpdateSelection | HintEventHide;
 
+interface Theme {
+    bg: string;
+    bgHover: string;
+    bgSelected: string;
+    border: string;
+    accent: string;
+    text: string;
+    textMuted: string;
+    textDim: string;
+    green: string;
+    itemH: number;
+    headerH: number;
+    footerH: number;
+    padX: number;
+    padY: number;
+    radius: number;
+    fontSize: string;
+    numSize: string;
+    footerSize: string;
+    badgeSize: string;
+}
+
+function buildTheme(s: number): Theme {
+    return {
+        bg: "#1C1C1E",
+        bgHover: "#2C2C2E",
+        bgSelected: "rgba(94, 106, 210, 0.18)",
+        border: "rgba(255,255,255,0.08)",
+        accent: "#5E6AD2",
+        text: "#E5E5E7",
+        textMuted: "#8E8E93",
+        textDim: "rgba(255,255,255,0.3)",
+        green: "#34C759",
+        itemH: Math.round(32 * s),
+        headerH: Math.round(20 * s),
+        footerH: Math.round(22 * s),
+        padX: Math.round(6 * s),
+        padY: Math.round(5 * s),
+        radius: Math.max(6, Math.round(10 * s)),
+        fontSize: `${(12.5 * s).toFixed(1)}px`,
+        numSize: `${(10 * s).toFixed(1)}px`,
+        footerSize: `${(9 * s).toFixed(1)}px`,
+        badgeSize: `${(8 * s).toFixed(1)}px`,
+    };
+}
+
+interface CfgHintWindow {
+    pos_type: number;
+    scale: number;
+    width: number;
+    height: number;
+}
+
 export default function HintWindow() {
     const [candidates, setCandidates] = useState<string[]>([]);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [visible, setVisible] = useState(false);
+    const [posType, setPosType] = useState(0);
+    const [scale, setScale] = useState(1.0);
+    const [hintWidth, setHintWidth] = useState(-1);
+    const [hintHeight, setHintHeight] = useState(-1);
+    const [hoverIdx, setHoverIdx] = useState(-1);
+
+    const T = buildTheme(scale);
+
+    const loadConfig = useCallback(() => {
+        invoke<{ hint_window: CfgHintWindow }>("get_app_config")
+            .then(cfg => {
+                setPosType(cfg.hint_window.pos_type);
+                setScale(cfg.hint_window.scale || 1.0);
+                setHintWidth(cfg.hint_window.width ?? -1);
+                setHintHeight(cfg.hint_window.height ?? -1);
+            })
+            .catch(() => {});
+    }, []);
 
     useEffect(() => {
+        loadConfig();
+
+        const unlistenConfig = listen("config-updated", () => { loadConfig(); });
         const unlisten = listen<HintEvent>("hint-event", async (event) => {
             const data = event.payload;
             if (data.type === "Hide") {
@@ -40,25 +114,27 @@ export default function HintWindow() {
                 const showData = data.data;
                 setCandidates(showData.candidates);
                 setSelectedIndex(showData.selected_index);
+                setHoverIdx(-1);
                 setVisible(true);
+                // Refresh config (posType, scale) on every show
+                loadConfig();
             } else if (data.type === "UpdateSelection") {
                 setSelectedIndex(data.data);
             }
         });
 
-        // Ensure transparent global body background so our drop-shadow looks natural
         if (window.location.hash.includes('hint')) {
             document.body.style.background = 'transparent';
             document.documentElement.style.background = 'transparent';
         }
 
-        return () => { unlisten.then(f => f()); };
-    }, []);
+        return () => {
+            unlisten.then(f => f());
+            unlistenConfig.then(f => f());
+        };
+    }, [loadConfig]);
 
-    // ---------------------------------------------------------------
-    // Drag Logic: Native smooth dragging via requestAnimationFrame
-    // Uses invoke to immediately command Rust to MoveWindow
-    // ---------------------------------------------------------------
+    // ── Drag logic (move window) ──
     const dragState = useRef({
         active: false,
         startScreenX: 0,
@@ -77,14 +153,11 @@ export default function HintWindow() {
 
     const onDragMove = useCallback((e: MouseEvent) => {
         if (!dragState.current.active) return;
-        // screenX/Y are CSS logical pixels; outerPosition returns physical pixels.
-        // Multiply delta by devicePixelRatio to align coordinate spaces.
         const dpr = window.devicePixelRatio || 1;
         const dx = (e.screenX - dragState.current.startScreenX) * dpr;
         const dy = (e.screenY - dragState.current.startScreenY) * dpr;
         dragState.current.nextX = dragState.current.winStartX + Math.round(dx);
         dragState.current.nextY = dragState.current.winStartY + Math.round(dy);
-
         if (!dragState.current.rafId) {
             dragState.current.rafId = requestAnimationFrame(triggerMove);
         }
@@ -95,18 +168,15 @@ export default function HintWindow() {
         dragState.current.active = false;
         document.removeEventListener("mousemove", onDragMove);
         document.removeEventListener("mouseup", onDragEnd);
-
         if (dragState.current.rafId) {
             cancelAnimationFrame(dragState.current.rafId);
             dragState.current.rafId = 0;
         }
-
         const dpr = window.devicePixelRatio || 1;
         const dx = (e.screenX - dragState.current.startScreenX) * dpr;
         const dy = (e.screenY - dragState.current.startScreenY) * dpr;
         const nx = dragState.current.winStartX + Math.round(dx);
         const ny = dragState.current.winStartY + Math.round(dy);
-
         invoke("move_hint_window", { x: nx, y: ny }).catch(() => { });
         invoke("update_hint_position", { x: nx, y: ny }).catch(() => { });
     }, [onDragMove]);
@@ -115,10 +185,8 @@ export default function HintWindow() {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
-
         dragState.current.startScreenX = e.screenX;
         dragState.current.startScreenY = e.screenY;
-
         try {
             const pos = await getCurrentWindow().outerPosition();
             dragState.current.winStartX = pos.x;
@@ -127,15 +195,77 @@ export default function HintWindow() {
             dragState.current.winStartX = 0;
             dragState.current.winStartY = 0;
         }
-
         dragState.current.active = true;
         document.addEventListener("mousemove", onDragMove);
         document.addEventListener("mouseup", onDragEnd);
     }, [onDragMove, onDragEnd]);
 
+    // ── Resize logic (width + height, independent axes) ──
+    const resizeState = useRef({
+        active: false,
+        startScreenX: 0,
+        startScreenY: 0,
+        startWidth: 0,
+        startHeight: 0,
+        minHeight: 0,
+    });
+
+    const onResizeMove = useCallback((e: MouseEvent) => {
+        if (!resizeState.current.active) return;
+        const dpr = window.devicePixelRatio || 1;
+        const dx = Math.round((e.screenX - resizeState.current.startScreenX) * dpr);
+        const dy = Math.round((e.screenY - resizeState.current.startScreenY) * dpr);
+        const newW = Math.max(200, resizeState.current.startWidth + dx);
+        const newH = Math.max(resizeState.current.minHeight, resizeState.current.startHeight + dy);
+        setHintWidth(newW);
+        setHintHeight(newH);
+        invoke("resize_hint_window", { width: newW, height: newH }).catch(() => {});
+    }, []);
+
+    const onResizeEnd = useCallback(() => {
+        if (!resizeState.current.active) return;
+        resizeState.current.active = false;
+        document.removeEventListener("mousemove", onResizeMove);
+        document.removeEventListener("mouseup", onResizeEnd);
+        setHintWidth(w => {
+            setHintHeight(h => {
+                invoke("set_hint_window_size", { width: w, height: h }).catch(() => {});
+                return h;
+            });
+            return w;
+        });
+    }, [onResizeMove]);
+
+    const onResizeStart = useCallback(async (e: React.MouseEvent) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        let currentW = Math.round(300 * scale);
+        let currentH = Math.round((58 + Math.min(candidates.length || 4, 8) * 34) * scale);
+
+        try {
+            const winSize = await getCurrentWindow().innerSize();
+            // innerSize() returns PhysicalSize (already in physical pixels)
+            currentW = Math.round(winSize.width);
+            currentH = Math.round(winSize.height);
+        } catch {}
+
+        const minH = Math.round((68 + 2 * 34) * scale);
+
+        resizeState.current.startScreenX = e.screenX;
+        resizeState.current.startScreenY = e.screenY;
+        resizeState.current.startWidth = currentW;
+        resizeState.current.startHeight = currentH;
+        resizeState.current.minHeight = minH;
+        resizeState.current.active = true;
+        document.addEventListener("mousemove", onResizeMove);
+        document.addEventListener("mouseup", onResizeEnd);
+    }, [scale, candidates.length, onResizeMove, onResizeEnd]);
+
+    // ── Accept ──
     const handleAccept = async (index: number) => {
         if (!visible) return;
-        // Immediate UI feedback and prevent double-clicks which might cause lock-hang
         setVisible(false);
         try {
             await invoke("accept_hint_candidate", { index });
@@ -146,150 +276,225 @@ export default function HintWindow() {
 
     if (!visible) return null;
 
+    const gripDotSize = Math.max(2, Math.round(3 * scale));
+    const resizeHandleSize = Math.max(10, Math.round(14 * scale));
+
     return (
-        // OUTER WRAPPER: Provides structural padding so that the drop-shadow
-        // of the inner window doesn't get clipped into right-angle corners by the OS Window bounds!
         <div style={{
             width: '100%',
             height: '100vh',
-            padding: '0px',
-            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
         }}>
-            {/* INNER CARD: Actual UI bounds */}
             <div style={{
-                opacity: 1,
-                pointerEvents: 'auto',
-                background: '#FFFFFF',
-                border: '1px solid rgba(0, 0, 0, 0.1)',
-                borderRadius: 'var(--radius-md, 12px)',
-                padding: '6px',
+                background: T.bg,
+                border: `1px solid ${T.border}`,
+                borderRadius: T.radius,
+                padding: `${T.padY}px ${T.padX}px`,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '2px',
-                color: '#1a1a1a',
-                fontFamily: 'var(--font-family, Inter, sans-serif)',
+                color: T.text,
+                fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
                 userSelect: 'none',
                 overflow: 'hidden',
-                flexGrow: 1, // dynamically fills the padded area
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
+                flexGrow: 1,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+                position: 'relative',
             }}>
 
-                {/* Drag handle bar */}
+                {/* Header: drag grip + mode badge */}
                 <div
                     onMouseDown={onHandleMouseDown}
                     style={{
-                        height: '18px',
-                        minHeight: '18px',
+                        height: T.headerH,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
+                        justifyContent: 'space-between',
                         cursor: 'move',
                         flexShrink: 0,
+                        paddingLeft: '2px',
+                        paddingRight: '2px',
                     }}
                 >
-                    <div style={{
-                        width: '36px',
-                        height: '4px',
-                        background: 'rgba(0, 0, 0, 0.12)',
-                        borderRadius: '2px',
-                        opacity: 0.5
-                    }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(3, ${gripDotSize}px)`, gap: `${Math.max(1, gripDotSize - 1)}px`, opacity: 0.35 }}>
+                        {[...Array(6)].map((_, i) => (
+                            <div key={i} style={{ width: gripDotSize, height: gripDotSize, borderRadius: '50%', background: '#fff' }} />
+                        ))}
+                    </div>
+                    <span style={{
+                        fontSize: T.badgeSize,
+                        padding: `${Math.max(1, Math.round(scale))}px ${Math.max(3, Math.round(6 * scale))}px`,
+                        borderRadius: `${Math.max(2, Math.round(4 * scale))}px`,
+                        background: posType === 0 ? 'rgba(94,106,210,0.15)' : 'rgba(52,199,89,0.15)',
+                        color: posType === 0 ? T.accent : T.green,
+                        fontWeight: 600,
+                        letterSpacing: '0.3px',
+                    }}>
+                        {posType === 0 ? 'FOLLOW' : 'FIXED'}
+                    </span>
                 </div>
 
-                {/* Candidate list - scrollable */}
+                {/* Candidate list */}
                 <div style={{
                     overflowY: 'auto',
-                    maxHeight: `${8 * 35}px`, // max 8 visible items
-                    scrollbarWidth: 'thin',
-                    scrollbarColor: 'rgba(0,0,0,0.1) transparent',
+                    scrollbarWidth: 'none',
+                    flex: '1 1 0',
+                    minHeight: 0,
                 }}>
-                    {candidates.map((cand, idx) => (
-                        <div
-                            key={idx}
-                            onClick={() => handleAccept(idx)}
-                            ref={el => {
-                                if (el && idx === selectedIndex) {
-                                    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-                                }
-                            }}
-                            style={{
-                                padding: '7px 10px',
-                                borderRadius: 'var(--radius-sm, 6px)',
-                                background: idx === selectedIndex ? 'rgba(94, 106, 210, 0.12)' : 'transparent',
-                                borderLeft: idx === selectedIndex ? '3px solid var(--color-primary, #5E6AD2)' : '3px solid transparent',
-                                color: idx === selectedIndex ? '#1a1a1a' : '#666',
-                                fontSize: '13px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                cursor: 'pointer',
-                                transition: 'all 0.08s ease',
-                                flexShrink: 0,
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.background = idx === selectedIndex
-                                    ? 'var(--color-primary-glow)'
-                                    : 'var(--color-surface-elevated)';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.background = idx === selectedIndex
-                                    ? 'var(--color-primary-glow)'
-                                    : 'transparent';
-                            }}
-                        >
-                            <span style={{
-                                fontSize: '10px',
-                                color: idx === selectedIndex ? 'var(--color-primary, #5E6AD2)' : 'var(--color-text-muted)',
-                                width: '14px',
-                                textAlign: 'right',
-                                fontWeight: 600,
-                            }}>{idx + 1}</span>
-                            <span style={{
-                                flex: 1,
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis'
-                            }}>{cand}</span>
-                        </div>
-                    ))}
+                    {candidates.slice(0, 8).map((cand, idx) => {
+                        const isSelected = idx === selectedIndex;
+                        const isHovered = idx === hoverIdx;
+                        return (
+                            <div
+                                key={idx}
+                                onClick={() => handleAccept(idx)}
+                                onMouseEnter={() => setHoverIdx(idx)}
+                                onMouseLeave={() => setHoverIdx(-1)}
+                                ref={el => {
+                                    if (el && isSelected) {
+                                        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                                    }
+                                }}
+                                style={{
+                                    height: T.itemH,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: `${Math.round(8 * scale)}px`,
+                                    cursor: 'pointer',
+                                    borderRadius: Math.max(4, Math.round(6 * scale)),
+                                    padding: `0 ${Math.round(8 * scale)}px`,
+                                    background: isSelected
+                                        ? T.bgSelected
+                                        : isHovered
+                                            ? T.bgHover
+                                            : 'transparent',
+                                    borderLeft: `${Math.max(1, Math.round(2 * scale))}px solid ${isSelected ? T.accent : 'transparent'}`,
+                                    transition: 'background 0.1s ease',
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <span style={{
+                                    fontSize: T.numSize,
+                                    width: Math.round(14 * scale),
+                                    textAlign: 'center',
+                                    fontWeight: 600,
+                                    color: isSelected ? T.accent : T.textDim,
+                                    flexShrink: 0,
+                                }}>{idx + 1}</span>
+                                <span style={{
+                                    flex: 1,
+                                    fontSize: T.fontSize,
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    color: isSelected ? '#fff' : T.textMuted,
+                                    fontWeight: isSelected ? 500 : 400,
+                                }}>{cand}</span>
+                            </div>
+                        );
+                    })}
                 </div>
-
-                {/* Spacer */}
-                <div style={{ flex: 1 }} />
 
                 {/* Footer */}
                 <div style={{
-                    marginTop: '4px',
-                    paddingTop: '5px',
-                    borderTop: '1px solid rgba(0, 0, 0, 0.06)',
+                    height: T.footerH,
                     display: 'flex',
+                    alignItems: 'center',
                     justifyContent: 'space-between',
-                    fontSize: '10px',
-                    color: 'rgba(0, 0, 0, 0.35)',
-                    paddingLeft: '6px',
-                    paddingRight: '6px',
-                    paddingBottom: '2px',
+                    fontSize: T.footerSize,
+                    color: T.textDim,
+                    paddingLeft: `${Math.round(8 * scale)}px`,
+                    paddingRight: `${Math.round(4 * scale)}px`,
                     flexShrink: 0,
+                    marginTop: '2px',
                 }}>
-                    <span>↑↓ 切换</span>
-                    <span style={{ color: 'var(--color-primary, #5E6AD2)', fontWeight: 600 }}>Tab / → 确认</span>
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: `${Math.round(8 * scale)}px`, alignItems: 'center' }}>
+                        <span>↑↓ 切换</span>
+                        <span style={{ color: T.accent, fontWeight: 600 }}>Tab 确认</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: `${Math.round(4 * scale)}px`, alignItems: 'center' }}>
                         <span
                             onClick={() => invoke("reset_hint_position")}
-                            style={{ color: '#E53E3E', cursor: 'pointer' }}
+                            style={{
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: Math.round(16 * scale),
+                                height: Math.round(16 * scale),
+                                borderRadius: Math.max(2, Math.round(3 * scale)),
+                                color: T.textDim,
+                                transition: 'all 0.12s',
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.color = '#E8A03E';
+                                e.currentTarget.style.background = 'rgba(232,160,62,0.12)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.color = T.textDim;
+                                e.currentTarget.style.background = 'transparent';
+                            }}
                             title="重置窗口位置"
-                        >🔴 重置</span>
+                        >
+                            <svg width={Math.round(11 * scale)} height={Math.round(11 * scale)} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M1 4v5h5" />
+                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 9" />
+                            </svg>
+                        </span>
                         <span
                             onClick={(e) => { e.stopPropagation(); invoke("dismiss_hint_window"); }}
-                            style={{ color: '#666', cursor: 'pointer', transition: 'color 0.1s' }}
-                            onMouseEnter={(e) => e.currentTarget.style.color = '#333'}
-                            onMouseLeave={(e) => e.currentTarget.style.color = '#666'}
-                            title="关闭提示框 (ESC)"
-                        >❌ 关闭</span>
+                            style={{
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: Math.round(16 * scale),
+                                height: Math.round(16 * scale),
+                                borderRadius: Math.max(2, Math.round(3 * scale)),
+                                color: T.textDim,
+                                transition: 'all 0.12s',
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.color = '#E5534B';
+                                e.currentTarget.style.background = 'rgba(229,83,75,0.12)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.color = T.textDim;
+                                e.currentTarget.style.background = 'transparent';
+                            }}
+                            title="关闭 (ESC)"
+                        >
+                            <svg width={Math.round(10 * scale)} height={Math.round(10 * scale)} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M4 4l8 8M12 4l-8 8" />
+                            </svg>
+                        </span>
                     </div>
+                </div>
+
+                {/* Resize handle - bottom right corner */}
+                <div
+                    onMouseDown={onResizeStart}
+                    style={{
+                        position: 'absolute',
+                        right: 2,
+                        bottom: 2,
+                        width: resizeHandleSize,
+                        height: resizeHandleSize,
+                        cursor: 'nwse-resize',
+                        color: T.textDim,
+                        opacity: 0.3,
+                        transition: 'opacity 0.15s',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.3'; }}
+                >
+                    <svg width={resizeHandleSize} height={resizeHandleSize} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ display: 'block' }}>
+                        <path d="M12 14L14 14L14 12" />
+                        <path d="M8.5 14L14 8.5" />
+                        <path d="M5 14L14 5" />
+                    </svg>
                 </div>
             </div>
         </div>

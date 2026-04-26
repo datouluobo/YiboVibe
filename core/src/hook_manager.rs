@@ -97,6 +97,10 @@ pub enum HintEvent {
         x: i32,
         y: i32,
     },
+    Resize {
+        width: i32,
+        height: i32,
+    },
 }
 
 pub static HINT_TX: Mutex<Option<std::sync::mpsc::Sender<HintEvent>>> = Mutex::new(None);
@@ -337,7 +341,11 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 let mut idx = 0;
 
                 if hs.is_active {
-                    if key_code == 0x09 || key_code == 0x27 { // Tab or Right
+                    let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
+                    let accept_tab = cfg.flowhint_accept_tab;
+                    let accept_right = cfg.flowhint_accept_right;
+                    drop(cfg);
+                    if (accept_tab && key_code == 0x09) || (accept_right && key_code == 0x27) {
                         idx = hs.selected_index;
                         act = 1;
                     } else if key_code == 0x1B { // ESC

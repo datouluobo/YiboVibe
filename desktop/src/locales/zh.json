@@ -7,13 +7,15 @@
         "flowprobe": "探脉",
         "flowrules": "中枢",
         "settings": "韬略",
+        "flowinfo": "扉页",
         "tooltip_flowdeck": "全局状态总览与设备连接监控",
         "tooltip_flowmind": "统一智能输入引擎，前缀展开与智能词库补全",
         "tooltip_flowsync": "受端到端加密保护的剪贴板同步桥梁",
         "tooltip_flowdrop": "P2P 跨设备安全文件极速传输",
         "tooltip_flowprobe": "AI 端点探测与连通性测试",
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
-        "tooltip_settings": "主题、语言与全局偏好配置"
+        "tooltip_settings": "主题、语言与全局偏好配置",
+        "tooltip_flowinfo": "关于 YiboFlow 的版本与信息"
     },
     "login": {
         "title_login": "登录 YiboFlow",
@@ -244,6 +246,7 @@
         "copy_success": "已复制",
         "btn_copy": "复制到剪贴板",
         "btn_copy_image": "复制图片",
+        "copy_failed": "复制失败",
         "btn_save": "保存到本地",
         "btn_delete": "删除此条",
         "meta_time": "时间",
@@ -275,5 +278,19 @@
     "flowmind": {
         "title": "灵思 · FlowMind",
         "subtitle": "统一智能输入引擎"
+    },
+    "flowinfo": {
+        "title": "扉页 · FlowInfo",
+        "subtitle": "关于 YiboFlow 的一切",
+        "hero_desc": "跨设备加密剪贴板同步与智能输入增强平台",
+        "feat_e2ee": "端到端加密",
+        "feat_speed": "极速同步",
+        "feat_p2p": "P2P 直连传输",
+        "tech_title": "技术栈",
+        "links_title": "相关链接",
+        "link_docs": "文档中心",
+        "link_feedback": "问题反馈",
+        "made_with": "Crafted with",
+        "copyright": "All rights reserved."
     }
 }

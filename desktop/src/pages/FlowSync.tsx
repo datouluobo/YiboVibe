@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     ClipboardCopy, ArrowDownToLine, ArrowUpToLine,
-    Copy, Trash2, Check, ChevronDown, Settings2, ImageIcon, FileType
+    Copy, Trash2, Check, ChevronDown, Settings2, ImageIcon, FileType, X
 } from "lucide-react";
 
 interface ClipboardLog {
@@ -38,7 +38,14 @@ function loadLogs(): ClipboardLog[] {
 function saveLogs(logs: ClipboardLog[]) {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(logs.slice(0, MAX_RECORDS)));
-    } catch { /* storage full, ignore */ }
+    } catch (e) {
+        // Storage full - try removing oldest image logs to free space
+        console.warn('Storage full, pruning image logs:', e);
+        try {
+            const pruned = logs.filter(l => l.type !== 'image').slice(0, MAX_RECORDS);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
+        } catch { /* give up */ }
+    }
 }
 
 function getDayStart(d: Date): Date {
@@ -208,18 +215,32 @@ export default function FlowSync() {
         return true;
     });
 
+    const [copyFailed, setCopyFailed] = useState(false);
+
     const handleCopy = useCallback(async (log: ClipboardLog, e?: React.MouseEvent) => {
         e?.stopPropagation();
         try {
             if (log.type === 'image') {
-                await invoke("write_image_to_clipboard", { imageBase64: log.preview });
+                const preview = log.preview || '';
+                if (!preview.startsWith('data:image/')) {
+                    console.error('Invalid image data: does not start with data:image/');
+                    setCopyFailed(true);
+                    setTimeout(() => setCopyFailed(false), 2000);
+                    return;
+                }
+                await invoke("write_image_to_clipboard", { imageBase64: preview });
             } else {
                 await invoke("write_to_clipboard", { content: log.preview });
             }
             setCopiedId(log.id);
             setCopiedPreview(selectedId === log.id);
+            setCopyFailed(false);
             setTimeout(() => { setCopiedId(null); setCopiedPreview(false); }, 1200);
-        } catch { /* ignore */ }
+        } catch (err) {
+            console.error('Copy failed:', err);
+            setCopyFailed(true);
+            setTimeout(() => setCopyFailed(false), 2000);
+        }
     }, [selectedId]);
 
     const handleDelete = useCallback((id: number, e?: React.MouseEvent) => {
@@ -324,13 +345,11 @@ export default function FlowSync() {
                                                     display: 'flex', flexDirection: 'column', gap: '6px',
                                                     padding: '10px 12px',
                                                     background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
+                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
                                                     borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
                                                     borderRadius: 'var(--radius-sm)',
-                                                    border: isSelected ? undefined : '1px solid var(--color-glass-border)',
-                                                    borderLeftWidth: isSelected ? '3px' : undefined,
-                                                    borderLeftColor: isSelected ? 'var(--color-primary)' : undefined,
                                                     cursor: 'pointer',
-                                                    transition: 'background 0.15s',
+                                                    transition: 'background 0.15s, border-color 0.15s',
                                                     position: 'relative',
                                                 }}
                                             >
@@ -486,10 +505,10 @@ export default function FlowSync() {
                                 <button
                                     className="btn-primary"
                                     onClick={() => handleCopy(selectedLog)}
-                                    style={{ padding: '7px 16px', fontSize: '12.5px', gap: '6px' }}
+                                    style={{ padding: '7px 16px', fontSize: '12.5px', gap: '6px', background: copyFailed ? '#ef4444' : undefined }}
                                 >
-                                    {copiedPreview ? <Check size={14} /> : <Copy size={14} />}
-                                    {copiedPreview ? t('sync.copy_success') : (selectedLog.type === 'image' ? t('sync.btn_copy_image') : t('sync.btn_copy'))}
+                                    {copyFailed ? <X size={14} /> : (copiedPreview ? <Check size={14} /> : <Copy size={14} />)}
+                                    {copyFailed ? t('sync.copy_failed') : (copiedPreview ? t('sync.copy_success') : (selectedLog.type === 'image' ? `${t('sync.btn_copy')} · ${t('sync.type_image')}` : `${t('sync.btn_copy')} · ${t('sync.type_text')}`))}
                                 </button>
                                 <button
                                     className="btn-ghost"

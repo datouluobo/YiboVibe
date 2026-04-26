@@ -11,6 +11,7 @@ import FlowDrop from "./pages/FlowDrop";
 import FlowProbe from "./pages/FlowProbe";
 import FlowRules from "./pages/FlowRules";
 import Settings from "./pages/Settings";
+import FlowInfo from "./pages/FlowInfo";
 import HintWindow from "./pages/HintWindow";
 import "./App.css";
 
@@ -105,6 +106,7 @@ function App() {
               <Route path="flowprobe" element={<FlowProbe />} />
               <Route path="flowrules" element={<FlowRules />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="flowinfo" element={<FlowInfo />} />
             </Route>
           </Routes>
         </div>

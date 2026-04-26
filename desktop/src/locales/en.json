@@ -7,13 +7,15 @@
         "flowprobe": "FlowProbe",
         "flowrules": "FlowRules",
         "settings": "Settings",
+        "flowinfo": "FlowInfo",
         "tooltip_flowdeck": "System status overview and device monitoring",
         "tooltip_flowmind": "Unified smart input engine: prefix expansion and intelligent completion",
         "tooltip_flowsync": "End-to-end encrypted clipboard bridge",
         "tooltip_flowdrop": "P2P encrypted cross-device file transfer",
         "tooltip_flowprobe": "AI endpoint probing & connectivity testing",
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
-        "tooltip_settings": "Theme, language and global preferences"
+        "tooltip_settings": "Theme, language and global preferences",
+        "tooltip_flowinfo": "About YiboFlow — version, credits & info"
     },
     "login": {
         "title_login": "Login to YiboFlow",
@@ -275,5 +277,19 @@
     "flowmind": {
         "title": "FlowMind",
         "subtitle": "Unified smart input engine"
+    },
+    "flowinfo": {
+        "title": "FlowInfo",
+        "subtitle": "Everything about YiboFlow",
+        "hero_desc": "Cross-device encrypted clipboard sync & smart input enhancement",
+        "feat_e2ee": "End-to-End Encrypted",
+        "feat_speed": "Lightning Sync",
+        "feat_p2p": "P2P Direct Transfer",
+        "tech_title": "Tech Stack",
+        "links_title": "Links",
+        "link_docs": "Documentation",
+        "link_feedback": "Feedback",
+        "made_with": "Crafted with",
+        "copyright": "All rights reserved."
     }
 }
