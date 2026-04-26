@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref SNAP_TABLE_CACHE: RwLock<Option<HashMap<String, Vec<String>>>> = RwLock::new(None);
+    static ref SNAP_TABLE_CACHE: RwLock<Option<Arc<HashMap<String, Vec<String>>>>> = RwLock::new(None);
 }
 
 /// Invalidates the snap table cache (call this when dictionaries change)
@@ -12,12 +12,12 @@ pub fn invalidate_snap_cache() {
     *cache = None;
 }
 
-pub fn build_snap_table() -> HashMap<String, Vec<String>> {
+pub fn build_snap_table() -> Arc<HashMap<String, Vec<String>>> {
     // Check cache first
     {
         let cache = SNAP_TABLE_CACHE.read().unwrap();
         if let Some(ref table) = *cache {
-            return table.clone();
+            return Arc::clone(table);
         }
     }
 
@@ -35,18 +35,19 @@ pub fn build_snap_table() -> HashMap<String, Vec<String>> {
             }
         }
     }
-    
-    log::debug!("[FlowSnap] snap_table 已构建: {} 个触发器", table.len());
-    
+
+    log::debug!("[FlowSnap] snap_table built: {} triggers", table.len());
+
+    let table = Arc::new(table);
+
     // Save to cache
     let mut cache = SNAP_TABLE_CACHE.write().unwrap();
-    *cache = Some(table.clone());
-    
+    *cache = Some(Arc::clone(&table));
+
     table
 }
 
-/// FlowHint 引擎所需的全量 content 列表
-/// 此方法根据传入的开启的词库 ID，聚合所有词条的内容用于前缀匹配
+/// FlowHint engine: collect all content entries for prefix matching
 pub fn build_hint_entries(dict_ids: &[String]) -> Vec<String> {
     let cache = crate::dictionary::DICT_CACHE.read().unwrap();
     let mut entries = Vec::new();

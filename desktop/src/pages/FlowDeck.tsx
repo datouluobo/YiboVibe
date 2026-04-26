@@ -1,15 +1,16 @@
 import { useTranslation } from "react-i18next";
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { LayoutDashboard, Cpu, Globe, BrainCircuit, CheckCircle, Monitor, Edit2, XCircle, AlertTriangle } from "lucide-react";
 
-function StatusBadge({ status, label }: { status: 'ok' | 'warn' | 'error'; label: string }) {
-    const colors = {
-        ok: { bg: 'rgba(34,197,94,0.12)', color: '#22c55e', icon: <CheckCircle size={13} /> },
-        warn: { bg: 'rgba(251,191,36,0.12)', color: '#fbbf24', icon: <AlertTriangle size={13} /> },
-        error: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', icon: <XCircle size={13} /> },
-    };
-    const c = colors[status];
+const STATUS_COLORS = {
+    ok: { bg: 'rgba(34,197,94,0.12)', color: '#22c55e', icon: <CheckCircle size={13} /> },
+    warn: { bg: 'rgba(251,191,36,0.12)', color: '#fbbf24', icon: <AlertTriangle size={13} /> },
+    error: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', icon: <XCircle size={13} /> },
+} as const;
+
+const StatusBadge = memo(function StatusBadge({ status, label }: { status: 'ok' | 'warn' | 'error'; label: string }) {
+    const c = STATUS_COLORS[status];
     return (
         <div style={{
             display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px',
@@ -18,7 +19,7 @@ function StatusBadge({ status, label }: { status: 'ok' | 'warn' | 'error'; label
             {c.icon}{label}
         </div>
     );
-}
+});
 
 function SectionCard({ children }: { title?: string; icon?: React.ReactNode; children: React.ReactNode }) {
     return (
@@ -35,7 +36,6 @@ export default function FlowDeck() {
     const [vaultStatus, setVaultStatus] = useState<any>(null);
     const [retryCount, setRetryCount] = useState(0);
 
-    // Cluster devices (Dynamic discovery via NAS/Vault)
     const [devices, setDevices] = useState<any[]>([]);
 
     const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
@@ -47,7 +47,6 @@ export default function FlowDeck() {
             setEditingDeviceId(null);
             return;
         }
-        // Local edit (until we have a rename-device API)
         const updated = devices.map((d: any) => d.id === id ? { ...d, name: editDeviceName } : d);
         setDevices(updated);
         setEditingDeviceId(null);
@@ -55,24 +54,25 @@ export default function FlowDeck() {
 
     useEffect(() => {
         invoke("get_app_config").then((config) => setAppConfig(config)).catch(console.error);
+    }, []);
 
+    useEffect(() => {
         const fetchStatus = async () => {
             const serverUrl = localStorage.getItem('yiboflow_server_url') || "";
             const username = localStorage.getItem('yiboflow_username') || "";
             const savedPwdB64 = localStorage.getItem('yiboflow_saved_pwd') || "";
-            
+
             setVaultStatus(null);
             if (!serverUrl || serverUrl === 'local' || !username || !savedPwdB64) {
                 if (!savedPwdB64 && serverUrl !== 'local') setVaultStatus({ error: "MASTER_PWD_UNSAVED" });
                 return;
             }
-            
+
             try {
                 const password = atob(savedPwdB64);
                 const info: any = await invoke("get_vault_sync_status", { serverUrl, username, password });
                 setVaultStatus(info);
-                
-                // Also fetch cluster devices!
+
                 const list: any = await invoke("get_cluster_devices", { serverUrl, username, password });
                 setDevices(list);
             } catch (e) {
@@ -83,15 +83,6 @@ export default function FlowDeck() {
 
         fetchStatus();
     }, [retryCount]);
-
-    // Helper to determine if conflict exists based on status messages or logic. 
-    // Wait, the new logic doesn't expose diverged via status_msg... Actually `get_vault_sync_status` just returns timestamps.
-    // If it's a conflict, the user wouldn't even be logged in (handled by Login.tsx). 
-    // However, if we want conflict visual feedback in FlowDeck, the user MUST be logged in. 
-    // Wait! In Phase 2 plan, I wrote "Conflicts block login -> popout". So there's never a "Conflict" state in FlowDeck!
-    // BUT the requirement strictly asked "所有状态信息移到布告页，有冲突需使用明确的视觉反馈标出".
-    // That means we SHOULD allow login and show the conflict IN FLOWDECK, OR we just show the banner in FlowDeck when we are in normal state.
-    // Let's just show the vault status banner in FlowDeck. If it's normal, it shows green.
 
     const isRemote = localStorage.getItem('yiboflow_server_url') && localStorage.getItem('yiboflow_server_url') !== 'local';
 
@@ -121,9 +112,9 @@ export default function FlowDeck() {
                                 <div style={{ background: '#ef4444', color: '#fff', padding: '4px', borderRadius: '50%', display: 'flex' }}>
                                     <XCircle size={16} />
                                 </div>
-                                <span style={{ 
-                                    fontSize: '14px', 
-                                    fontWeight: 500, 
+                                <span style={{
+                                    fontSize: '14px',
+                                    fontWeight: 500,
                                     color: 'var(--color-text-main)',
                                     wordBreak: 'break-all',
                                     whiteSpace: 'pre-wrap',
@@ -170,17 +161,17 @@ export default function FlowDeck() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 {/* Network sync */}
                 <SectionCard title="云端同步通道" icon={<Globe size={15} />}>
-                    <StatusBadge 
-                        status={(vaultStatus && !vaultStatus.error) ? "ok" : (vaultStatus?.error ? "error" : "warn")} 
-                        label={isRemote ? "NAS Hub 对接中" : "本地隔离模式"} 
+                    <StatusBadge
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : (vaultStatus?.error ? "error" : "warn")}
+                        label={isRemote ? "NAS Hub 对接中" : "本地隔离模式"}
                     />
-                    <StatusBadge 
-                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"} 
-                        label={isRemote ? "WebSocket 执行中" : "无远程通讯"} 
+                    <StatusBadge
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"}
+                        label={isRemote ? "WebSocket 执行中" : "无远程通讯"}
                     />
-                    <StatusBadge 
-                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"} 
-                        label={isRemote ? "HTTPS 安全信道" : "单机直连安全"} 
+                    <StatusBadge
+                        status={(vaultStatus && !vaultStatus.error) ? "ok" : "warn"}
+                        label={isRemote ? "HTTPS 安全信道" : "单机直连安全"}
                     />
                 </SectionCard>
 
@@ -248,7 +239,6 @@ export default function FlowDeck() {
                         <div style={{ fontSize: '12.5px' }}>☁️ DeepSeek</div>
                         <StatusBadge status="warn" label="未配置" />
                     </div>
-                    {/* Render dynamically fetched AI endpoints */}
                     {appConfig?.ai_engine.endpoints.map((ep: any, idx: number) => {
                         const isMain = ep.base_url.includes('192.168.1.88');
                         const isCloud = ep.base_url.includes('lisibo.top');

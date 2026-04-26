@@ -11,7 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ensure storage dir exists
+const maxBlobSize = 50 * 1024 * 1024 // 50 MB limit
+
 var storageDir = filepath.Join(os.TempDir(), "yiboflow_blobs")
 
 func init() {
@@ -25,6 +26,9 @@ func generateUUID() string {
 }
 
 func UploadBlob(c *gin.Context) {
+	// Enforce max body size
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBlobSize)
+
 	uuid := generateUUID()
 	dst := filepath.Join(storageDir, uuid)
 
@@ -35,7 +39,9 @@ func UploadBlob(c *gin.Context) {
 	}
 	defer outFile.Close()
 
-	if _, err := io.Copy(outFile, c.Request.Body); err != nil {
+	if _, err := io.Copy(outFile, io.LimitReader(c.Request.Body, maxBlobSize)); err != nil {
+		// Clean up partial file on error
+		os.Remove(dst)
 		c.JSON(http.StatusInternalServerError, GeneralResponse{Code: 500, Msg: "Copy failed"})
 		return
 	}

@@ -5,6 +5,22 @@ use tokio::sync::Mutex;
 
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
+    static ref HINT_WINDOW_CFG: std::sync::Mutex<(i32, i32, i32, i32, i32, f32, i32, i32)> = std::sync::Mutex::new((0, -1, -1, 0, 20, 1.0, 0, 0));
+}
+
+fn refresh_hint_window_cfg() {
+    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+    let mut hint_cfg = HINT_WINDOW_CFG.lock().unwrap();
+    *hint_cfg = (
+        cfg.hint_window.pos_type,
+        cfg.hint_window.fixed_x,
+        cfg.hint_window.fixed_y,
+        cfg.hint_window.offset_x,
+        cfg.hint_window.offset_y,
+        cfg.hint_window.scale,
+        cfg.hint_window.width,
+        cfg.hint_window.height,
+    );
 }
 
 use yiboflow_core::api::{ApiClient, LoginRequest, RegisterRequest};
@@ -406,6 +422,8 @@ fn update_settings(
     cfg.flowhint_accept_tab = flowhint_accept_tab;
     cfg.flowhint_accept_right = flowhint_accept_right;
     cfg.save();
+    drop(cfg);
+    refresh_hint_window_cfg();
     Ok(())
 }
 
@@ -418,11 +436,9 @@ fn get_app_config() -> Result<yiboflow_core::config::AppConfig, String> {
 
 #[tauri::command]
 fn update_ai_endpoints(endpoints: Vec<yiboflow_core::config::AiEndpoint>) -> Result<(), String> {
-    let mut config = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().clone();
-    config.ai_engine.endpoints = endpoints;
-    config.save();
     let mut lock = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    lock.ai_engine.endpoints = config.ai_engine.endpoints.clone();
+    lock.ai_engine.endpoints = endpoints;
+    lock.save();
     Ok(())
 }
 
@@ -431,13 +447,12 @@ fn update_ai_endpoints(endpoints: Vec<yiboflow_core::config::AiEndpoint>) -> Res
 
 
 #[tauri::command]
-fn change_local_password(new_password: String) -> Result<(), String> {
+async fn change_local_password(new_password: String) -> Result<(), String> {
     let salt = yiboflow_core::crypto::generate_salt();
-    let hash_result = tokio::task::block_in_place(|| {
-        let np = new_password.clone();
-        let s = salt.clone();
-        yiboflow_core::crypto::hash_local_password(&np, &s)
-    });
+    let salt_clone = salt.clone();
+    let hash_result = tokio::task::spawn_blocking(move || {
+        yiboflow_core::crypto::hash_local_password(&new_password, &salt_clone)
+    }).await.map_err(|e| format!("Task join error: {}", e))?;
 
     match hash_result {
         Ok(hash_str) => {
@@ -945,111 +960,143 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
 }
 
 #[tauri::command]
-fn read_clipboard_content() -> Result<serde_json::Value, String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+async fn read_clipboard_content() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        // Try text first
-        if let Ok(text) = cb.get_text() {
-            if !text.is_empty() {
-                return Ok(serde_json::json!({
-                    "type": "text",
-                    "content": text,
-                }));
-            }
-        }
-    }
-
-    // Try image
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        if let Ok(img) = cb.get_image() {
-            let width = img.width as u32;
-            let height = img.height as u32;
-            if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, img.bytes.into_owned()) {
-                let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
-                let mut buf = std::io::Cursor::new(Vec::new());
-                if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
-                    let encoded = STANDARD.encode(buf.into_inner());
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if let Ok(text) = cb.get_text() {
+                if !text.is_empty() {
                     return Ok(serde_json::json!({
-                        "type": "image",
-                        "content": format!("data:image/png;base64,{}", encoded),
-                        "width": width,
-                        "height": height,
+                        "type": "text",
+                        "content": text,
                     }));
                 }
             }
         }
-    }
 
-    Ok(serde_json::json!({ "type": "empty" }))
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if let Ok(img) = cb.get_image() {
+                let width = img.width as u32;
+                let height = img.height as u32;
+                if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, img.bytes.into_owned()) {
+                    let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
+                    let mut buf = std::io::Cursor::new(Vec::new());
+                    if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                        let encoded = STANDARD.encode(buf.into_inner());
+                        return Ok(serde_json::json!({
+                            "type": "image",
+                            "content": format!("data:image/png;base64,{}", encoded),
+                            "width": width,
+                            "height": height,
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::json!({ "type": "empty" }))
+    }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn write_to_clipboard(content: String) -> Result<(), String> {
-    for attempt in 0..10 {
-        match arboard::Clipboard::new() {
-            Ok(mut cb) => {
-                match cb.set_text(&content) {
-                    Ok(()) => return Ok(()),
-                    Err(e) if attempt < 9 => {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        continue;
-                    }
-                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
-                }
-            }
-            Err(e) if attempt < 9 => {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                continue;
-            }
-            Err(e) => return Err(format!("Clipboard open failed: {}", e)),
+async fn write_to_clipboard(content: String) -> Result<(), String> {
+    // Update text cache to prevent clipboard monitor from re-dispatching
+    {
+        if let Ok(mut last) = yiboflow_core::clipboard::LAST_TEXT.lock() {
+            *last = content.clone();
         }
     }
-    Err("Clipboard write failed after retries".into())
+
+    tokio::task::spawn_blocking(move || {
+        for attempt in 0..10 {
+            match arboard::Clipboard::new() {
+                Ok(mut cb) => {
+                    match cb.set_text(&content) {
+                        Ok(()) => return Ok(()),
+                        Err(e) if attempt < 9 => {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            continue;
+                        }
+                        Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                    }
+                }
+                Err(e) if attempt < 9 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(format!("Clipboard open failed: {}", e)),
+            }
+        }
+        Err("Clipboard write failed after retries".into())
+    }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-    let data_uri = image_base64.trim();
-    let b64_str = if data_uri.starts_with("data:image/") {
-        data_uri.split(",").nth(1).unwrap_or("")
-    } else {
-        data_uri
-    };
+        let data_uri = image_base64.trim();
+        let b64_str = if data_uri.starts_with("data:image/") {
+            data_uri.split(",").nth(1).unwrap_or("")
+        } else {
+            data_uri
+        };
 
-    let bytes = STANDARD.decode(b64_str).map_err(|e| format!("Base64 decode failed: {}", e))?;
-    let img = image::load_from_memory(&bytes).map_err(|e| format!("Image parse failed: {}", e))?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
+        let bytes = STANDARD.decode(b64_str).map_err(|e| format!("Base64 decode failed: {}", e))?;
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("Image parse failed: {}", e))?;
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
 
-    let img_data = arboard::ImageData {
-        width: w as usize,
-        height: h as usize,
-        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
-    };
+        let img_data = arboard::ImageData {
+            width: w as usize,
+            height: h as usize,
+            bytes: std::borrow::Cow::Owned(rgba.clone().into_raw()),
+        };
 
-    for attempt in 0..10 {
-        match arboard::Clipboard::new() {
-            Ok(mut cb) => {
-                match cb.set_image(img_data.clone()) {
-                    Ok(()) => return Ok(()),
-                    Err(e) if attempt < 9 => {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        continue;
-                    }
-                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
-                }
+        // Update the image hash cache to prevent clipboard monitor from re-dispatching
+        {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            w.hash(&mut hasher);
+            h.hash(&mut hasher);
+            let raw_bytes: &[u8] = img_data.bytes.as_ref();
+            raw_bytes.len().hash(&mut hasher);
+            let sample_len = 1024;
+            if raw_bytes.len() > sample_len * 2 {
+                raw_bytes[..sample_len].hash(&mut hasher);
+                raw_bytes[raw_bytes.len()-sample_len..].hash(&mut hasher);
+            } else {
+                raw_bytes.hash(&mut hasher);
             }
-            Err(e) if attempt < 9 => {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                continue;
+            let hash = hasher.finish();
+            if let Ok(mut last) = yiboflow_core::clipboard::LAST_IMAGE_HASH.lock() {
+                *last = hash;
             }
-            Err(e) => return Err(format!("Clipboard open failed: {}", e)),
         }
-    }
-    Err("Clipboard write failed after retries".into())
+
+        for attempt in 0..10 {
+            match arboard::Clipboard::new() {
+                Ok(mut cb) => {
+                    match cb.set_image(img_data.clone()) {
+                        Ok(()) => return Ok(()),
+                        Err(e) if attempt < 9 => {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            continue;
+                        }
+                        Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                    }
+                }
+                Err(e) if attempt < 9 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(format!("Clipboard open failed: {}", e)),
+            }
+        }
+        Err("Clipboard write failed after retries".into())
+    }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
@@ -1353,6 +1400,7 @@ pub fn run() {
             // Bridge FlowHint events from Hook to Tauri Frontend
             let (hint_tx, hint_rx) = std::sync::mpsc::channel();
             yiboflow_core::hook_manager::set_hint_tx(hint_tx);
+            refresh_hint_window_cfg(); // Initialize cached hint config
             let app_handle = app.handle().clone();
             #[cfg(target_os = "windows")]
             let hint_hwnd_raw = hint_hwnd.0 as isize;
@@ -1375,17 +1423,8 @@ pub fn run() {
                                     let visible_count = candidates.len().min(8) as i32;
 
                                     let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy, cfg_scale, cfg_w, cfg_h) = {
-                                        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
-                                        (
-                                            cfg.hint_window.pos_type,
-                                            cfg.hint_window.fixed_x,
-                                            cfg.hint_window.fixed_y,
-                                            cfg.hint_window.offset_x,
-                                            cfg.hint_window.offset_y,
-                                            cfg.hint_window.scale,
-                                            cfg.hint_window.width,
-                                            cfg.hint_window.height
-                                        )
+                                        let hint_cfg = HINT_WINDOW_CFG.lock().unwrap();
+                                        (hint_cfg.0, hint_cfg.1, hint_cfg.2, hint_cfg.3, hint_cfg.4, hint_cfg.5, hint_cfg.6, hint_cfg.7)
                                     };
 
                                     let scale = cfg_scale.max(0.6).min(1.8);

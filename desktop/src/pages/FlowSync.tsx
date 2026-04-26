@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
@@ -25,6 +25,7 @@ type DirFilter = 'all' | 'sent' | 'received';
 const STORAGE_KEY = 'yiboflow_sync_logs';
 const CLEANUP_KEY = 'yiboflow_sync_auto_cleanup_days';
 const MAX_RECORDS = 50;
+const ANIMATED_ITEMS = 8;
 
 function loadLogs(): ClipboardLog[] {
     try {
@@ -39,7 +40,6 @@ function saveLogs(logs: ClipboardLog[]) {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(logs.slice(0, MAX_RECORDS)));
     } catch (e) {
-        // Storage full - try removing oldest image logs to free space
         console.warn('Storage full, pruning image logs:', e);
         try {
             const pruned = logs.filter(l => l.type !== 'image').slice(0, MAX_RECORDS);
@@ -54,7 +54,26 @@ function getDayStart(d: Date): Date {
     return r;
 }
 
-function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function isSameImage(a: string, b: string): boolean {
+    if (a === b) return true;
+    if (!a.startsWith('data:image/') || !b.startsWith('data:image/')) return false;
+    // For images, compare decoded content size as approximate fingerprint
+    // Extract base64 payload length (strip data URI prefix)
+    const aParts = a.split(',');
+    const bParts = b.split(',');
+    if (aParts.length < 2 || bParts.length < 2) return false;
+    // Quick size-based heuristic: if both base64 payloads are within 5% of each other's length
+    // and one starts with the same prefix (first 200 chars), consider them the same image
+    const aData = aParts[1];
+    const bData = bParts[1];
+    if (Math.abs(aData.length - bData.length) / Math.max(aData.length, bData.length) < 0.05) {
+        const prefixLen = Math.min(200, aData.length, bData.length);
+        if (aData.slice(0, prefixLen) === bData.slice(0, prefixLen)) return true;
+    }
+    return false;
+}
+
+const FilterChip = memo(function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
     return (
         <button
             onClick={onClick}
@@ -74,9 +93,9 @@ function FilterChip({ label, active, onClick }: { label: string; active: boolean
             {label}
         </button>
     );
-}
+});
 
-function FilterGroup({ title, options, value, onChange }: {
+const FilterGroup = memo(function FilterGroup({ title, options, value, onChange }: {
     title: string;
     options: { key: string; label: string }[];
     value: string;
@@ -90,7 +109,7 @@ function FilterGroup({ title, options, value, onChange }: {
             ))}
         </div>
     );
-}
+});
 
 export default function FlowSync() {
     const { t } = useTranslation();
@@ -111,12 +130,10 @@ export default function FlowSync() {
     const autoCleanupDays = parseInt(localStorage.getItem(CLEANUP_KEY) || '7');
     const [cleanupDays, setCleanupDays] = useState(autoCleanupDays);
 
-    const selectedLog = logs.find(l => l.id === selectedId) || null;
+    const selectedLog = useMemo(() => logs.find(l => l.id === selectedId) || null, [logs, selectedId]);
 
-    // Persist logs on change
     useEffect(() => { saveLogs(logs); }, [logs]);
 
-    // Auto cleanup on mount
     useEffect(() => {
         if (cleanupDays > 0) {
             const cutoff = Date.now() - cleanupDays * 86400000;
@@ -124,7 +141,6 @@ export default function FlowSync() {
         }
     }, []);
 
-    // Listen to clipboard events
     useEffect(() => {
         if (!(window as any).__TAURI_INTERNALS__) return;
 
@@ -139,7 +155,12 @@ export default function FlowSync() {
             };
 
             setLogs(prev => {
-                const existingIdx = prev.findIndex(log => log.preview === newLog.preview);
+                const existingIdx = prev.findIndex(log => {
+                    if (log.type === 'image' && newLog.type === 'image') {
+                        return isSameImage(log.preview, newLog.preview);
+                    }
+                    return log.preview === newLog.preview;
+                });
                 if (existingIdx !== -1) {
                     const updated = [...prev];
                     updated.splice(existingIdx, 1);
@@ -149,7 +170,6 @@ export default function FlowSync() {
             });
         }).catch(() => () => {});
 
-        // Polling fallback
         const poll = setInterval(async () => {
             try {
                 const result: any = await invoke("read_clipboard_content");
@@ -170,7 +190,12 @@ export default function FlowSync() {
                 };
 
                 setLogs(prev => {
-                    const existingIdx = prev.findIndex(log => log.preview === content);
+                    const existingIdx = prev.findIndex(log => {
+                        if (log.type === 'image' && isImage) {
+                            return isSameImage(log.preview, content);
+                        }
+                        return log.preview === content;
+                    });
                     if (existingIdx !== -1) {
                         const updated = [...prev];
                         updated.splice(existingIdx, 1);
@@ -179,7 +204,7 @@ export default function FlowSync() {
                     return [newLog, ...prev].slice(0, MAX_RECORDS);
                 });
             } catch { /* ignore */ }
-        }, 2000);
+        }, 3000);
 
         return () => {
             unlistenPromise.then(fn => { if (typeof fn === 'function') fn(); });
@@ -187,7 +212,6 @@ export default function FlowSync() {
         };
     }, []);
 
-    // Close dropdowns on outside click
     useEffect(() => {
         const handler = (e: MouseEvent) => {
             if (clearMenuRef.current && !clearMenuRef.current.contains(e.target as Node)) setShowClearMenu(false);
@@ -197,8 +221,7 @@ export default function FlowSync() {
         return () => document.removeEventListener('mousedown', handler);
     }, []);
 
-    // Filtering
-    const filteredLogs = logs.filter(log => {
+    const filteredLogs = useMemo(() => logs.filter(log => {
         const now = new Date();
         const todayStart = getDayStart(now);
         if (filterTime === 'today' && log.timestamp < todayStart) return false;
@@ -213,7 +236,7 @@ export default function FlowSync() {
         if (filterDir === 'sent' && log.status !== 'sent') return false;
         if (filterDir === 'received' && log.status !== 'received') return false;
         return true;
-    });
+    }), [logs, filterTime, filterType, filterDir]);
 
     const [copyFailed, setCopyFailed] = useState(false);
 
@@ -249,13 +272,13 @@ export default function FlowSync() {
         if (selectedId === id) setSelectedId(null);
     }, [selectedId]);
 
-    const handleClearDays = (days: number) => {
+    const handleClearDays = useCallback((days: number) => {
         const cutoff = Date.now() - days * 86400000;
         setLogs(prev => prev.filter(l => l.timestamp.getTime() > cutoff));
         setShowClearMenu(false);
-    };
+    }, []);
 
-    const handleClearAll = () => {
+    const handleClearAll = useCallback(() => {
         if (confirmClear) {
             setLogs([]);
             setSelectedId(null);
@@ -264,9 +287,9 @@ export default function FlowSync() {
         } else {
             setConfirmClear(true);
         }
-    };
+    }, [confirmClear]);
 
-    const handleSetCleanup = (days: number) => {
+    const handleSetCleanup = useCallback((days: number) => {
         setCleanupDays(days);
         localStorage.setItem(CLEANUP_KEY, String(days));
         setShowCleanupPicker(false);
@@ -274,7 +297,7 @@ export default function FlowSync() {
             const cutoff = Date.now() - days * 86400000;
             setLogs(prev => prev.filter(l => l.timestamp.getTime() > cutoff));
         }
-    };
+    }, []);
 
     return (
         <div style={{ width: '100%', paddingBottom: '0', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 42px)' }}>
@@ -330,29 +353,12 @@ export default function FlowSync() {
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <AnimatePresence>
-                                    {filteredLogs.map(log => {
+                                    {filteredLogs.map((log, index) => {
                                         const isSelected = selectedId === log.id;
                                         const isCopied = copiedId === log.id;
-                                        return (
-                                            <motion.div
-                                                key={log.id}
-                                                initial={{ opacity: 0, y: -8, scale: 0.98 }}
-                                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                                exit={{ opacity: 0, scale: 0.96 }}
-                                                transition={{ duration: 0.18 }}
-                                                onClick={() => setSelectedId(log.id)}
-                                                style={{
-                                                    display: 'flex', flexDirection: 'column', gap: '6px',
-                                                    padding: '10px 12px',
-                                                    background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
-                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
-                                                    borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
-                                                    borderRadius: 'var(--radius-sm)',
-                                                    cursor: 'pointer',
-                                                    transition: 'background 0.15s, border-color 0.15s',
-                                                    position: 'relative',
-                                                }}
-                                            >
+                                        const shouldAnimate = index < ANIMATED_ITEMS;
+                                        const inner = (
+                                            <>
                                                 {/* Top row: status + time */}
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -424,7 +430,49 @@ export default function FlowSync() {
                                                         <Trash2 size={14} />
                                                     </button>
                                                 </div>
+                                            </>
+                                        );
+
+                                        return shouldAnimate ? (
+                                            <motion.div
+                                                key={log.id}
+                                                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                exit={{ opacity: 0, scale: 0.96 }}
+                                                transition={{ duration: 0.18 }}
+                                                onClick={() => setSelectedId(log.id)}
+                                                style={{
+                                                    display: 'flex', flexDirection: 'column', gap: '6px',
+                                                    padding: '10px 12px',
+                                                    background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
+                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
+                                                    borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
+                                                    borderRadius: 'var(--radius-sm)',
+                                                    cursor: 'pointer',
+                                                    transition: 'background 0.15s, border-color 0.15s',
+                                                    position: 'relative',
+                                                }}
+                                            >
+                                                {inner}
                                             </motion.div>
+                                        ) : (
+                                            <div
+                                                key={log.id}
+                                                onClick={() => setSelectedId(log.id)}
+                                                style={{
+                                                    display: 'flex', flexDirection: 'column', gap: '6px',
+                                                    padding: '10px 12px',
+                                                    background: isSelected ? 'rgba(94, 106, 210, 0.08)' : 'var(--color-surface-elevated)',
+                                                    border: isSelected ? '1px solid rgba(94, 106, 210, 0.25)' : '1px solid var(--color-glass-border)',
+                                                    borderLeft: isSelected ? '3px solid var(--color-primary)' : '3px solid transparent',
+                                                    borderRadius: 'var(--radius-sm)',
+                                                    cursor: 'pointer',
+                                                    transition: 'background 0.15s, border-color 0.15s',
+                                                    position: 'relative',
+                                                }}
+                                            >
+                                                {inner}
+                                            </div>
                                         );
                                     })}
                                 </AnimatePresence>

@@ -1,5 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useCallback } from "react";
 import {
     LayoutDashboard, Sparkles,
     Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen
@@ -15,49 +16,49 @@ interface NavItem {
     group?: string;
 }
 
+const NAV_GROUPS: { id: string; items: NavItem[] }[] = [
+    {
+        id: "overview",
+        items: [
+            { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
+        ]
+    },
+    {
+        id: "input",
+        items: [
+            { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
+        ]
+    },
+    {
+        id: "transfer",
+        items: [
+            { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
+            { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
+        ]
+    },
+    {
+        id: "system",
+        items: [
+            { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
+            { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
+            { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
+            { id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo" },
+        ]
+    }
+];
+
 export default function Layout() {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const location = useLocation();
 
-    const handleLogout = () => {
+    const handleLogout = useCallback(() => {
         localStorage.removeItem('yiboflow_server_url');
         localStorage.removeItem('yiboflow_username');
         localStorage.removeItem('yiboflow_connected_at');
-        localStorage.removeItem('yiboflow_auto_login'); // Disable auto-login on explicit logout
+        localStorage.removeItem('yiboflow_auto_login');
         navigate("/");
-    };
-
-    const navGroups: { id: string; items: NavItem[] }[] = [
-        {
-            id: "overview",
-            items: [
-                { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
-            ]
-        },
-        {
-            id: "input",
-            items: [
-                { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
-            ]
-        },
-        {
-            id: "transfer",
-            items: [
-                { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
-                { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
-            ]
-        },
-        {
-            id: "system",
-            items: [
-                { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
-                { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
-                { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
-                { id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo" },
-            ]
-        }
-    ];
+    }, [navigate]);
 
     return (
         <div className="layout-container" style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
@@ -79,7 +80,7 @@ export default function Layout() {
 
                 {/* Nav Groups */}
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0', padding: '0 12px', overflowY: 'auto' }}>
-                    {navGroups.map((group, groupIdx) => (
+                    {NAV_GROUPS.map((group, groupIdx) => (
                         <div key={group.id}>
                             {groupIdx > 0 && (
                                 <div style={{

@@ -6,8 +6,7 @@ import (
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the
-// clients directly over memory. We will eventually bridge this with Redis Pub/Sub
-// to allow horizontal scale, but for Private NAS (single node), this is sufficient.
+// clients directly over memory.
 type Hub struct {
 	// Registered clients split by UID to quickly broadcast to user's devices
 	// uid -> deviceId -> *Client
@@ -82,7 +81,9 @@ func (h *Hub) Run() {
 			h.Mu.RLock()
 			devices, ok := h.Clients[message.SenderUID]
 
-			// Broadcast only if there are target devices
+			// Collect clients that need to be kicked (send buffer full)
+			var deadClients []*Client
+
 			if ok {
 				for did, c := range devices {
 					// Skip sender itself or check if we must filter by target device ID
@@ -97,13 +98,31 @@ func (h *Hub) Run() {
 					select {
 					case c.Send <- message:
 					default:
-						// Send buffer full, kick out dead client
-						close(c.Send)
-						delete(h.Clients[message.SenderUID], did)
+						// Send buffer full - collect for removal outside read lock
+						deadClients = append(deadClients, c)
 					}
 				}
 			}
 			h.Mu.RUnlock()
+
+			// Remove dead clients with a write lock (separated from read operation)
+			if len(deadClients) > 0 {
+				h.Mu.Lock()
+				for _, c := range deadClients {
+					// Double-check the client still exists before closing
+					if devs, ok := h.Clients[message.SenderUID]; ok {
+						if _, ok := devs[c.DeviceID]; ok {
+							delete(devs, c.DeviceID)
+							close(c.Send)
+						}
+					}
+				}
+				// Clean up empty user map
+				if devs, ok := h.Clients[message.SenderUID]; ok && len(devs) == 0 {
+					delete(h.Clients, message.SenderUID)
+				}
+				h.Mu.Unlock()
+			}
 		}
 	}
 }

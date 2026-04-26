@@ -1,27 +1,39 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback, Suspense, lazy } from "react";
 import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Login from "./pages/Login";
 import Layout from "./components/Layout";
-// Pages — Flow 全家桶
-import FlowDeck from "./pages/FlowDeck";
-import FlowMind from "./pages/FlowMind";
-import FlowSync from "./pages/FlowSync";
-import FlowDrop from "./pages/FlowDrop";
-import FlowProbe from "./pages/FlowProbe";
-import FlowRules from "./pages/FlowRules";
-import Settings from "./pages/Settings";
-import FlowInfo from "./pages/FlowInfo";
-import HintWindow from "./pages/HintWindow";
+
+const FlowDeck = lazy(() => import("./pages/FlowDeck"));
+const FlowMind = lazy(() => import("./pages/FlowMind"));
+const FlowSync = lazy(() => import("./pages/FlowSync"));
+const FlowDrop = lazy(() => import("./pages/FlowDrop"));
+const FlowProbe = lazy(() => import("./pages/FlowProbe"));
+const FlowRules = lazy(() => import("./pages/FlowRules"));
+const Settings = lazy(() => import("./pages/Settings"));
+const FlowInfo = lazy(() => import("./pages/FlowInfo"));
+const HintWindow = lazy(() => import("./pages/HintWindow"));
+
 import "./App.css";
 
 const appWindow = (() => {
   try { return getCurrentWindow(); } catch { return null; }
 })();
 
+function PageFallback() {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100%', color: 'var(--color-text-muted)', fontSize: '13px',
+    }}>
+      Loading...
+    </div>
+  );
+}
+
 function App() {
   const [isMaximized, setIsMaximized] = useState(false);
-  const lastClickRef = { time: 0, x: 0, y: 0 };
+  const lastClickRef = useRef({ time: 0, x: 0, y: 0 });
 
   useEffect(() => {
     const theme = localStorage.getItem('yiboflow_theme') || 'dark';
@@ -37,26 +49,27 @@ function App() {
     return () => { unlisten.then(f => f()); };
   }, []);
 
-  const handleTitlebarMouseDown = (e: React.MouseEvent) => {
+  const handleTitlebarMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0 || !appWindow) return;
     if ((e.target as HTMLElement).closest('.titlebar-controls')) return;
 
     const now = Date.now();
+    const ref = lastClickRef.current;
     const isDoubleClick =
-      now - lastClickRef.time < 400 &&
-      Math.abs(e.clientX - lastClickRef.x) < 5 &&
-      Math.abs(e.clientY - lastClickRef.y) < 5;
+      now - ref.time < 400 &&
+      Math.abs(e.clientX - ref.x) < 5 &&
+      Math.abs(e.clientY - ref.y) < 5;
 
-    lastClickRef.time = now;
-    lastClickRef.x = e.clientX;
-    lastClickRef.y = e.clientY;
+    ref.time = now;
+    ref.x = e.clientX;
+    ref.y = e.clientY;
 
     if (isDoubleClick) {
       appWindow.toggleMaximize();
     } else {
       appWindow.startDragging();
     }
-  };
+  }, []);
 
   return (
     <Router>
@@ -92,21 +105,20 @@ function App() {
           </div>
         </div>
 
-        {/* Main Routed Content */}
         <div className="main-content" style={{ display: 'flex' }}>
           <Routes>
             <Route path="/" element={<Login />} />
-            <Route path="/hint" element={<HintWindow />} />
+            <Route path="/hint" element={<Suspense fallback={<PageFallback />}><HintWindow /></Suspense>} />
             <Route path="/app" element={<Layout />}>
               <Route index element={<Navigate to="/app/flowdeck" replace />} />
-              <Route path="flowdeck" element={<FlowDeck />} />
-              <Route path="flowmind" element={<FlowMind />} />
-              <Route path="flowsync" element={<FlowSync />} />
-              <Route path="flowdrop" element={<FlowDrop />} />
-              <Route path="flowprobe" element={<FlowProbe />} />
-              <Route path="flowrules" element={<FlowRules />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="flowinfo" element={<FlowInfo />} />
+              <Route path="flowdeck" element={<Suspense fallback={<PageFallback />}><FlowDeck /></Suspense>} />
+              <Route path="flowmind" element={<Suspense fallback={<PageFallback />}><FlowMind /></Suspense>} />
+              <Route path="flowsync" element={<Suspense fallback={<PageFallback />}><FlowSync /></Suspense>} />
+              <Route path="flowdrop" element={<Suspense fallback={<PageFallback />}><FlowDrop /></Suspense>} />
+              <Route path="flowprobe" element={<Suspense fallback={<PageFallback />}><FlowProbe /></Suspense>} />
+              <Route path="flowrules" element={<Suspense fallback={<PageFallback />}><FlowRules /></Suspense>} />
+              <Route path="settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
+              <Route path="flowinfo" element={<Suspense fallback={<PageFallback />}><FlowInfo /></Suspense>} />
             </Route>
           </Routes>
         </div>

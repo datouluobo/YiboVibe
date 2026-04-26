@@ -21,6 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_MENU, VIRTUAL_KEY,
 };
+use std::collections::HashMap;
 
 const VK_C: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
 
@@ -68,6 +69,12 @@ pub enum HintSource {
     FlowSnapMulti,
 }
 
+struct ProcessCache {
+    exe_name: String,
+    snap_enabled: bool,
+    hint_enabled: bool,
+}
+
 lazy_static::lazy_static! {
     static ref KEY_BUFFER: Mutex<String> = Mutex::new(String::new());
     pub static ref CURRENT_HINT: Mutex<HintState> = Mutex::new(HintState {
@@ -80,6 +87,7 @@ lazy_static::lazy_static! {
         is_buffered: false,
     });
     static ref LAST_HWND: Mutex<isize> = Mutex::new(0);
+    static ref EXE_CACHE: Mutex<HashMap<u32, ProcessCache>> = Mutex::new(HashMap::new());
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -296,31 +304,56 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        
+
         // ---------------------------------------------------------
-        // 1. FlowWriter Hotkey Check — removed in v0.8.0
+        // 1. Process cache: avoid OpenProcess on every keystroke
         // ---------------------------------------------------------
 
+        let exe_name;
+        let snippets_active;
+        let autofill_active;
 
-        let mut active_exe = String::new();
-        if let Ok(handle) = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
-            let mut buffer = [0u16; MAX_PATH as usize];
-            let len = unsafe { GetModuleFileNameExW(handle, None, &mut buffer) };
-            if len > 0 {
-                active_exe = String::from_utf16_lossy(&buffer[..len as usize]);
+        {
+            let mut cache = EXE_CACHE.lock().unwrap();
+            if let Some(cached) = cache.get(&pid) {
+                exe_name = cached.exe_name.clone();
+                snippets_active = cached.snap_enabled;
+                autofill_active = cached.hint_enabled;
+            } else {
+                let mut active_exe = String::new();
+                if let Ok(handle) = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
+                    let mut buffer = [0u16; MAX_PATH as usize];
+                    let len = unsafe { GetModuleFileNameExW(handle, None, &mut buffer) };
+                    if len > 0 {
+                        active_exe = String::from_utf16_lossy(&buffer[..len as usize]);
+                    }
+                }
+
+                let name = std::path::Path::new(&active_exe)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let s_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowSnap);
+                let a_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
+
+                cache.insert(pid, ProcessCache {
+                    exe_name: name.clone(),
+                    snap_enabled: s_active,
+                    hint_enabled: a_active,
+                });
+
+                exe_name = name;
+                snippets_active = s_active;
+                autofill_active = a_active;
             }
         }
-
-        let exe_name = std::path::Path::new(&active_exe)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
 
         let key_code = kb_struct.vkCode;
         let mut swallowed_char = false;
         let mut buf_changed = false;
-        
+
         // 1. IME Status Check (MUST be first to inform subsequent logic)
         use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
         use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_IME_CONTROL};
@@ -329,14 +362,11 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             unsafe { SendMessageW(ime_wnd, WM_IME_CONTROL, WPARAM(0x005), LPARAM(0)) }.0 != 0
         } else { false };
 
-        log::info!("[FlowSnap-DBG] key=0x{:X} ime_cn={} exe={}", key_code, is_ime_chinese_mode, exe_name);
+        log::debug!("[FlowSnap-DBG] key=0x{:X} ime_cn={} exe={}", key_code, is_ime_chinese_mode, exe_name);
 
         // 2. Hint UI Logic (Using try_lock to be cross-thread safe)
         let hint_res = {
             if let Ok(mut hs) = CURRENT_HINT.try_lock() {
-                let s_active = crate::rules::is_feature_enabled(&exe_name, crate::rules::Feature::FlowSnap);
-                let a_active = crate::rules::is_feature_enabled(&exe_name, crate::rules::Feature::FlowHint);
-                
                 let mut act = 0; // 0=none, 1=confirm, 2=hide, 3=up, 4=down
                 let mut idx = 0;
 
@@ -365,7 +395,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         }
                     }
                 }
-                
+
                 // Add action for Chinese Mode auto-hide
                 let mut ime_hide = false;
                 if hs.is_active && hs.source == HintSource::FlowHint && is_ime_chinese_mode && (0x41..=0x5A).contains(&key_code) {
@@ -373,18 +403,15 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     ime_hide = true;
                 }
 
-                (s_active, a_active, act, idx, ime_hide)
-            } else { (false, false, 0, 0, false) }
+                (act, idx, ime_hide)
+            } else { (0, 0, false) }
         };
 
-        let snippets_active = hint_res.0;
-        let autofill_active = hint_res.1;
+        if hint_res.2 { send_hint_event(HintEvent::Hide); }
 
-        if hint_res.4 { send_hint_event(HintEvent::Hide); }
-
-        match hint_res.2 {
+        match hint_res.0 {
             1 => {
-                accept_hint_by_index(hint_res.3);
+                accept_hint_by_index(hint_res.1);
                 return LRESULT(1);
             }
             2 => {
@@ -393,7 +420,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 return LRESULT(1);
             }
             3 | 4 => {
-                send_hint_event(HintEvent::UpdateSelection(hint_res.3));
+                send_hint_event(HintEvent::UpdateSelection(hint_res.1));
                 return LRESULT(1);
             }
             _ => {}
@@ -481,14 +508,15 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
         if buf_changed {
             let buf = if let Ok(b) = KEY_BUFFER.lock() { b.clone() } else { String::new() };
-            log::info!("[FlowSnap-DBG] buffer='{}' snippets_active={}", buf, snippets_active);
+            log::debug!("[FlowSnap-DBG] buffer='{}' snippets_active={}", buf, snippets_active);
             let mut matched_trigger: Option<String> = None;
             let mut matched_replacements: Vec<String> = Vec::new();
             // FlowSnap: ALWAYS attempt matching regardless of IME state
             if snippets_active {
                 let snap_table = crate::smart_router::build_snap_table();
+                let buf_lower = buf.to_lowercase();
                 for (trigger, replacements) in snap_table.iter() {
-                    if buf.to_lowercase().ends_with(&trigger.to_lowercase()) {
+                    if buf_lower.ends_with(&trigger.to_lowercase()) {
                         if matched_trigger.as_ref().map_or(true, |t| trigger.len() > t.len()) {
                             matched_trigger = Some(trigger.clone());
                             matched_replacements = replacements.clone();
@@ -536,7 +564,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
             if !matched_snap && !is_ime_chinese_mode {
                 if autofill_active && !buf.is_empty() {
-                    let dict_ids = crate::rules::get_app_flowhint_dicts(&active_exe);
+                    let dict_ids = crate::rules::get_app_flowhint_dicts(&exe_name);
                     let cands_with_len = crate::dictionary::search_candidates_tail(&dict_ids, &buf);
                     if !cands_with_len.is_empty() {
                         let cands: Vec<String> = cands_with_len.iter().map(|(c, _)| c.clone()).collect();
