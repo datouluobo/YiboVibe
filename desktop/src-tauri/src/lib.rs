@@ -798,11 +798,13 @@ fn set_default_rules(
     flowsnap: bool,
     flowhint: bool,
     flowsync: bool,
+    flowkeys: bool,
 ) -> Result<(), String> {
     yiboflow_core::rules::set_default_rules(yiboflow_core::rules::DefaultRules {
         flowsnap,
         flowhint,
         flowsync,
+        flowkeys,
     })
 }
 
@@ -814,6 +816,7 @@ fn upsert_app_rule(
     flowhint: Option<bool>,
     flowhint_dicts: Vec<String>,
     flowsync: Option<bool>,
+    flowkeys: Option<bool>,
 ) -> Result<(), String> {
     yiboflow_core::rules::upsert_app_rule(yiboflow_core::rules::AppRule {
         process,
@@ -822,6 +825,7 @@ fn upsert_app_rule(
         flowhint,
         flowhint_dicts,
         flowsync,
+        flowkeys,
     })
 }
 
@@ -1399,6 +1403,12 @@ async fn pull_today_history(state: tauri::State<'_, AppState>) -> Result<u32, St
 }
 
 #[tauri::command]
+fn update_key_mappings(mappings: Vec<yiboflow_core::hook_manager::KeyRemapEntry>) -> Result<(), String> {
+    yiboflow_core::hook_manager::update_key_remap_table(mappings);
+    Ok(())
+}
+
+#[tauri::command]
 fn diagnose_flowhint() -> Result<String, String> {
     let dicts = yiboflow_core::dictionary::get_all_dictionaries();
     let mut report = String::new();
@@ -1854,6 +1864,7 @@ pub fn run() {
             resolve_file_conflicts,
             regenerate_device_fingerprint,
             diagnose_flowhint,
+            update_key_mappings,
             accept_hint_candidate,
             dismiss_hint_window,
             update_hint_position,

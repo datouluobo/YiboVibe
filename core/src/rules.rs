@@ -18,6 +18,7 @@ pub enum Feature {
     FlowSnap,
     FlowHint,
     FlowSync,
+    FlowKeys,
 }
 
 /// 默认行：未列入矩阵的应用均继承此策略
@@ -26,6 +27,7 @@ pub struct DefaultRules {
     pub flowsnap: bool,
     pub flowhint: bool,
     pub flowsync: bool,
+    pub flowkeys: bool,
 }
 
 impl Default for DefaultRules {
@@ -34,6 +36,7 @@ impl Default for DefaultRules {
             flowsnap: true,
             flowhint: false,
             flowsync: true,
+            flowkeys: true,
         }
     }
 }
@@ -44,6 +47,7 @@ impl DefaultRules {
             Feature::FlowSnap => self.flowsnap,
             Feature::FlowHint => self.flowhint,
             Feature::FlowSync => self.flowsync,
+            Feature::FlowKeys => self.flowkeys,
         }
     }
 }
@@ -58,6 +62,8 @@ pub struct AppRule {
     #[serde(default)]
     pub flowhint_dicts: Vec<String>,
     pub flowsync: Option<bool>,
+    #[serde(default)]
+    pub flowkeys: Option<bool>,
 }
 
 impl AppRule {
@@ -66,6 +72,7 @@ impl AppRule {
             Feature::FlowSnap => self.flowsnap,
             Feature::FlowHint => self.flowhint,
             Feature::FlowSync => self.flowsync,
+            Feature::FlowKeys => self.flowkeys,
         };
         val.unwrap_or(default)
     }
@@ -200,8 +207,9 @@ pub fn is_all_disabled(process_name: &str) -> bool {
         !rule.resolve_enabled(Feature::FlowSnap, d.flowsnap) 
         && !rule.resolve_enabled(Feature::FlowHint, d.flowhint) 
         && !rule.resolve_enabled(Feature::FlowSync, d.flowsync)
+        && !rule.resolve_enabled(Feature::FlowKeys, d.flowkeys)
     } else {
-        !d.flowsnap && !d.flowhint && !d.flowsync
+        !d.flowsnap && !d.flowhint && !d.flowsync && !d.flowkeys
     }
 }
 
@@ -276,11 +284,11 @@ pub fn toggle_app_feature(process: String, feature: Feature) -> Result<(), Strin
     let mut cfg = RULES_CONFIG.write().map_err(|e| e.to_string())?;
     let key = process.trim().to_lowercase();
     if let Some(rule) = cfg.app_overrides.iter_mut().find(|r| r.process.trim().to_lowercase() == key) {
-        // 状态循环：Inherit(None) -> Allow(Some(true)) -> Deny(Some(false)) -> Inherit(None)
         let (current, next) = match feature {
             Feature::FlowSnap => (rule.flowsnap, &mut rule.flowsnap),
             Feature::FlowHint => (rule.flowhint, &mut rule.flowhint),
             Feature::FlowSync => (rule.flowsync, &mut rule.flowsync),
+            Feature::FlowKeys => (rule.flowkeys, &mut rule.flowkeys),
         };
         *next = match current {
             None => Some(true),
@@ -302,6 +310,7 @@ pub fn toggle_default_feature(feature: Feature) -> Result<(), String> {
         Feature::FlowSnap => cfg.default.flowsnap = !cfg.default.flowsnap,
         Feature::FlowHint => cfg.default.flowhint = !cfg.default.flowhint,
         Feature::FlowSync => cfg.default.flowsync = !cfg.default.flowsync,
+        Feature::FlowKeys => cfg.default.flowkeys = !cfg.default.flowkeys,
     }
     drop(cfg);
     persist_and_rebuild();

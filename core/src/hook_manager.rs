@@ -19,11 +19,377 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_MENU, VIRTUAL_KEY,
+    GetKeyboardState, ToUnicode, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
+    VK_MENU, VIRTUAL_KEY,
 };
+
+/// Maps OEM / layout keys (e.g. full-width ￥) and any key not covered by the ASCII branches.
+#[cfg(target_os = "windows")]
+fn key_event_to_unicode_char(vk: u32, scan: u32) -> Option<char> {
+    let mut state = [0u8; 256];
+    if unsafe { GetKeyboardState(&mut state) }.is_err() {
+        return None;
+    }
+    let mut buf = [0u16; 8];
+    let n = unsafe { ToUnicode(vk, scan, Some(&state), &mut buf, 0) };
+    if n <= 0 {
+        return None;
+    }
+    let take = (n as usize).min(buf.len());
+    if let Ok(s) = String::from_utf16(&buf[..take]) {
+        return s
+            .chars()
+            .next()
+            .filter(|c| !c.is_control());
+    }
+    None
+}
 use std::collections::HashMap;
 
 const VK_C: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
+
+// ─── Key Remapping Support ───
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyRemapEntry {
+    pub source_key: String,
+    pub source_key_id: String,
+    pub target_key: String,
+    pub target_key_id: String,
+    pub target_modifiers: Vec<String>,
+    pub enabled: bool,
+}
+
+lazy_static::lazy_static! {
+    static ref KEY_REMAP_TABLE: Mutex<Vec<KeyRemapEntry>> = Mutex::new(Vec::new());
+}
+
+pub fn update_key_remap_table(entries: Vec<KeyRemapEntry>) {
+    if let Ok(mut table) = KEY_REMAP_TABLE.lock() {
+        *table = entries;
+        log::info!("[FlowKeys] Remap table updated: {} active entries", table.iter().filter(|e| e.enabled).count());
+    }
+}
+
+/// Parse a key name to its VK code
+fn key_name_to_vk(name: &str) -> Option<u32> {
+    match name {
+        "Backspace" => Some(0x08),
+        "Tab" => Some(0x09),
+        "Enter" => Some(0x0D),
+        "Shift" | "ShiftLeft" | "ShiftRight" => Some(0x10),
+        "Ctrl" | "ControlLeft" | "ControlRight" => Some(0x11),
+        "Alt" | "AltLeft" | "AltRight" => Some(0x12),
+        "Pause" => Some(0x13),
+        "CapsLock" => Some(0x14),
+        "Escape" => Some(0x1B),
+        "Space" => Some(0x20),
+        "PageUp" => Some(0x21),
+        "PageDown" => Some(0x22),
+        "End" => Some(0x23),
+        "Home" => Some(0x24),
+        "ArrowLeft" => Some(0x25),
+        "ArrowUp" => Some(0x26),
+        "ArrowRight" => Some(0x27),
+        "ArrowDown" => Some(0x28),
+        "Insert" => Some(0x2D),
+        "Delete" => Some(0x2E),
+        "Win" | "MetaLeft" | "MetaRight" => Some(0x5B),
+        "F1" => Some(0x70), "F2" => Some(0x71), "F3" => Some(0x72), "F4" => Some(0x73),
+        "F5" => Some(0x74), "F6" => Some(0x75), "F7" => Some(0x76), "F8" => Some(0x77),
+        "F9" => Some(0x78), "F10" => Some(0x79), "F11" => Some(0x7A), "F12" => Some(0x7B),
+        "NumLock" => Some(0x90),
+        "ScrollLock" => Some(0x91),
+        "PrintScreen" => Some(0x2C),
+        "ContextMenu" => Some(0x5D),
+        "Numpad0" => Some(0x60), "Numpad1" => Some(0x61), "Numpad2" => Some(0x62),
+        "Numpad3" => Some(0x63), "Numpad4" => Some(0x64), "Numpad5" => Some(0x65),
+        "Numpad6" => Some(0x66), "Numpad7" => Some(0x67), "Numpad8" => Some(0x68),
+        "Numpad9" => Some(0x69),
+        "NumpadMultiply" => Some(0x6A), "NumpadAdd" => Some(0x6B),
+        "NumpadSubtract" => Some(0x6D), "NumpadDecimal" => Some(0x6E),
+        "NumpadDivide" => Some(0x6F), "NumpadEnter" => Some(0x0D),
+        s if s.starts_with("Key") && s.len() == 4 => {
+            let c = s.chars().nth(3)?;
+            if c.is_ascii_alphabetic() {
+                Some(0x41 + (c as u32).wrapping_sub(b'A' as u32))
+            } else { None }
+        }
+        s if s.starts_with("Digit") && s.len() == 6 => {
+            let c = s.chars().nth(5)?;
+            if c.is_ascii_digit() {
+                Some(c as u32)
+            } else { None }
+        }
+        _ => None,
+    }
+}
+
+/// Check if the current key event matches a remap entry, and if so, simulate the target key
+#[cfg(target_os = "windows")]
+fn check_key_remap(vk_code: u32, scan_code: u32, is_key_down: bool) -> bool {
+    let table = match KEY_REMAP_TABLE.try_lock() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    if table.iter().filter(|e| e.enabled).count() == 0 {
+        return false;
+    }
+
+    // Check per-process FlowKeys rule
+    let hwnd = unsafe { GetForegroundWindow() };
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    let my_pid = unsafe { windows::Win32::System::Threading::GetCurrentProcessId() };
+
+    // Never remap keys in our own process
+    if pid == my_pid {
+        return false;
+    }
+
+    // Resolve exe name and check FlowKeys feature via cache
+    {
+        let mut cache = EXE_CACHE.lock().unwrap();
+        let keys_enabled = if let Some(cached) = cache.get(&pid) {
+            cached.keys_enabled
+        } else {
+            let mut active_exe = String::new();
+            if let Ok(handle) = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
+                let mut buffer = [0u16; MAX_PATH as usize];
+                let len = unsafe { GetModuleFileNameExW(handle, None, &mut buffer) };
+                if len > 0 {
+                    active_exe = String::from_utf16_lossy(&buffer[..len as usize]);
+                }
+            }
+
+            let name = std::path::Path::new(&active_exe)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            let s_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowSnap);
+            let a_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
+            let k_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowKeys);
+
+            cache.insert(pid, ProcessCache {
+                exe_name: name.clone(),
+                snap_enabled: s_active,
+                hint_enabled: a_active,
+                keys_enabled: k_active,
+            });
+            k_active
+        };
+
+        if !keys_enabled {
+            return false;
+        }
+    }
+
+    for entry in table.iter() {
+        if !entry.enabled { continue; }
+
+        // Check if source key matches
+        let source_vk = match key_name_to_vk(&entry.source_key_id) {
+            Some(vk) => vk,
+            None => continue,
+        };
+
+        if vk_code != source_vk { continue; }
+
+        // Parse source modifiers from source_key (e.g. "Ctrl+Alt+K")
+        let source_parts: Vec<&str> = entry.source_key.split('+').collect();
+        let mut need_ctrl = false;
+        let mut need_alt = false;
+        let mut need_shift = false;
+        let mut need_win = false;
+        for part in &source_parts {
+            match part.trim() {
+                "Ctrl" => need_ctrl = true,
+                "Alt" => need_alt = true,
+                "Shift" => need_shift = true,
+                "Win" => need_win = true,
+                _ => {}
+            }
+        }
+
+        // Check modifier state
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
+        let ctrl_down = (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0;
+        let alt_down = (unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } as u16 & 0x8000) != 0;
+        let shift_down = (unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000) != 0;
+        let win_down = (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0
+            || (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0;
+
+        if ctrl_down != need_ctrl || alt_down != need_alt || shift_down != need_shift || win_down != need_win {
+            continue;
+        }
+
+        // Match found! Swallow this key and send target
+        if is_key_down {
+            // Parse target key
+            let target_vk = key_name_to_vk(&entry.target_key_id);
+            let mut target_ctrl = false;
+            let mut target_alt = false;
+            let mut target_shift = false;
+            let mut target_win = false;
+
+            for mod_name in &entry.target_modifiers {
+                match mod_name.as_str() {
+                    "Ctrl" => target_ctrl = true,
+                    "Alt" => target_alt = true,
+                    "Shift" => target_shift = true,
+                    "Win" => target_win = true,
+                    _ => {}
+                }
+
+            }
+
+            if let Some(tvk) = target_vk {
+                std::thread::spawn(move || {
+                    use std::time::Duration;
+                    std::thread::sleep(Duration::from_millis(5));
+
+                    let mut inputs: Vec<INPUT> = Vec::new();
+
+                    // Release modifiers that differ
+                    if need_ctrl && !target_ctrl {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_CONTROL;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if need_alt && !target_alt {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_MENU;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if need_shift && !target_shift {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_SHIFT;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if need_win && !target_win {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_LWIN;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+
+                    // Press target modifiers
+                    if target_ctrl && !need_ctrl {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_CONTROL;
+                        inputs.push(down);
+                    }
+                    if target_alt && !need_alt {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_MENU;
+                        inputs.push(down);
+                    }
+                    if target_shift && !need_shift {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_SHIFT;
+                        inputs.push(down);
+                    }
+                    if target_win && !need_win {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_LWIN;
+                        inputs.push(down);
+                    }
+
+                    // Press target key
+                    let mut kd = INPUT::default();
+                    kd.r#type = INPUT_KEYBOARD;
+                    kd.Anonymous.ki.wVk = VIRTUAL_KEY(tvk as u16);
+                    inputs.push(kd);
+
+                    // Release target key
+                    let mut ku = INPUT::default();
+                    ku.r#type = INPUT_KEYBOARD;
+                    ku.Anonymous.ki.wVk = VIRTUAL_KEY(tvk as u16);
+                    ku.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                    inputs.push(ku);
+
+                    // Restore target modifiers that were newly pressed
+                    if target_ctrl && !need_ctrl {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_CONTROL;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if target_alt && !need_alt {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_MENU;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if target_shift && !need_shift {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_SHIFT;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+                    if target_win && !need_win {
+                        let mut up = INPUT::default();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wVk = VK_LWIN;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                        inputs.push(up);
+                    }
+
+                    // Restore source modifiers that were released
+                    if need_ctrl && !target_ctrl {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_CONTROL;
+                        inputs.push(down);
+                    }
+                    if need_alt && !target_alt {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_MENU;
+                        inputs.push(down);
+                    }
+                    if need_shift && !target_shift {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_SHIFT;
+                        inputs.push(down);
+                    }
+                    if need_win && !target_win {
+                        let mut down = INPUT::default();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wVk = VK_LWIN;
+                        inputs.push(down);
+                    }
+
+                    unsafe {
+                        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                    }
+                });
+            }
+        }
+
+        return true; // Swallow the original key
+    }
+
+    false
+}
 
 #[cfg(target_os = "windows")]
 fn send_ctrl_c() {
@@ -73,6 +439,7 @@ struct ProcessCache {
     exe_name: String,
     snap_enabled: bool,
     hint_enabled: bool,
+    keys_enabled: bool,
 }
 
 lazy_static::lazy_static! {
@@ -278,6 +645,11 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             return unsafe { CallNextHookEx(None, ncode, wparam, lparam) };
         }
 
+        // ─── FlowKeys: Key Remapping (highest priority) ───
+        if check_key_remap(kb_struct.vkCode, kb_struct.scanCode, true) {
+            return LRESULT(1);
+        }
+
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.0 != 0 {
             let mut pid = 0;
@@ -337,11 +709,13 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
                 let s_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowSnap);
                 let a_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
+                let k_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowKeys);
 
                 cache.insert(pid, ProcessCache {
                     exe_name: name.clone(),
                     snap_enabled: s_active,
                     hint_enabled: a_active,
+                    keys_enabled: k_active,
                 });
 
                 exe_name = name;
@@ -470,6 +844,15 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 buf.push(ch);
                 buf_changed = true;
             }
+        } else if (0x60..=0x69).contains(&key_code) {
+            // Numpad 0-9: distinct VK from main row; was ignored so buffers never saw digits
+            if let Some(ch) = char::from_u32(0x30 + (key_code - 0x60)) {
+                if let Ok(mut buf) = KEY_BUFFER.lock() {
+                    buf.push(ch);
+                    if buf.len() > 50 { buf.remove(0); }
+                    buf_changed = true;
+                }
+            }
         } else if key_code == 0x08 { // Backspace
             if let Ok(mut buf) = KEY_BUFFER.lock() {
                 if buf.pop().is_some() { buf_changed = true; }
@@ -495,7 +878,11 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 0x6A => Some('*'),
                 0x6E => Some('.'),
                 _ => None,
-            };
+            }
+            .or_else(|| {
+                // Layout-specific symbols (e.g. full-width ￥) and keys not in the table above
+                key_event_to_unicode_char(key_code, kb_struct.scanCode)
+            });
             if let Some(c) = ch {
                 if let Ok(mut buf) = KEY_BUFFER.lock() {
                     buf.push(c); if buf.len() > 50 { buf.remove(0); }

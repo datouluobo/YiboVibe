@@ -4,8 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    ClipboardCopy, ArrowDownToLine, ArrowUpToLine,
-    Copy, Trash2, Check, ChevronDown, ImageIcon, FileType, X, Search, Pin, PinOff, Download, Settings2
+    ClipboardCopy,
+    Copy, Trash2, Check, ChevronDown, ImageIcon, FileType, X, Search, Pin, PinOff, Download, Settings2, ToggleRight, ToggleLeft
 } from "lucide-react";
 
 interface HistoryEntry {
@@ -85,6 +85,7 @@ export default function FlowSync() {
     const [previewContent, setPreviewContent] = useState<string | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
     const [totalCount, setTotalCount] = useState(0);
+    const [syncEnabled, setSyncEnabled] = useState(true);
     const clearMenuRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -99,12 +100,28 @@ export default function FlowSync() {
     });
     const [showAppearancePanel, setShowAppearancePanel] = useState(false);
     const appearanceRef = useRef<HTMLDivElement>(null);
+    const [hoveredListId, setHoveredListId] = useState<number | null>(null);
 
     const selectedLog = useMemo(() => logs.find(l => l.id === selectedId) || null, [logs, selectedId]);
 
     useEffect(() => {
         invoke("init_clipboard_history").catch(e => console.error("init_clipboard_history failed:", e));
     }, []);
+
+    useEffect(() => {
+        invoke("get_flow_rules").then((rules: any) => {
+            setSyncEnabled(rules.default.flowsync);
+        }).catch(e => console.error("Failed to load sync feature state:", e));
+    }, []);
+
+    const toggleSyncEnabled = async () => {
+        try {
+            await invoke("toggle_default_feature", { feature: "flowsync" });
+            setSyncEnabled(!syncEnabled);
+        } catch (e) {
+            console.error("Failed to toggle sync feature:", e);
+        }
+    };
 
     const fetchHistory = useCallback(async () => {
         try {
@@ -320,11 +337,38 @@ export default function FlowSync() {
     return (
         <div style={{ width: "100%", flex: "1", minHeight: 0, paddingBottom: "0", display: "flex", flexDirection: "column" }}>
             {/* Header */}
-            <div style={{ marginBottom: "10px", flexShrink: 0 }}>
-                <h1 style={{ fontSize: "18px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px", margin: 0 }}>
-                    <ClipboardCopy size={18} color="var(--color-primary)" />
-                    {t("sync.title")}
-                </h1>
+            <div style={{ marginBottom: "24px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                    <h1 style={{ fontSize: "22px", fontWeight: 700, display: "flex", alignItems: "center", gap: "10px", margin: 0 }}>
+                        <ClipboardCopy size={22} color="var(--color-primary)" />
+                        {t("sync.title")}
+                    </h1>
+                    <p style={{ color: "var(--color-text-muted)", fontSize: "13px", marginTop: "6px" }}>
+                        {t("sync.subtitle")}
+                    </p>
+                </div>
+                <button
+                    onClick={toggleSyncEnabled}
+                    style={{
+                        background: syncEnabled ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
+                        border: `1px solid ${syncEnabled ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                        color: syncEnabled ? '#22c55e' : 'var(--color-text-muted)',
+                        padding: '8px 14px',
+                        borderRadius: '100px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontSize: '12px',
+                        whiteSpace: 'nowrap',
+                        transition: 'all 0.15s',
+                        height: '36px',
+                    }}
+                >
+                    {syncEnabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                    {syncEnabled ? t('sync.feature_on') : t('sync.feature_off')}
+                </button>
             </div>
 
             {/* Filter Bar */}
@@ -378,14 +422,14 @@ export default function FlowSync() {
             <div ref={contentRef} style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0, minWidth: 0 }}>
                 {/* Left: Activity List (width from settings) */}
                 <div className="glass-panel" style={{ borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", overflow: "hidden", flex: `0 0 ${layout.listW}px`, minWidth: 0, maxWidth: "100%" }}>
-                    <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
+                    <div style={{ flex: 1, overflowY: "auto", padding: "10px", background: "var(--color-bg-base)", borderRadius: "8px" }}>
                         {logs.length === 0 ? (
                             <div style={{ padding: "60px 20px", textAlign: "center", color: "var(--color-text-muted)" }}>
                                 <ClipboardCopy size={40} style={{ opacity: 0.15, marginBottom: "12px", margin: "0 auto", display: "block" }} />
                                 <p style={{ fontSize: "13px" }}>{t("sync.no_activity_message")}</p>
                             </div>
                         ) : (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                 <AnimatePresence>
                                     {logs.map((log, index) => {
                                         const isSelected = selectedId === log.id;
@@ -395,37 +439,30 @@ export default function FlowSync() {
                                         const inner = (
                                             <div style={{ display: "flex", gap: "10px", alignItems: "stretch", minHeight: `${itemHeight}px`, height: `${itemHeight}px` }}>
                                                 {/* Left: Info column */}
-                                                <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: "5px", width: "120px", minHeight: 0 }}>
-                                                    <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-                                                        <div style={{
-                                                            padding: "3px", borderRadius: "4px",
-                                                            background: log.source === "local" ? "var(--color-primary-glow)" : "rgba(34, 197, 94, 0.15)",
-                                                            color: log.source === "local" ? "var(--color-primary)" : "#22c55e",
-                                                            display: "flex", flexShrink: 0,
-                                                        }}>
-                                                            {log.source === "local" ? <ArrowUpToLine size={14} /> : <ArrowDownToLine size={14} />}
-                                                        </div>
-                                                        {log.pinned && <Pin size={13} color="var(--color-primary)" />}
+                                                <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: "6px", width: "128px", minHeight: 0 }}>
+                                                    <div style={{ minWidth: 0 }}>
                                                         <span style={{ fontSize: "12px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
                                                             {new Date(log.timestamp).toLocaleTimeString()}
                                                         </span>
                                                     </div>
-                                                    <span style={{ fontSize: "12px", color: "var(--color-text-muted)" }}>
-                                                        {log.type === "image" ? (
-                                                            <>
-                                                                <ImageIcon size={13} style={{ marginRight: "3px", verticalAlign: "middle" }} />
-                                                                {(log.size / 1024).toFixed(0)} KB
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <FileType size={13} style={{ marginRight: "3px", verticalAlign: "middle" }} />
-                                                                {(log.size / 1024).toFixed(0)} KB
-                                                            </>
-                                                        )}
-                                                    </span>
-                                                    <div style={{ display: "flex", gap: "3px" }}>
-                                                        <button onClick={(e) => handleTogglePin(log.id, e)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px", borderRadius: "3px", display: "flex", color: log.pinned ? "var(--color-primary)" : "var(--color-text-muted)" }} title={log.pinned ? "Unpin" : "Pin"}>
-                                                            {log.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+                                                    <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", color: "var(--color-text-muted)" }}>
+                                                        {log.type === "image" ? <ImageIcon size={13} style={{ flexShrink: 0, opacity: 0.9 }} /> : <FileType size={13} style={{ flexShrink: 0, opacity: 0.9 }} />}
+                                                        <span style={{ minWidth: 0 }}>{(log.size / 1024).toFixed(0)} KB</span>
+                                                    </div>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                                        <button
+                                                            onClick={(e) => handleTogglePin(log.id, e)}
+                                                            title={log.pinned ? "取消固定" : "固定"}
+                                                            style={{
+                                                                border: "none", cursor: "pointer", borderRadius: "5px", display: "flex", alignItems: "center", justifyContent: "center",
+                                                                padding: "4px 6px",
+                                                                background: log.pinned ? "var(--color-primary-glow)" : "transparent",
+                                                                color: log.pinned ? "var(--color-primary)" : "var(--color-text-muted)",
+                                                                boxShadow: log.pinned ? "inset 0 0 0 1px rgba(94, 106, 210, 0.35)" : "none",
+                                                                transition: "background 0.12s, color 0.12s, box-shadow 0.12s",
+                                                            }}
+                                                        >
+                                                            <Pin size={15} style={{ flexShrink: 0 }} fill={log.pinned ? "currentColor" : "none"} />
                                                         </button>
                                                         <button onClick={(e) => handleCopy(log, e)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px", borderRadius: "3px", display: "flex", color: isCopied ? "#22c55e" : "var(--color-text-muted)" }} title={t("sync.btn_copy")}>
                                                             {isCopied ? <Check size={15} /> : <Copy size={15} />}
@@ -470,18 +507,48 @@ export default function FlowSync() {
                                             </div>
                                         );
 
-                                        const cardStyle: React.CSSProperties = {
-                                            padding: "8px 10px",
-                                            background: isSelected ? "rgba(94, 106, 210, 0.12)" : "var(--color-surface-elevated)",
-                                            border: isSelected
-                                                ? "1px solid rgba(94, 106, 210, 0.35)"
-                                                : "1px solid var(--color-glass-border)",
-                                            borderLeft: isSelected ? "3px solid var(--color-primary)" : "1px solid var(--color-glass-border)",
-                                            borderRadius: "var(--radius-sm)",
-                                            boxShadow: isSelected ? "0 1px 3px rgba(0,0,0,0.12)" : "0 1px 2px rgba(0,0,0,0.06)",
-                                            cursor: "pointer",
-                                            transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s",
-                                            position: "relative",
+                                        const isHover = hoveredListId === log.id;
+                                        const cardStyle: React.CSSProperties = (() => {
+                                            const baseShadow = isHover && !isSelected
+                                                ? "0 3px 10px rgba(0,0,0,0.12), 0 6px 20px rgba(0,0,0,0.1)"
+                                                : "0 2px 4px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.1)";
+                                            if (isSelected) {
+                                                return {
+                                                    padding: "10px 12px",
+                                                    background: "rgba(94, 106, 210, 0.14)",
+                                                    border: "1px solid rgba(94, 106, 210, 0.45)",
+                                                    borderLeft: "3px solid var(--color-primary)",
+                                                    borderRadius: "var(--radius-md)",
+                                                    boxShadow: "0 2px 6px rgba(94,106,210,0.2), 0 6px 18px rgba(0,0,0,0.12)",
+                                                    cursor: "pointer",
+                                                    transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.12s",
+                                                    position: "relative",
+                                                };
+                                            }
+                                            const zebra = index % 2 === 1
+                                                ? "var(--color-surface-elevated)"
+                                                : "var(--color-surface)";
+                                            return {
+                                                padding: "10px 12px",
+                                                background: zebra,
+                                                border: isHover
+                                                    ? "1px solid var(--color-border-focus)"
+                                                    : "1px solid var(--color-border)",
+                                                borderLeft: isHover
+                                                    ? "3px solid var(--color-primary)"
+                                                    : "3px solid var(--color-border)",
+                                                borderRadius: "var(--radius-md)",
+                                                boxShadow: baseShadow,
+                                                cursor: "pointer",
+                                                transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.12s",
+                                                position: "relative",
+                                            };
+                                        })();
+
+                                        const cardEvents = {
+                                            onClick: () => setSelectedId(log.id),
+                                            onMouseEnter: () => setHoveredListId(log.id),
+                                            onMouseLeave: () => setHoveredListId((id) => (id === log.id ? null : id)),
                                         };
 
                                         return shouldAnimate ? (
@@ -491,13 +558,14 @@ export default function FlowSync() {
                                                 animate={{ opacity: 1, y: 0, scale: 1 }}
                                                 exit={{ opacity: 0, scale: 0.96 }}
                                                 transition={{ duration: 0.18 }}
-                                                onClick={() => setSelectedId(log.id)}
+                                                whileHover={!isSelected ? { y: -1 } : undefined}
+                                                {...cardEvents}
                                                 style={cardStyle}
                                             >
                                                 {inner}
                                             </motion.div>
                                         ) : (
-                                            <div key={log.id} onClick={() => setSelectedId(log.id)} style={cardStyle}>
+                                            <div key={log.id} {...cardEvents} style={cardStyle}>
                                                 {inner}
                                             </div>
                                         );

@@ -11,6 +11,7 @@ interface DefaultRules {
     flowsnap: boolean;
     flowhint: boolean;
     flowsync: boolean;
+    flowkeys: boolean;
 }
 
 interface AppRule {
@@ -20,6 +21,7 @@ interface AppRule {
     flowhint: boolean | null;
     flowhint_dicts: string[];
     flowsync: boolean | null;
+    flowkeys: boolean | null;
 }
 
 interface FlowRulesPayload {
@@ -27,7 +29,7 @@ interface FlowRulesPayload {
     app_overrides: AppRule[];
 }
 
-const FEATURE_COLS = ["flowsnap", "flowhint", "flowsync"] as const;
+const FEATURE_COLS = ["flowsnap", "flowhint", "flowsync", "flowkeys"] as const;
 type FeatureKey = typeof FEATURE_COLS[number];
 
 // ---------------------------------------------------------------------------
@@ -241,7 +243,7 @@ function AddAppModal({ onClose, onAdd }: {
 export default function FlowRules() {
     const { t } = useTranslation();
     const [defaults, setDefaults] = useState<DefaultRules>({
-        flowsnap: true, flowhint: false, flowsync: true,
+        flowsnap: true, flowhint: false, flowsync: true, flowkeys: true,
     });
     const [rules, setRules] = useState<AppRule[]>([]);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -316,6 +318,7 @@ export default function FlowRules() {
             flowhint: null,
             flowhint_dicts: [],
             flowsync: null,
+            flowkeys: null,
         };
         setRules(prev => [...prev, newRule]);
         try {
@@ -326,6 +329,7 @@ export default function FlowRules() {
                 flowhint: newRule.flowhint,
                 flowhintDicts: newRule.flowhint_dicts,
                 flowsync: newRule.flowsync,
+                flowkeys: newRule.flowkeys,
             });
         } catch (e) {
             console.error("upsert_app_rule failed:", e);
@@ -337,16 +341,17 @@ export default function FlowRules() {
         flowsnap: t('flowrules.col_flowsnap'),
         flowhint: t('flowrules.col_flowhint'),
         flowsync: t('flowrules.col_flowsync'),
+        flowkeys: t('flowrules.col_flowkeys'),
     };
 
     return (
         <div style={{ width: '100%', paddingBottom: '40px' }}>
-            <div style={{ marginBottom: '28px' }}>
+            <div style={{ marginBottom: '24px' }}>
                 <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
                     <ShieldCheck size={22} color="var(--color-primary)" />
                     {t('flowrules.title')}
                 </h1>
-                <p style={{ color: 'var(--color-text-dim)', fontSize: '13px', marginTop: '6px' }}>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
                     {t('flowrules.subtitle')}
                 </p>
             </div>

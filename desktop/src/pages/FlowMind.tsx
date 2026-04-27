@@ -5,6 +5,8 @@ import { Reorder } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { CustomSelect } from "../components/CustomSelect";
 
+type FeatureKey = "flowsnap" | "flowhint" | "flowsync" | "flowkeys";
+
 interface SmartEntry {
     trigger_key: string | null;
     keyword: string | null;
@@ -25,7 +27,8 @@ interface SmartDictionary {
 
 export default function FlowMind() {
     const { t } = useTranslation();
-    const [engineOn, setEngineOn] = useState(false);
+    const [flowsnapOn, setFlowsnapOn] = useState(false);
+    const [flowhintOn, setFlowhintOn] = useState(false);
     const [minChars, setMinChars] = useState(2);
     const [posType, setPosType] = useState(0);
     const [hintScale, setHintScale] = useState(1.0);
@@ -88,7 +91,8 @@ export default function FlowMind() {
         { val: "\\", label: "\\ (反斜杠)" },
         { val: "@", label: "@ (艾特)" },
         { val: "#", label: "# (井号)" },
-        { val: "$", label: "$ (美圆)" },
+        { val: "$", label: "$ (美元)" },
+        { val: "\uFFE5", label: "\uFFE5 (人民币全角)" },
         { val: "%", label: "% (百分号)" },
         { val: "^", label: "^ (脱字符)" },
         { val: "&", label: "& (和号)" },
@@ -115,7 +119,8 @@ export default function FlowMind() {
     const loadData = async () => {
         try {
             const rules: any = await invoke("get_flow_rules");
-            setEngineOn(rules.default.flowhint);
+            setFlowsnapOn(rules.default.flowsnap);
+            setFlowhintOn(rules.default.flowhint);
 
             const settings: any = await invoke("get_settings");
             setMinChars(settings.flowhint_min_chars);
@@ -152,20 +157,23 @@ export default function FlowMind() {
         }
     };
 
-    const toggleEngine = async () => {
+    const toggleFeature = async (feature: FeatureKey, current: boolean, setter: (v: boolean) => void) => {
         try {
-            await invoke("toggle_default_feature", { feature: "flowhint" });
-            setEngineOn(!engineOn);
+            await invoke("toggle_default_feature", { feature });
+            setter(!current);
         } catch (e) {
-            console.error("Failed to toggle FlowMind engine:", e);
+            console.error(`Failed to toggle ${feature}:`, e);
         }
     };
+
+    const toggleFlowsnap = () => toggleFeature("flowsnap", flowsnapOn, setFlowsnapOn);
+    const toggleFlowhint = () => toggleFeature("flowhint", flowhintOn, setFlowhintOn);
 
     const updateMinChars = async (val: number) => {
         setMinChars(val);
         try {
             await invoke("update_settings", {
-                isSyncEnabled: engineOn,
+                isSyncEnabled: flowhintOn,
                 flowhintMinChars: val,
                 flowhintAcceptTab: acceptTab,
                 flowhintAcceptRight: acceptRight,
@@ -180,8 +188,8 @@ export default function FlowMind() {
         setAcceptTab(newVal);
         try {
             await invoke("update_settings", {
-                isSyncEnabled: engineOn,
-                flowhintMinChars,
+                isSyncEnabled: flowhintOn,
+                flowhintMinChars: minChars,
                 flowhintAcceptTab: newVal,
                 flowhintAcceptRight: acceptRight,
             });
@@ -193,8 +201,8 @@ export default function FlowMind() {
         setAcceptRight(newVal);
         try {
             await invoke("update_settings", {
-                isSyncEnabled: engineOn,
-                flowhintMinChars,
+                isSyncEnabled: flowhintOn,
+                flowhintMinChars: minChars,
                 flowhintAcceptTab: acceptTab,
                 flowhintAcceptRight: newVal,
             });
@@ -319,7 +327,7 @@ export default function FlowMind() {
 
     return (
         <div style={{ width: '100%', paddingBottom: '40px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '28px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
                 <div>
                     <h1 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
                         <Sparkles size={22} color="var(--color-primary)" />
@@ -328,14 +336,6 @@ export default function FlowMind() {
                     <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', marginTop: '6px' }}>
                         {t('flowmind.subtitle')}
                     </p>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '100px', background: 'var(--color-primary-glow)', color: 'var(--color-primary)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.3px' }}>
-                            FlowSnap 锦囊
-                        </span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontSize: '11px', fontWeight: 600, letterSpacing: '0.3px' }}>
-                            FlowHint 灵犀
-                        </span>
-                    </div>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -353,7 +353,7 @@ export default function FlowMind() {
                         display: 'inline-flex',
                         alignItems: 'center',
                     }}>
-                        {dicts.length} 个词库
+                        {dicts.length} {t('flowmind.dict_count_unit')}
                     </span>
                     <button
                         onClick={openCreateModal}
@@ -375,30 +375,55 @@ export default function FlowMind() {
                             height: '36px',
                         }}
                     >
-                        <Plus size={16} />新建词库
+                        <Plus size={16} />{t('flowmind.btn_create_dict')}
                     </button>
+                    {/* FlowSnap Toggle */}
                     <button
-                        onClick={toggleEngine}
+                        onClick={toggleFlowsnap}
                         style={{
-                            background: engineOn ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
-                            border: `1px solid ${engineOn ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
-                            color: engineOn ? '#22c55e' : 'var(--color-text-muted)',
-                            padding: '8px 16px',
+                            background: flowsnapOn ? 'var(--color-primary-glow)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${flowsnapOn ? 'rgba(94, 106, 210, 0.4)' : 'var(--color-border)'}`,
+                            color: flowsnapOn ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                            padding: '8px 14px',
                             borderRadius: '100px',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '6px',
+                            gap: '5px',
                             cursor: 'pointer',
                             fontWeight: 600,
-                            fontSize: '13px',
+                            fontSize: '12px',
                             whiteSpace: 'nowrap',
                             lineHeight: '20px',
                             height: '36px',
                             transition: 'all 0.15s'
                         }}
                     >
-                        {engineOn ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
-                        {engineOn ? '已开启' : '已关闭'}
+                        {flowsnapOn ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                        {t('flowmind.flowsnap_label')} {flowsnapOn ? t('flowmind.state_on') : t('flowmind.state_off')}
+                    </button>
+                    {/* FlowHint Toggle */}
+                    <button
+                        onClick={toggleFlowhint}
+                        style={{
+                            background: flowhintOn ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${flowhintOn ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                            color: flowhintOn ? '#22c55e' : 'var(--color-text-muted)',
+                            padding: '8px 14px',
+                            borderRadius: '100px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            fontSize: '12px',
+                            whiteSpace: 'nowrap',
+                            lineHeight: '20px',
+                            height: '36px',
+                            transition: 'all 0.15s'
+                        }}
+                    >
+                        {flowhintOn ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                        {t('flowmind.flowhint_label')} {flowhintOn ? t('flowmind.state_on') : t('flowmind.state_off')}
                     </button>
                 </div>
             </div>

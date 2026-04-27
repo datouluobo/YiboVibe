@@ -12,6 +12,7 @@ const FlowProbe = lazy(() => import("./pages/FlowProbe"));
 const FlowRules = lazy(() => import("./pages/FlowRules"));
 const Settings = lazy(() => import("./pages/Settings"));
 const FlowInfo = lazy(() => import("./pages/FlowInfo"));
+const FlowKeys = lazy(() => import("./pages/FlowKeys"));
 const HintWindow = lazy(() => import("./pages/HintWindow"));
 
 import "./App.css";
@@ -119,6 +120,7 @@ function App() {
               <Route path="flowrules" element={<Suspense fallback={<PageFallback />}><FlowRules /></Suspense>} />
               <Route path="settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
               <Route path="flowinfo" element={<Suspense fallback={<PageFallback />}><FlowInfo /></Suspense>} />
+              <Route path="flowkeys" element={<Suspense fallback={<PageFallback />}><FlowKeys /></Suspense>} />
             </Route>
           </Routes>
         </div>

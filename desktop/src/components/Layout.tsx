@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useCallback } from "react";
 import {
     LayoutDashboard, Sparkles,
-    Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen
+    Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen, Keyboard
 } from "lucide-react";
 
 interface NavItem {
@@ -16,35 +16,23 @@ interface NavItem {
     group?: string;
 }
 
-const NAV_GROUPS: { id: string; items: NavItem[] }[] = [
-    {
-        id: "overview",
-        items: [
-            { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
-        ]
-    },
-    {
-        id: "input",
-        items: [
-            { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
-        ]
-    },
-    {
-        id: "transfer",
-        items: [
-            { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
-            { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
-        ]
-    },
-    {
-        id: "system",
-        items: [
-            { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
-            { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
-            { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
-            { id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo" },
-        ]
-    }
+const NAV_ITEMS: NavItem[] = [
+    // Group 1: Dashboard
+    { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
+
+    // Group 2: Core Features
+    { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
+    { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
+    { id: "flowkeys", path: "/app/flowkeys", icon: Keyboard, labelKey: "nav.flowkeys", tooltipKey: "nav.tooltip_flowkeys" },
+
+    // Group 3: Tools
+    { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
+    { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
+
+    // Group 4: System
+    { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
+    { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
+    { id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo" },
 ];
 
 export default function Layout() {
@@ -78,75 +66,65 @@ export default function Layout() {
                     YiboFlow
                 </div>
 
-                {/* Nav Groups */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0', padding: '0 12px', overflowY: 'auto' }}>
-                    {NAV_GROUPS.map((group, groupIdx) => (
-                        <div key={group.id}>
-                            {groupIdx > 0 && (
-                                <div style={{
-                                    height: '1px',
-                                    background: 'var(--color-glass-border)',
-                                    margin: '8px 8px',
-                                    opacity: 0.6
-                                }} />
-                            )}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                {group.items.map((item) => {
-                                    const isActive = location.pathname === item.path;
-                                    return (
-                                        <div
-                                            key={item.id}
-                                            title={t(item.tooltipKey)}
-                                            style={{
-                                                padding: '9px 14px',
-                                                borderRadius: 'var(--radius-md)',
-                                                cursor: item.disabled ? 'not-allowed' : 'pointer',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '11px',
-                                                fontSize: '13.5px',
-                                                opacity: item.disabled ? 0.45 : 1,
-                                                background: isActive ? 'var(--color-primary-glow)' : 'transparent',
-                                                color: isActive ? 'var(--color-primary)' : 'var(--color-text-main)',
-                                                transition: 'background 0.2s, color 0.15s',
-                                                position: 'relative',
-                                            }}
-                                            onClick={() => {
-                                                if (!item.disabled) navigate(item.path);
-                                            }}
-                                            onMouseEnter={(e) => {
-                                                if (!item.disabled && !isActive) {
-                                                    e.currentTarget.style.background = 'var(--color-glass-bg)';
-                                                }
-                                            }}
-                                            onMouseLeave={(e) => {
-                                                if (!item.disabled && !isActive) {
-                                                    e.currentTarget.style.background = 'transparent';
-                                                }
-                                            }}
-                                        >
-                                            <item.icon size={17} />
-                                            <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
-                                            {item.disabled && (
-                                                <span style={{
-                                                    fontSize: '9px', fontWeight: 600,
-                                                    background: 'var(--color-border)',
-                                                    padding: '2px 6px', borderRadius: '4px',
-                                                    letterSpacing: '0.5px', textTransform: 'uppercase'
-                                                }}>
-                                                    WIP
-                                                </span>
-                                            )}
-                                        </div>
-                                    );
-                                })}
+                {/* Nav Items */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', padding: '0 12px', overflowY: 'auto' }}>
+                    {NAV_ITEMS.map((item, idx) => {
+                        const isActive = location.pathname === item.path;
+                        // Insert divider between groups
+                        const groupDividers = [1, 4, 6]; // before these indices
+                        const showDivider = groupDividers.includes(idx);
+                        return (
+                            <div key={item.id}>
+                                {showDivider && <div style={{ height: '1px', background: 'var(--color-border)', margin: '8px 14px', opacity: 0.5 }} />}
+                                <div
+                                    title={t(item.tooltipKey)}
+                                    style={{
+                                        padding: '8px 14px',
+                                        borderRadius: 'var(--radius-md)',
+                                        cursor: item.disabled ? 'not-allowed' : 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '11px',
+                                        fontSize: '13.5px',
+                                        opacity: item.disabled ? 0.45 : 1,
+                                        background: isActive ? 'var(--color-primary-glow)' : 'transparent',
+                                        color: isActive ? 'var(--color-primary)' : 'var(--color-text-main)',
+                                        transition: 'background 0.2s, color 0.15s',
+                                    }}
+                                    onClick={() => {
+                                        if (!item.disabled) navigate(item.path);
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (!item.disabled && !isActive) {
+                                            e.currentTarget.style.background = 'var(--color-glass-bg)';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (!item.disabled && !isActive) {
+                                            e.currentTarget.style.background = 'transparent';
+                                        }
+                                    }}
+                                >
+                                    <item.icon size={17} />
+                                    <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
+                                    {item.disabled && (
+                                        <span style={{
+                                            fontSize: '9px', fontWeight: 600,
+                                            background: 'var(--color-border)',
+                                            padding: '2px 6px', borderRadius: '4px',
+                                            letterSpacing: '0.5px', textTransform: 'uppercase'
+                                        }}>
+                                            WIP
+                                        </span>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
 
                 {/* Logout */}
-                <div style={{ padding: '0 12px', marginTop: '8px' }}>
+                <div style={{ padding: '0 12px', marginTop: '10px' }}>
                     <button
                         className="btn-ghost"
                         onClick={handleLogout}
