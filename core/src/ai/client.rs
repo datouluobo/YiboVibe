@@ -1,4 +1,4 @@
-use crate::config::{AiEndpoint, AiProvider, AiEngineConfig};
+use crate::config::{AiEndpoint, AiEngineConfig};
 use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

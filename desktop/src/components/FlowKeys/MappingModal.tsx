@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useState, useEffect, useCallback } from "react";
 import { X, Keyboard, List, ArrowLeftRight, Repeat } from "lucide-react";
 import { ModifierKey, MODIFIER_KEY_MAP } from "./keyData";
-import VisualKeyboard, { layoutTotalWidth } from "./VisualKeyboard";
+import VisualKeyboard from "./VisualKeyboard";
 import KeyCategoryList from "./KeyCategoryList";
 
 export interface KeyMapping {

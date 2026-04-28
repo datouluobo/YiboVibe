@@ -125,12 +125,10 @@ impl ClipboardMonitor {
     #[cfg(target_os = "windows")]
     fn start_win32_listener(&self) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-            WM_CLIPBOARDUPDATE,
+            CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, CS_HREDRAW,
+            CS_VREDRAW, CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
         };
         use windows::Win32::System::DataExchange::AddClipboardFormatListener;
-        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
         use windows::core::PCWSTR;
 
         let last_text_ref = Arc::clone(&self.last_text);
@@ -196,9 +194,11 @@ impl ClipboardMonitor {
                 });
                 
                 #[cfg(target_pointer_width = "64")]
-                unsafe {
-                    windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA, Box::into_raw(state) as isize);
-                }
+                windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+                    hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                    Box::into_raw(state) as isize,
+                );
                 
                 info!("Clipboard monitoring daemon started (Win32 Message Listener mode).");
 
@@ -378,22 +378,6 @@ impl ClipboardMonitor {
             }
             if i + 1 < max_retries {
                 log::warn!("Clipboard text write busy (attempt {}), retrying...", i + 1);
-                tokio::time::sleep(retry_delay).await;
-            }
-        }
-        false
-    }
-
-    /// Try to write image to the system clipboard with retries, releasing the lock between attempts.
-    async fn try_set_clipboard_image(image: arboard::ImageData<'_>, max_retries: u32, retry_delay: Duration) -> bool {
-        for i in 0..max_retries {
-            if let Ok(mut cb) = Clipboard::new() {
-                if cb.set_image(image.clone()).is_ok() {
-                    return true;
-                }
-            }
-            if i + 1 < max_retries {
-                log::warn!("Clipboard image write busy (attempt {}), retrying...", i + 1);
                 tokio::time::sleep(retry_delay).await;
             }
         }
@@ -853,7 +837,7 @@ impl ClipboardMonitor {
                     for item in items {
                         let entry_type = item["type"].as_str().unwrap_or("");
                         let hash = item["hash"].as_str().unwrap_or("");
-                        let timestamp = item["timestamp"].as_i64().unwrap_or(0);
+                        let _timestamp = item["timestamp"].as_i64().unwrap_or(0);
                         if hash.is_empty() { continue; }
 
                         if entry_type == "text" {

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, MoreHorizontal, Copy, Trash2, Edit3, Download, ChevronDown, Power } from "lucide-react";
 
 export interface Profile {
@@ -29,6 +29,8 @@ export default function ProfileBar({
     const [menuOpen, setMenuOpen] = useState<string | null>(null);
     const [renaming, setRenaming] = useState<string | null>(null);
     const [renameValue, setRenameValue] = useState("");
+    const compactTriggerRef = useRef<HTMLButtonElement | null>(null);
+    const [compactMenuRect, setCompactMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
 
     const handleStartRename = (p: Profile) => {
         setRenaming(p.id);
@@ -45,12 +47,35 @@ export default function ProfileBar({
 
     const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
+    useEffect(() => {
+        if (menuOpen !== "compact-select") return;
+
+        const syncRect = () => {
+            if (!compactTriggerRef.current) return;
+            const rect = compactTriggerRef.current.getBoundingClientRect();
+            setCompactMenuRect({
+                top: rect.bottom + 6,
+                left: rect.left,
+                width: Math.max(rect.width, 220),
+            });
+        };
+
+        syncRect();
+        window.addEventListener("resize", syncRect);
+        window.addEventListener("scroll", syncRect, true);
+        return () => {
+            window.removeEventListener("resize", syncRect);
+            window.removeEventListener("scroll", syncRect, true);
+        };
+    }, [menuOpen]);
+
     if (compact) {
         return (
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, position: "relative", zIndex: 5 }}>
                 {/* Custom dropdown */}
                 <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
                     <button
+                        ref={compactTriggerRef}
                         onClick={() => setMenuOpen(menuOpen === "compact-select" ? null : "compact-select")}
                         style={{
                             width: "100%",
@@ -86,7 +111,7 @@ export default function ProfileBar({
                         <ChevronDown
                             size={14}
                             style={{
-                                position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)",
+                                position: "absolute", right: "10px", top: "50%",
                                 color: "var(--color-text-muted)",
                                 transition: "transform 0.15s",
                                 transform: menuOpen === "compact-select" ? "translateY(-50%) rotate(180deg)" : "translateY(-50%)",
@@ -101,11 +126,18 @@ export default function ProfileBar({
                                 onClick={() => setMenuOpen(null)}
                             />
                             <div style={{
-                                position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+                                position: "fixed",
+                                top: compactMenuRect?.top ?? 0,
+                                left: compactMenuRect?.left ?? 0,
+                                width: compactMenuRect?.width ?? 240,
                                 background: "var(--color-surface-elevated)",
-                                border: "1px solid var(--color-border)", borderRadius: "8px",
-                                zIndex: 9999, overflow: "hidden", boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                                maxHeight: "240px", overflowY: "auto",
+                                border: "1px solid var(--color-border)",
+                                borderRadius: "12px",
+                                zIndex: 10005,
+                                overflow: "hidden",
+                                boxShadow: "0 18px 48px rgba(0,0,0,0.24)",
+                                maxHeight: "280px",
+                                overflowY: "auto",
                             }}>
                                 {profiles.map((p) => {
                                     const isSelected = p.id === activeProfileId;

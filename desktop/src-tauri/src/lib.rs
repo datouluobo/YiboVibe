@@ -124,10 +124,7 @@ async fn connect_engine(
     let login_result = client.login(login_payload).await;
 
     let _is_mock_target = server_url.contains("127.0.0.1") || server_url.contains("localhost");
-    let mut needs_mock;
-    let mut api_err;
-
-    match login_result {
+    let (needs_mock, api_err) = match login_result {
         Ok(res) => {
             if res.code == 200 && res.data.is_some() {
                 let d = res.data.unwrap();
@@ -248,15 +245,13 @@ async fn connect_engine(
                     Err(e) => return Err(format!("WebSocket Connection Failed: {}", e)),
                 }
             } else {
-                api_err = format!("Login failed via API: {}", res.msg);
-                needs_mock = true;
+                (true, format!("Login failed via API: {}", res.msg))
             }
         }
         Err(e) => {
-            api_err = format!("Could not connect to NAS: {}", e);
-            needs_mock = true; // Use this flag as 'needs_offline_fallback'
+            (true, format!("Could not connect to NAS: {}", e)) // Use this flag as 'needs_offline_fallback'
         }
-    }
+    };
 
     if needs_mock {
         info!(
@@ -851,6 +846,7 @@ fn parse_feature(s: &str) -> Result<yiboflow_core::rules::Feature, String> {
         "flowsnap" => Ok(yiboflow_core::rules::Feature::FlowSnap),
         "flowhint" => Ok(yiboflow_core::rules::Feature::FlowHint),
         "flowsync" => Ok(yiboflow_core::rules::Feature::FlowSync),
+        "flowkeys" => Ok(yiboflow_core::rules::Feature::FlowKeys),
         _ => Err(format!("Unknown feature: {}", s)),
     }
 }

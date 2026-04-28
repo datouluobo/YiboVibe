@@ -1,19 +1,3 @@
-mod api;
-mod cache;
-mod clipboard;
-mod config;
-mod rules;
-mod crypto;
-mod history;
-mod hook_manager;
-mod ws;
-mod p2p;
-mod backup;
-mod dictionary;
-mod smart_router;
-mod local_auth;
-mod sync;
-mod ai;
 use log::{error, info};
 use std::time::Duration;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -21,6 +5,7 @@ use tray_icon::{
     Icon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem},
 };
+use yiboflow_core::{api, clipboard, crypto, dictionary, hook_manager, ws};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

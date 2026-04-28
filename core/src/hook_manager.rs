@@ -19,8 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardState, ToUnicode, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
-    VK_MENU, VIRTUAL_KEY,
+    GetKeyboardState, ToUnicode, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
 };
 
 /// Maps OEM / layout keys (e.g. full-width ￥) and any key not covered by the ASCII branches.
@@ -45,8 +44,6 @@ fn key_event_to_unicode_char(vk: u32, scan: u32) -> Option<char> {
     None
 }
 use std::collections::HashMap;
-
-const VK_C: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
 
 // ─── Key Remapping Support ───
 
@@ -127,7 +124,7 @@ fn key_name_to_vk(name: &str) -> Option<u32> {
 
 /// Check if the current key event matches a remap entry, and if so, simulate the target key
 #[cfg(target_os = "windows")]
-fn check_key_remap(vk_code: u32, scan_code: u32, is_key_down: bool) -> bool {
+fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
     let table = match KEY_REMAP_TABLE.try_lock() {
         Ok(t) => t,
         Err(_) => return false,
@@ -391,44 +388,6 @@ fn check_key_remap(vk_code: u32, scan_code: u32, is_key_down: bool) -> bool {
     false
 }
 
-#[cfg(target_os = "windows")]
-fn send_ctrl_c() {
-    unsafe {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_SHIFT, VK_LWIN, VK_RWIN};
-        
-        let mut inputs = Vec::new();
-        
-        // 1. 记录当前按键状态并准备释放修饰键
-        // 这一步很重要，防止 Ctrl+C 变成 Ctrl+Alt+C 或其他组合键
-        for vk in [VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN] {
-            let mut input = INPUT::default();
-            input.r#type = INPUT_KEYBOARD;
-            input.Anonymous.ki.wVk = vk;
-            input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
-            inputs.push(input);
-        }
-
-        // 2. 模拟按下 Ctrl+C
-        let modifiers = [VK_CONTROL, VK_C];
-        for vk in modifiers {
-            let mut down = INPUT::default();
-            down.r#type = INPUT_KEYBOARD;
-            down.Anonymous.ki.wVk = vk;
-            inputs.push(down);
-        }
-        for vk in modifiers.iter().rev() {
-            let mut up = INPUT::default();
-            up.r#type = INPUT_KEYBOARD;
-            up.Anonymous.ki.wVk = *vk;
-            up.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
-            inputs.push(up);
-        }
-
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-    }
-}
-
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum HintSource {
     FlowHint,
@@ -455,6 +414,13 @@ lazy_static::lazy_static! {
     });
     static ref LAST_HWND: Mutex<isize> = Mutex::new(0);
     static ref EXE_CACHE: Mutex<HashMap<u32, ProcessCache>> = Mutex::new(HashMap::new());
+}
+
+pub fn invalidate_process_cache() {
+    if let Ok(mut cache) = EXE_CACHE.lock() {
+        cache.clear();
+        log::info!("[FlowRules] Cleared per-process feature cache.");
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -725,7 +691,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         }
 
         let key_code = kb_struct.vkCode;
-        let mut swallowed_char = false;
         let mut buf_changed = false;
 
         // 1. IME Status Check (MUST be first to inform subsequent logic)
@@ -891,8 +856,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             }
         }
 
-        if !is_ime_chinese_mode { let _ = swallowed_char; swallowed_char = true; }
-
         if buf_changed {
             let buf = if let Ok(b) = KEY_BUFFER.lock() { b.clone() } else { String::new() };
             log::debug!("[FlowSnap-DBG] buffer='{}' snippets_active={}", buf, snippets_active);
@@ -912,11 +875,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 }
             }
 
-            let mut matched_snap = false;
             // 5. Apply FlowSnap
             if let Some(trigger) = matched_trigger {
                 if !matched_replacements.is_empty() {
-                    matched_snap = true;
                     if let Ok(mut buf_lock) = KEY_BUFFER.lock() { buf_lock.clear(); }
                     
                     let trigger_len = trigger.chars().count();
@@ -949,7 +910,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 }
             }
 
-            if !matched_snap && !is_ime_chinese_mode {
+            if matched_replacements.is_empty() && !is_ime_chinese_mode {
                 if autofill_active && !buf.is_empty() {
                     let dict_ids = crate::rules::get_app_flowhint_dicts(&exe_name);
                     let cands_with_len = crate::dictionary::search_candidates_tail(&dict_ids, &buf);
@@ -974,32 +935,6 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         }
     }
     unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
-}
-
-fn parse_hotkey(hk: &str) -> (bool, bool, bool, bool, u32) {
-    let mut ctrl = false; let mut alt = false; let mut shift = false; let mut win = false;
-    let mut key = 0;
-    for p in hk.split('+') {
-        let p_upper = p.trim().to_uppercase();
-        match p_upper.as_str() {
-            "CTRL" => ctrl = true,
-            "ALT" => alt = true,
-            "SHIFT" => shift = true,
-            "WIN" => win = true,
-            _ => {
-                if p_upper.len() == 1 {
-                    key = p_upper.chars().next().unwrap_or('\0') as u32;
-                } else if p_upper.eq("ENTER") {
-                    key = 0x0D;
-                } else if p_upper.eq("ESC") {
-                    key = 0x1B;
-                } else if p_upper.eq("SPACE") {
-                    key = 0x20;
-                }
-            }
-        }
-    }
-    (ctrl, alt, shift, win, key)
 }
 
 #[cfg(target_os = "windows")]

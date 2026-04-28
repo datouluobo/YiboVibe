@@ -1,16 +1,25 @@
 import { useTranslation } from "react-i18next";
-import { useState, useCallback, useEffect, useRef, useLayoutEffect } from "react";
-import { Keyboard, ArrowLeftRight, Repeat, ToggleRight, ToggleLeft } from "lucide-react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+    AlertTriangle,
+    ArrowLeftRight,
+    Keyboard,
+    PencilRuler,
+    Repeat,
+    Sparkles,
+    ToggleLeft,
+    ToggleRight,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import ProfileBar, { Profile } from "../components/FlowKeys/ProfileBar";
 import MappingList from "../components/FlowKeys/MappingList";
 import { KeyMapping } from "../components/FlowKeys/MappingModal";
-import { ModifierKey, MODIFIER_KEY_MAP } from "../components/FlowKeys/keyData";
+import { ModifierKey, MODIFIER_KEY_MAP, getKeyLabelById } from "../components/FlowKeys/keyData";
 import VisualKeyboard from "../components/FlowKeys/VisualKeyboard";
-import KeyCategoryList from "../components/FlowKeys/KeyCategoryList";
+import "./FlowKeys.css";
 
-function genId() {
-    return `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+function genId(prefix: string) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 const STORAGE_KEY = "yiboflow_key_profiles";
@@ -40,7 +49,27 @@ function saveActiveId(id: string) {
     } catch {}
 }
 
-type TargetMode = "keyboard" | "list";
+function effectiveSourceIds(mapping: KeyMapping): string[] {
+    if (!mapping.source_key_id) return [];
+    if (mapping.bidirectional && mapping.target_key_id) {
+        return [mapping.source_key_id, mapping.target_key_id];
+    }
+    return [mapping.source_key_id];
+}
+
+function parseModifiers(label: string): ModifierKey[] {
+    const parts = label.split("+");
+    if (parts.length <= 1) return [];
+
+    const known = new Set<ModifierKey>(["Ctrl", "Alt", "Shift", "Win"]);
+    return parts.slice(0, -1).filter((part): part is ModifierKey => known.has(part as ModifierKey));
+}
+
+function buildComboLabel(baseLabel: string, modifiers: ModifierKey[]) {
+    return modifiers.length > 0 ? `${modifiers.join("+")}+${baseLabel}` : baseLabel;
+}
+
+type KeyboardPickMode = "source" | "target";
 
 export default function FlowKeys() {
     const { t } = useTranslation();
@@ -50,54 +79,46 @@ export default function FlowKeys() {
         if (saved.length > 0) return saved;
         return [{ id: "default", name: "默认方案", active: true, mappings: [] }];
     });
-    const [activeProfileId, setActiveProfileId] = useState<string>(() => {
-        return loadActiveId() || "default";
-    });
+    const [activeProfileId, setActiveProfileId] = useState<string>(() => loadActiveId() || "default");
     const [editMapping, setEditMapping] = useState<KeyMapping | null>(null);
 
-    // Editor state
     const [sourceKey, setSourceKey] = useState("");
     const [sourceKeyId, setSourceKeyId] = useState("");
     const [sourceModifiers, setSourceModifiers] = useState<ModifierKey[]>([]);
     const [capturingSource, setCapturingSource] = useState(false);
     const [liveModifiers, setLiveModifiers] = useState<ModifierKey[]>([]);
+
     const [targetKey, setTargetKey] = useState("");
     const [targetKeyId, setTargetKeyId] = useState("");
     const [targetModifiers, setTargetModifiers] = useState<ModifierKey[]>([]);
-    const [targetMode, setTargetMode] = useState<TargetMode>("keyboard");
+    const [keyboardPickMode, setKeyboardPickMode] = useState<KeyboardPickMode>("target");
     const [description, setDescription] = useState("");
     const [bidirectional, setBidirectional] = useState(false);
     const [keysEnabled, setKeysEnabled] = useState(true);
+    const [focusedKeyId, setFocusedKeyId] = useState<string | null>(null);
 
+    const pageRef = useRef<HTMLDivElement>(null);
+    const [pageWidth, setPageWidth] = useState(1600);
+
+    const activeProfile = profiles.find((profile) => profile.id === activeProfileId) || profiles[0];
+    const mappings = (activeProfile?.mappings || []) as KeyMapping[];
     const isEdit = !!editMapping;
 
-    const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
-
-    // Layout measurement
-    const contentRef = useRef<HTMLDivElement>(null);
-    const [layout, setLayout] = useState({ contentH: 400, listW: 380 });
-
-    useLayoutEffect(() => {
-        const el = contentRef.current;
+    useEffect(() => {
+        const el = pageRef.current;
         if (!el) return;
         const observer = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                const h = entry.contentRect.height;
-                const totalW = entry.contentRect.width;
-                const gap = 12;
-                const minListW = 280;
-                const minEditW = 360;
-                let listW = Math.round(totalW * 0.36);
-                const maxListW = Math.max(minListW, totalW - gap - minEditW);
-                listW = Math.max(minListW, Math.min(listW, maxListW));
-                setLayout({ contentH: Math.floor(h), listW });
+                setPageWidth(entry.contentRect.width);
             }
         });
         observer.observe(el);
         return () => observer.disconnect();
     }, []);
 
-    // Persist on change
+    const stacked = pageWidth < 1700;
+    const compactSelection = pageWidth < 1120;
+
     useEffect(() => {
         saveProfiles(profiles);
     }, [profiles]);
@@ -106,127 +127,119 @@ export default function FlowKeys() {
         saveActiveId(activeProfileId);
     }, [activeProfileId]);
 
-    // Load global feature toggle state
     useEffect(() => {
         invoke("get_flow_rules").then((rules: any) => {
             setKeysEnabled(rules.default.flowkeys);
-        }).catch(e => console.error("Failed to load flowkeys feature state:", e));
+        }).catch((error) => console.error("Failed to load flowkeys feature state:", error));
     }, []);
 
     const toggleKeysEnabled = async () => {
         try {
             await invoke("toggle_default_feature", { feature: "flowkeys" });
-            setKeysEnabled(!keysEnabled);
-        } catch (e) {
-            console.error("Failed to toggle flowkeys feature:", e);
+            setKeysEnabled((prev) => !prev);
+        } catch (error) {
+            console.error("Failed to toggle flowkeys feature:", error);
         }
     };
 
-    // Sync active mappings to backend hook
     useEffect(() => {
         const activeMappings = profiles
-            .filter((p) => p.active)
-            .flatMap((p) => p.mappings as KeyMapping[])
-            .filter((m) => m.enabled);
+            .filter((profile) => profile.active)
+            .flatMap((profile) => profile.mappings as KeyMapping[])
+            .filter((mapping) => mapping.enabled);
 
-        const expanded = activeMappings.flatMap((m) => {
+        const expanded = activeMappings.flatMap((mapping) => {
             const forward = {
-                source_key: m.source_key,
-                source_key_id: m.source_key_id,
-                target_key: m.target_key,
-                target_key_id: m.target_key_id,
-                target_modifiers: m.target_modifiers.map((mod: string) => mod),
-                enabled: m.enabled,
+                source_key: mapping.source_key,
+                source_key_id: mapping.source_key_id,
+                target_key: mapping.target_key,
+                target_key_id: mapping.target_key_id,
+                target_modifiers: mapping.target_modifiers.map((modifier: string) => modifier),
+                enabled: mapping.enabled,
             };
-            if (m.bidirectional) {
+
+            if (mapping.bidirectional) {
                 const reverse = {
-                    source_key: m.target_key,
-                    source_key_id: m.target_key_id,
-                    target_key: m.source_key,
-                    target_key_id: m.source_key_id,
+                    source_key: mapping.target_key,
+                    source_key_id: mapping.target_key_id,
+                    target_key: mapping.source_key,
+                    target_key_id: mapping.source_key_id,
                     target_modifiers: [],
-                    enabled: m.enabled,
+                    enabled: mapping.enabled,
                 };
                 return [forward, reverse];
             }
+
             return [forward];
         });
 
-        invoke("update_key_mappings", { mappings: expanded }).catch((e) => {
-            console.warn("[FlowKeys] Failed to sync mappings to backend:", e);
+        invoke("update_key_mappings", { mappings: expanded }).catch((error) => {
+            console.warn("[FlowKeys] Failed to sync mappings to backend:", error);
         });
     }, [profiles]);
 
-    // Source key capture
-    const captureKeyDown = useCallback((e: KeyboardEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
+    const captureKeyDown = useCallback((event: KeyboardEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
 
-        const mods: ModifierKey[] = [];
-        if (e.ctrlKey) mods.push("Ctrl");
-        if (e.altKey) mods.push("Alt");
-        if (e.shiftKey) mods.push("Shift");
-        if (e.metaKey) mods.push("Win");
-        setLiveModifiers(mods);
+        const modifiers: ModifierKey[] = [];
+        if (event.ctrlKey) modifiers.push("Ctrl");
+        if (event.altKey) modifiers.push("Alt");
+        if (event.shiftKey) modifiers.push("Shift");
+        if (event.metaKey) modifiers.push("Win");
+        setLiveModifiers(modifiers);
 
-        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+        if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
 
-        if (e.key === "Escape") {
+        if (event.key === "Escape") {
             setCapturingSource(false);
             setLiveModifiers([]);
             return;
         }
 
-        const mod = MODIFIER_KEY_MAP[e.code];
-        if (mod) return;
+        const modifierOnly = MODIFIER_KEY_MAP[event.code];
+        if (modifierOnly) return;
 
-        const keyLabel = mods.length > 0 ? [...mods, e.key].join("+") : e.key;
+        const keyLabel = modifiers.length > 0 ? [...modifiers, event.key].join("+") : event.key;
         setSourceKey(keyLabel);
-        setSourceKeyId(e.code);
-        setSourceModifiers(mods);
+        setSourceKeyId(event.code);
+        setSourceModifiers(modifiers);
+        setKeyboardPickMode("target");
         setCapturingSource(false);
         setLiveModifiers([]);
     }, []);
 
     useEffect(() => {
-        if (capturingSource) {
-            window.addEventListener("keydown", captureKeyDown);
-            return () => window.removeEventListener("keydown", captureKeyDown);
-        }
+        if (!capturingSource) return;
+        window.addEventListener("keydown", captureKeyDown);
+        return () => window.removeEventListener("keydown", captureKeyDown);
     }, [capturingSource, captureKeyDown]);
 
-    // Target key selection
-    const handleSelectTarget = (keyId: string, label: string, mods: ModifierKey[]) => {
-        setTargetKeyId(keyId);
-        setTargetModifiers(mods);
-        const modStr = mods.length > 0 ? mods.join("+") + "+" : "";
-        setTargetKey(modStr + label);
-    };
-
-    // Load editing mapping into state
-    const loadEditState = (mapping: KeyMapping | null) => {
+    const loadEditState = useCallback((mapping: KeyMapping | null) => {
         if (mapping) {
             setSourceKey(mapping.source_key);
             setSourceKeyId(mapping.source_key_id);
+            setSourceModifiers(parseModifiers(mapping.source_key));
             setTargetKey(mapping.target_key);
             setTargetKeyId(mapping.target_key_id);
             setTargetModifiers(mapping.target_modifiers);
             setDescription(mapping.description);
             setBidirectional(mapping.bidirectional ?? false);
+            setKeyboardPickMode("target");
         } else {
             setSourceKey("");
             setSourceKeyId("");
+            setSourceModifiers([]);
             setTargetKey("");
             setTargetKeyId("");
             setTargetModifiers([]);
             setDescription("");
             setBidirectional(false);
+            setKeyboardPickMode("source");
         }
         setCapturingSource(false);
-        setSourceModifiers([]);
         setLiveModifiers([]);
-        setTargetMode("keyboard");
-    };
+    }, []);
 
     const updateProfiles = useCallback((updater: (prev: Profile[]) => Profile[]) => {
         setProfiles((prev) => updater(prev));
@@ -238,7 +251,7 @@ export default function FlowKeys() {
 
     const handleAddProfile = () => {
         const newProfile: Profile = {
-            id: genId(),
+            id: genId("profile"),
             name: `${t("flowkeys.profile_new")} ${profiles.length + 1}`,
             active: true,
             mappings: [],
@@ -248,25 +261,26 @@ export default function FlowKeys() {
     };
 
     const handleRenameProfile = (id: string, name: string) => {
-        updateProfiles((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
+        updateProfiles((prev) => prev.map((profile) => (profile.id === id ? { ...profile, name } : profile)));
     };
 
     const handleDuplicateProfile = (id: string) => {
-        const src = profiles.find((p) => p.id === id);
-        if (!src) return;
-        const dup: Profile = {
-            id: genId(),
-            name: `${src.name} (${t("flowkeys.profile_copy")})`,
+        const source = profiles.find((profile) => profile.id === id);
+        if (!source) return;
+
+        const copy: Profile = {
+            id: genId("profile"),
+            name: `${source.name} (${t("flowkeys.profile_copy")})`,
             active: true,
-            mappings: src.mappings.map((m: KeyMapping) => ({ ...m, id: `km-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` })),
+            mappings: source.mappings.map((mapping: KeyMapping) => ({ ...mapping, id: genId("mapping") })),
         };
-        updateProfiles((prev) => [...prev, dup]);
-        setActiveProfileId(dup.id);
+        updateProfiles((prev) => [...prev, copy]);
+        setActiveProfileId(copy.id);
     };
 
     const handleDeleteProfile = (id: string) => {
         if (profiles.length <= 1) return;
-        const remaining = profiles.filter((p) => p.id !== id);
+        const remaining = profiles.filter((profile) => profile.id !== id);
         updateProfiles(() => remaining);
         if (activeProfileId === id) {
             setActiveProfileId(remaining[0]?.id || "default");
@@ -275,26 +289,25 @@ export default function FlowKeys() {
 
     const handleToggleProfileActive = (id: string) => {
         updateProfiles((prev) =>
-            prev.map((p) => (p.id === id ? { ...p, active: !p.active } : p))
+            prev.map((profile) => (profile.id === id ? { ...profile, active: !profile.active } : profile))
         );
     };
 
-    const updateProfileMappings = (profileId: string, mappings: KeyMapping[]) => {
+    const updateProfileMappings = (profileId: string, nextMappings: KeyMapping[]) => {
         updateProfiles((prev) =>
-            prev.map((p) => (p.id === profileId ? { ...p, mappings } : p))
+            prev.map((profile) => (profile.id === profileId ? { ...profile, mappings: nextMappings } : profile))
         );
     };
 
     const handleToggleMapping = (mappingId: string) => {
-        const newMappings = activeProfile.mappings.map((m: KeyMapping) =>
-            m.id === mappingId ? { ...m, enabled: !m.enabled } : m
+        updateProfileMappings(
+            activeProfileId,
+            mappings.map((mapping) => (mapping.id === mappingId ? { ...mapping, enabled: !mapping.enabled } : mapping))
         );
-        updateProfileMappings(activeProfileId, newMappings);
     };
 
     const handleDeleteMapping = (mappingId: string) => {
-        const newMappings = activeProfile.mappings.filter((m: KeyMapping) => m.id !== mappingId);
-        updateProfileMappings(activeProfileId, newMappings);
+        updateProfileMappings(activeProfileId, mappings.filter((mapping) => mapping.id !== mappingId));
         if (editMapping?.id === mappingId) {
             setEditMapping(null);
             loadEditState(null);
@@ -311,11 +324,122 @@ export default function FlowKeys() {
         loadEditState(null);
     };
 
+    const handleSelectSourceFromKeyboard = (keyId: string, label: string) => {
+        setCapturingSource(false);
+        setLiveModifiers([]);
+        setSourceKey(label);
+        setSourceKeyId(keyId);
+        setSourceModifiers([]);
+        setKeyboardPickMode("target");
+        setFocusedKeyId(keyId);
+    };
+
+    const handleSelectTarget = (keyId: string, label: string, modifiers: ModifierKey[]) => {
+        setTargetKeyId(keyId);
+        setTargetModifiers(modifiers);
+        setTargetKey(buildComboLabel(label, modifiers));
+        setFocusedKeyId(keyId);
+    };
+
+    const handleCreateMappingFromDrag = (nextSourceKeyId: string, nextSourceLabel: string, nextTargetKeyId: string, nextTargetLabel: string) => {
+        setEditMapping(null);
+        setSourceKey(nextSourceLabel);
+        setSourceKeyId(nextSourceKeyId);
+        setSourceModifiers([]);
+        setTargetKey(nextTargetLabel);
+        setTargetKeyId(nextTargetKeyId);
+        setTargetModifiers([]);
+        setDescription("");
+        setBidirectional(false);
+        setKeyboardPickMode("target");
+        setFocusedKeyId(nextSourceKeyId);
+    };
+
+    const swapSourceAndTarget = () => {
+        const nextSourceKey = targetKey;
+        const nextSourceKeyId = targetKeyId;
+        const nextSourceModifiers = [...targetModifiers];
+
+        setSourceKey(nextSourceKey);
+        setSourceKeyId(nextSourceKeyId);
+        setSourceModifiers(nextSourceModifiers);
+        setTargetKey(sourceKey);
+        setTargetKeyId(sourceKeyId);
+        setTargetModifiers(sourceModifiers);
+    };
+
+    const otherMappings = useMemo(
+        () => mappings.filter((mapping) => mapping.id !== editMapping?.id),
+        [editMapping?.id, mappings]
+    );
+
+    const sourceCollision = !!(sourceKeyId && otherMappings.some((mapping) => effectiveSourceIds(mapping).includes(sourceKeyId)));
+    const reverseCollision = !!(
+        bidirectional &&
+        targetKeyId &&
+        otherMappings.some((mapping) => effectiveSourceIds(mapping).includes(targetKeyId))
+    );
+    const targetSourceWarning = !!(
+        targetKeyId &&
+        otherMappings.some((mapping) => mapping.enabled && effectiveSourceIds(mapping).includes(targetKeyId))
+    );
+    const noopMapping = !!(sourceKeyId && sourceKeyId === targetKeyId && targetModifiers.length === 0);
+    const bidirectionalModifierWarning = bidirectional && targetModifiers.length > 0;
+
+    const editorIssues = useMemo(() => {
+        const issues: Array<{ level: "danger" | "warning"; message: string }> = [];
+
+        if (sourceCollision) {
+            issues.push({ level: "danger", message: t("flowkeys.conflict_source_duplicate") });
+        }
+        if (reverseCollision) {
+            issues.push({ level: "danger", message: t("flowkeys.conflict_reverse_duplicate") });
+        }
+        if (targetSourceWarning && !reverseCollision) {
+            issues.push({ level: "warning", message: t("flowkeys.conflict_target_source") });
+        }
+        if (noopMapping) {
+            issues.push({ level: "warning", message: t("flowkeys.conflict_noop") });
+        }
+        if (bidirectionalModifierWarning) {
+            issues.push({ level: "warning", message: t("flowkeys.conflict_bidirectional_modifiers") });
+        }
+
+        return issues;
+    }, [bidirectionalModifierWarning, noopMapping, reverseCollision, sourceCollision, t, targetSourceWarning]);
+
+    const { conflictSourceIds, conflictMappingIds } = useMemo(() => {
+        const groups = new Map<string, string[]>();
+
+        for (const mapping of mappings) {
+            for (const keyId of effectiveSourceIds(mapping)) {
+                if (!keyId) continue;
+                const list = groups.get(keyId) || [];
+                list.push(mapping.id);
+                groups.set(keyId, list);
+            }
+        }
+
+        const sourceIds = new Set<string>();
+        const mappingIds = new Set<string>();
+
+        groups.forEach((mappingIdsForKey, keyId) => {
+            if (mappingIdsForKey.length > 1) {
+                sourceIds.add(keyId);
+                mappingIdsForKey.forEach((mappingId) => mappingIds.add(mappingId));
+            }
+        });
+
+        return { conflictSourceIds: sourceIds, conflictMappingIds: mappingIds };
+    }, [mappings]);
+
+    const canSave = !!(sourceKey && targetKey) && !sourceCollision && !reverseCollision;
+
     const handleSaveMapping = () => {
-        if (!sourceKey || !targetKey) return;
+        if (!canSave) return;
 
         const mapping: KeyMapping = {
-            id: editMapping?.id || `km-${Date.now()}`,
+            id: editMapping?.id || genId("mapping"),
             source_key: sourceKey,
             source_key_id: sourceKeyId,
             target_key: targetKey,
@@ -327,79 +451,96 @@ export default function FlowKeys() {
         };
 
         if (editMapping) {
-            const newMappings = activeProfile.mappings.map((m: KeyMapping) =>
-                m.id === mapping.id ? mapping : m
+            updateProfileMappings(
+                activeProfileId,
+                mappings.map((item) => (item.id === mapping.id ? mapping : item))
             );
-            updateProfileMappings(activeProfileId, newMappings);
         } else {
-            const without = activeProfile.mappings.filter(
-                (m: KeyMapping) => m.source_key_id !== mapping.source_key_id
-            );
-            updateProfileMappings(activeProfileId, [...without, mapping]);
+            updateProfileMappings(activeProfileId, [...mappings, mapping]);
         }
+
         setEditMapping(null);
         loadEditState(null);
     };
 
-    const existingSources = new Set(
-        (activeProfile.mappings as KeyMapping[])
-            .filter((m) => m.id !== editMapping?.id)
-            .map((m) => m.source_key_id)
-    );
-
-    const conflict = !isEdit && sourceKeyId && existingSources.has(sourceKeyId);
-    const canSave = !!(sourceKey && targetKey);
+    const totalMappings = mappings.length;
+    const enabledMappings = mappings.filter((mapping) => mapping.enabled).length;
+    const disabledMappings = totalMappings - enabledMappings;
+    const summaryItems = [
+        {
+            label: t("flowkeys.summary_profile"),
+            value: activeProfile?.name || t("flowkeys.profile_default"),
+            note: activeProfile?.active ? t("flowkeys.summary_profile_on") : t("flowkeys.summary_profile_off"),
+        },
+        {
+            label: t("flowkeys.summary_total"),
+            value: `${totalMappings}`,
+            note: t("flowkeys.mapping_count", { count: totalMappings }),
+        },
+        {
+            label: t("flowkeys.summary_enabled"),
+            value: `${enabledMappings}`,
+            note: disabledMappings > 0
+                ? t("flowkeys.summary_disabled_note", { count: disabledMappings })
+                : t("flowkeys.summary_clean"),
+        },
+        {
+            label: t("flowkeys.legend_conflict"),
+            value: `${conflictMappingIds.size}`,
+            note: conflictMappingIds.size > 0 ? t("flowkeys.summary_conflict_note") : t("flowkeys.summary_clean"),
+        },
+    ];
 
     return (
-        <div style={{ width: "100%", flex: "1", minHeight: 0, paddingBottom: "0", display: "flex", flexDirection: "column" }}>
-            {/* Header */}
-            <div style={{ marginBottom: "24px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                    <h1 style={{ fontSize: "22px", fontWeight: 700, display: "flex", alignItems: "center", gap: "10px", margin: 0 }}>
-                        <Keyboard size={22} color="var(--color-primary)" />
+        <div ref={pageRef} className="flowkeys-page">
+            <div className="flowkeys-header">
+                <div className="flowkeys-title-group">
+                    <h1 className="flowkeys-title">
+                        <Keyboard size={26} color="var(--color-primary)" />
                         {t("flowkeys.title")}
                     </h1>
-                    <p style={{ color: "var(--color-text-muted)", fontSize: "13px", marginTop: "6px" }}>
+                    <p className="flowkeys-subtitle">
                         {t("flowkeys.subtitle")}
+                        {" "}
+                        {t("flowkeys.subtitle_extended")}
                     </p>
                 </div>
+
                 <button
                     onClick={toggleKeysEnabled}
                     style={{
-                        background: keysEnabled ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
-                        border: `1px solid ${keysEnabled ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
-                        color: keysEnabled ? '#22c55e' : 'var(--color-text-muted)',
-                        padding: '8px 14px',
-                        borderRadius: '100px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontSize: '12px',
-                        whiteSpace: 'nowrap',
-                        transition: 'all 0.15s',
-                        height: '36px',
+                        background: keysEnabled ? "rgba(34, 197, 94, 0.12)" : "rgba(255,255,255,0.03)",
+                        border: `1px solid ${keysEnabled ? "rgba(34, 197, 94, 0.34)" : "var(--color-border)"}`,
+                        color: keysEnabled ? "#22c55e" : "var(--color-text-muted)",
+                        padding: "10px 16px",
+                        borderRadius: "999px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        cursor: "pointer",
+                        fontWeight: 700,
+                        fontSize: "12px",
+                        whiteSpace: "nowrap",
+                        transition: "all 0.15s",
+                        minHeight: "40px",
                     }}
                 >
                     {keysEnabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
-                    {keysEnabled ? t('flowkeys.feature_on') : t('flowkeys.feature_off')}
+                    {keysEnabled ? t("flowkeys.feature_on") : t("flowkeys.feature_off")}
                 </button>
             </div>
 
-            {/* Main Content: List + Editor */}
-            <div ref={contentRef} style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0, minWidth: 0 }}>
-                {/* Left: Mapping List */}
-                <div className="glass-panel" style={{
-                    borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", overflow: "hidden",
-                    flex: `0 0 ${layout.listW}px`, minWidth: 0, maxWidth: "100%",
-                }}>
-                    <div style={{
-                        display: "flex", justifyContent: "space-between", alignItems: "center",
-                        padding: "10px 12px", borderBottom: "1px solid var(--color-border)",
-                        gap: "10px",
-                    }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
+            <div className={`flowkeys-shell${stacked ? " is-stacked" : ""}`}>
+                <aside className="flowkeys-sidebar">
+                    <section className="flowkeys-card flowkeys-card--profiles">
+                        <div className="flowkeys-card-header">
+                            <div>
+                                <h2 className="flowkeys-card-title">{t("flowkeys.profile_section_title")}</h2>
+                                <p className="flowkeys-card-subtitle">{t("flowkeys.profile_section_subtitle")}</p>
+                            </div>
+                            <span className="flowkeys-pill">{t("flowkeys.mapping_count", { count: totalMappings })}</span>
+                        </div>
+                        <div className="flowkeys-card-body">
                             <ProfileBar
                                 profiles={profiles}
                                 activeProfileId={activeProfileId}
@@ -412,243 +553,189 @@ export default function FlowKeys() {
                                 compact
                             />
                         </div>
-                        <span style={{ fontSize: "12px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
-                            {t("flowkeys.mapping_count", { count: activeProfile.mappings.length })}
-                        </span>
-                    </div>
-                    <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
-                        <MappingList
-                            mappings={activeProfile.mappings}
-                            onToggle={handleToggleMapping}
-                            onEdit={handleEditMapping}
-                            onDelete={handleDeleteMapping}
-                        />
-                    </div>
-                </div>
+                    </section>
 
-                {/* Right: Editor Panel */}
-                <div className="glass-panel" style={{
-                    borderRadius: "var(--radius-lg)", padding: "16px",
-                    display: "flex", flexDirection: "column", overflow: "hidden",
-                    flex: 1, minWidth: 0,
-                }}>
-                    {/* Editor Title */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-                        <span style={{ fontSize: "13px", fontWeight: 600 }}>
-                            {isEdit ? t("flowkeys.modal_edit") : t("flowkeys.modal_add")}
-                        </span>
-                        {isEdit && (
-                            <button
-                                onClick={handleStartNew}
-                                style={{
-                                    background: "none", border: "1px solid var(--color-border)",
-                                    borderRadius: "6px", padding: "3px 8px", fontSize: "11px",
-                                    cursor: "pointer", color: "var(--color-text-muted)",
-                                }}
-                            >
-                                {t("flowkeys.modal_add")}
+                    <section className="flowkeys-card">
+                        <div className="flowkeys-card-header">
+                            <div>
+                                <h2 className="flowkeys-card-title">{t("flowkeys.mapping_section_title")}</h2>
+                                <p className="flowkeys-card-subtitle">{t("flowkeys.mapping_section_subtitle")}</p>
+                            </div>
+                            <button className="flowkeys-button is-secondary" onClick={handleStartNew}>
+                                {isEdit ? t("flowkeys.modal_add") : t("flowkeys.btn_add_mapping")}
                             </button>
-                        )}
-                    </div>
+                        </div>
+                        <div className="flowkeys-card-body" style={{ maxHeight: stacked ? "none" : "calc(100vh - 280px)", overflowY: "auto" }}>
+                            <MappingList
+                                mappings={mappings}
+                                onToggle={handleToggleMapping}
+                                onEdit={handleEditMapping}
+                                onDelete={handleDeleteMapping}
+                                selectedMappingId={editMapping?.id || null}
+                                conflictIds={conflictMappingIds}
+                                focusedKeyId={focusedKeyId}
+                            />
+                        </div>
+                    </section>
+                </aside>
 
-                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px" }}>
-                        {/* Source + Target keys in one row */}
-                        <div style={{ display: "flex", alignItems: "flex-end", gap: "8px" }}>
-                            {/* Source Key */}
-                            <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: "10px", fontWeight: 600, color: "var(--color-text-muted)", marginBottom: "4px", display: "block" }}>
-                                    {t("flowkeys.source_label")}
-                                </label>
-                                <button
-                                    onClick={() => setCapturingSource(true)}
-                                    style={{
-                                        width: "100%", padding: "8px 10px", borderRadius: "6px",
-                                        background: capturingSource ? "var(--color-primary-glow)" : "var(--color-bg-base)",
-                                        border: capturingSource ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
-                                        color: sourceKey ? "var(--color-text-main)" : "var(--color-text-muted)",
-                                        fontSize: "12px", fontWeight: 600, cursor: "pointer",
-                                        fontFamily: "monospace", textAlign: "center",
-                                        transition: "all 0.15s",
-                                    }}
-                                >
-                                    {capturingSource
-                                        ? (liveModifiers.length > 0
-                                            ? `${liveModifiers.join(" + ")} + ...`
-                                            : t("flowkeys.capturing"))
-                                        : (sourceKey || t("flowkeys.click_to_capture"))}
-                                </button>
-                                {conflict && (
-                                    <div style={{ fontSize: "9px", color: "#ef4444", marginTop: "2px" }}>
-                                        {t("flowkeys.conflict_warning")}
+                <section className="flowkeys-workspace">
+                    <div className="flowkeys-card">
+                        <div className="flowkeys-card-header">
+                            <div>
+                                <h2 className="flowkeys-card-title">
+                                    {isEdit ? t("flowkeys.modal_edit") : t("flowkeys.editor_title")}
+                                </h2>
+                                <p className="flowkeys-card-subtitle">{t("flowkeys.editor_subtitle")}</p>
+                            </div>
+                            {focusedKeyId && (
+                                <span className="flowkeys-pill">
+                                    {t("flowkeys.mapping_focus_label")} {getKeyLabelById(focusedKeyId)}
+                                </span>
+                            )}
+                        </div>
+
+                        <div className="flowkeys-card-body" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                            <div className="flowkeys-summary-grid">
+                                {summaryItems.map((item) => (
+                                    <div key={item.label} className="flowkeys-summary-card">
+                                        <span className="flowkeys-summary-label">{item.label}</span>
+                                        <span className="flowkeys-summary-value">{item.value}</span>
+                                        <span className="flowkeys-summary-note">{item.note}</span>
                                     </div>
-                                )}
+                                ))}
                             </div>
 
-                            {/* Swap + Bidirectional buttons */}
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", paddingBottom: "2px" }}>
+                            <div className={`flowkeys-selection-grid${compactSelection ? " is-compact" : ""}`}>
                                 <button
+                                    className={`flowkeys-selection-card${keyboardPickMode === "source" ? " is-active" : ""}`}
                                     onClick={() => {
-                                        const tmpKey = sourceKey;
-                                        const tmpKeyId = sourceKeyId;
-                                        const tmpMods = sourceModifiers;
-                                        setSourceKey(targetKey);
-                                        setSourceKeyId(targetKeyId);
-                                        setSourceModifiers(targetModifiers);
-                                        setTargetKey(tmpKey);
-                                        setTargetKeyId(tmpKeyId);
-                                        setTargetModifiers(tmpMods);
+                                        setKeyboardPickMode("source");
+                                        setCapturingSource(true);
                                     }}
-                                    style={{
-                                        width: "26px", height: "26px", borderRadius: "50%",
-                                        border: "1px solid var(--color-border)",
-                                        background: "var(--color-bg-base)",
-                                        color: "var(--color-text-muted)",
-                                        cursor: "pointer", display: "flex",
-                                        alignItems: "center", justifyContent: "center",
-                                        transition: "all 0.15s",
-                                    }}
-                                    title={t("flowkeys.btn_swap")}
-                                    onMouseEnter={(e) => {
-                                        e.currentTarget.style.background = "var(--color-primary-glow)";
-                                        e.currentTarget.style.color = "var(--color-primary)";
-                                        e.currentTarget.style.borderColor = "var(--color-primary)";
-                                    }}
-                                    onMouseLeave={(e) => {
-                                        e.currentTarget.style.background = "var(--color-bg-base)";
-                                        e.currentTarget.style.color = "var(--color-text-muted)";
-                                        e.currentTarget.style.borderColor = "var(--color-border)";
-                                    }}
+                                    style={{ cursor: "pointer" }}
                                 >
-                                    <ArrowLeftRight size={12} />
+                                    <div className="flowkeys-selection-top">
+                                        <span className="flowkeys-selection-title">
+                                            <PencilRuler size={14} />
+                                            {t("flowkeys.source_label")}
+                                        </span>
+                                    </div>
+
+                                    <div className="flowkeys-selection-value">
+                                        <div className="flowkeys-selection-main">
+                                            {capturingSource
+                                                ? (liveModifiers.length > 0
+                                                    ? `${liveModifiers.join(" + ")} + ...`
+                                                    : t("flowkeys.capturing"))
+                                                : ([...sourceModifiers, sourceKey].filter(Boolean).join(" + ") || t("flowkeys.click_to_capture"))}
+                                        </div>
+                                        <div className="flowkeys-selection-hint">{t("flowkeys.source_card_hint")}</div>
+                                    </div>
                                 </button>
+
+                                <div className={`flowkeys-action-stack${compactSelection ? " is-row" : ""}`}>
+                                    <button className="flowkeys-icon-button" onClick={swapSourceAndTarget} title={t("flowkeys.btn_swap")}>
+                                        <ArrowLeftRight size={16} />
+                                    </button>
+                                    <button
+                                        className={`flowkeys-switch${bidirectional ? " is-on" : ""}`}
+                                        onClick={() => setBidirectional((prev) => !prev)}
+                                        title={t("flowkeys.btn_bidirectional")}
+                                    >
+                                        <Repeat size={14} />
+                                        {t("flowkeys.bidirectional")}
+                                    </button>
+                                </div>
+
                                 <button
-                                    onClick={() => setBidirectional(!bidirectional)}
-                                    style={{
-                                        display: "flex", alignItems: "center", gap: "3px",
-                                        padding: "2px 6px", borderRadius: "10px", fontSize: "9px", fontWeight: 700,
-                                        border: bidirectional ? "1.5px solid var(--color-primary)" : "1px solid var(--color-border)",
-                                        background: bidirectional ? "var(--color-primary-glow)" : "var(--color-bg-base)",
-                                        color: bidirectional ? "var(--color-primary)" : "var(--color-text-muted)",
-                                        cursor: "pointer", transition: "all 0.15s",
-                                        whiteSpace: "nowrap",
+                                    className={`flowkeys-selection-card${keyboardPickMode === "target" ? " is-active" : ""}`}
+                                    onClick={() => {
+                                        setCapturingSource(false);
+                                        setLiveModifiers([]);
+                                        setKeyboardPickMode("target");
                                     }}
-                                    title={t("flowkeys.btn_bidirectional")}
+                                    style={{ cursor: "pointer" }}
                                 >
-                                    <Repeat size={10} />
-                                    {t("flowkeys.bidirectional")}
+                                    <div className="flowkeys-selection-top">
+                                        <span className="flowkeys-selection-title">
+                                            <Sparkles size={14} />
+                                            {t("flowkeys.target_label")}
+                                        </span>
+                                    </div>
+
+                                    <div className="flowkeys-selection-value">
+                                        <div className="flowkeys-selection-main">
+                                            {[...targetModifiers, targetKey].filter(Boolean).join(" + ") || t("flowkeys.select_target")}
+                                        </div>
+                                        <div className="flowkeys-selection-hint">{t("flowkeys.target_card_hint")}</div>
+                                    </div>
                                 </button>
                             </div>
 
-                            {/* Target Key display */}
-                            <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: "10px", fontWeight: 600, color: "var(--color-text-muted)", marginBottom: "4px", display: "block" }}>
-                                    {t("flowkeys.target_label")}
-                                </label>
-                                <div style={{
-                                    padding: "8px 10px", borderRadius: "6px",
-                                    background: targetKey ? "var(--color-primary-glow)" : "var(--color-bg-base)",
-                                    border: targetKey ? "1.5px solid var(--color-primary)" : "1px solid var(--color-border)",
-                                    fontFamily: "monospace", fontWeight: 600, fontSize: "12px",
-                                    color: targetKey ? "var(--color-primary)" : "var(--color-text-muted)",
-                                    textAlign: "center",
-                                }}>
-                                    {targetKey || t("flowkeys.select_target")}
+                            {editorIssues.map((issue) => (
+                                <div
+                                    key={issue.message}
+                                    className={`flowkeys-banner ${issue.level === "danger" ? "is-danger" : "is-warning"}`}
+                                >
+                                    <div className="flowkeys-banner-title">
+                                        <AlertTriangle size={14} />
+                                        {issue.level === "danger" ? t("flowkeys.conflict_title") : t("flowkeys.warning_title")}
+                                    </div>
+                                    <div className="flowkeys-banner-body">{issue.message}</div>
+                                </div>
+                            ))}
+
+                            <VisualKeyboard
+                                mappings={mappings}
+                                sourceKeyId={sourceKeyId}
+                                targetKeyId={targetKeyId}
+                                onInspectKey={setFocusedKeyId}
+                                onDragCreateMapping={handleCreateMappingFromDrag}
+                                activeModifiers={targetModifiers}
+                                onToggleModifier={(modifier) => {
+                                    setTargetModifiers((prev) =>
+                                        prev.includes(modifier)
+                                            ? prev.filter((item) => item !== modifier)
+                                            : [...prev, modifier]
+                                    );
+                                }}
+                                interactionMode={keyboardPickMode}
+                                onSelectSourceKey={handleSelectSourceFromKeyboard}
+                                onSelectTargetKey={handleSelectTarget}
+                                conflictKeyIds={conflictSourceIds}
+                                showLegend
+                            />
+
+                            <div className="flowkeys-editor-footer">
+                                <div className="flowkeys-description-group">
+                                    <label className="flowkeys-label">{t("flowkeys.description_label")}</label>
+                                    <input
+                                        className="flowkeys-input"
+                                        value={description}
+                                        onChange={(event) => setDescription(event.target.value)}
+                                        placeholder={t("flowkeys.placeholder_desc")}
+                                    />
+                                </div>
+
+                                <div className="flowkeys-footer-actions">
+                                    {isEdit && (
+                                        <button className="flowkeys-button is-secondary" onClick={handleStartNew}>
+                                            {t("flowkeys.modal_cancel")}
+                                        </button>
+                                    )}
+                                    <button
+                                        className="flowkeys-button is-primary"
+                                        onClick={handleSaveMapping}
+                                        disabled={!canSave}
+                                    >
+                                        {t("flowkeys.modal_save")}
+                                    </button>
                                 </div>
                             </div>
                         </div>
-
-                        {/* Target mode tabs */}
-                        <div style={{ display: "flex", gap: "3px" }}>
-                            {([
-                                { mode: "keyboard" as TargetMode, label: t("flowkeys.mode_keyboard") },
-                                { mode: "list" as TargetMode, label: t("flowkeys.mode_list") },
-                            ]).map(({ mode, label }) => (
-                                <button
-                                    key={mode}
-                                    onClick={() => setTargetMode(mode)}
-                                    style={{
-                                        padding: "3px 8px", fontSize: "10px", borderRadius: "5px",
-                                        border: targetMode === mode ? "1px solid var(--color-primary)" : "1px solid var(--color-border)",
-                                        background: targetMode === mode ? "var(--color-primary-glow)" : "transparent",
-                                        color: targetMode === mode ? "var(--color-primary)" : "var(--color-text-muted)",
-                                        cursor: "pointer", fontWeight: 600,
-                                    }}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Target selection area */}
-                        <div style={{ flex: 1, minHeight: "180px", overflow: "hidden" }}>
-                            {targetMode === "keyboard" ? (
-                                <VisualKeyboard
-                                    onSelectKey={(keyId, label, mods) => handleSelectTarget(keyId, label, mods)}
-                                    selectedKeyId={targetKeyId}
-                                    activeModifiers={targetModifiers}
-                                    onToggleModifier={(mod) => {
-                                        setTargetModifiers((prev) =>
-                                            prev.includes(mod) ? prev.filter((m) => m !== mod) : [...prev, mod]
-                                        );
-                                    }}
-                                />
-                            ) : (
-                                <KeyCategoryList
-                                    onSelectKey={handleSelectTarget}
-                                    activeModifiers={targetModifiers}
-                                    onToggleModifier={(mod) => {
-                                        setTargetModifiers((prev) =>
-                                            prev.includes(mod) ? prev.filter((m) => m !== mod) : [...prev, mod]
-                                        );
-                                    }}
-                                />
-                            )}
-                        </div>
-
-                        {/* Description + Save */}
-                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                            <input
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                                placeholder={t("flowkeys.placeholder_desc")}
-                                style={{
-                                    flex: 1, padding: "6px 10px", borderRadius: "6px",
-                                    border: "1px solid var(--color-border)", background: "var(--color-bg-base)",
-                                    color: "var(--color-text-main)", fontSize: "11px", outline: "none",
-                                    boxSizing: "border-box",
-                                }}
-                            />
-                            {isEdit && (
-                                <button
-                                    onClick={handleStartNew}
-                                    style={{
-                                        padding: "6px 12px", fontSize: "11px",
-                                        border: "1px solid var(--color-border)", borderRadius: "6px",
-                                        cursor: "pointer", background: "transparent",
-                                        color: "var(--color-text-muted)",
-                                    }}
-                                >
-                                    {t("flowkeys.modal_cancel")}
-                                </button>
-                            )}
-                            <button
-                                onClick={handleSaveMapping}
-                                disabled={!canSave}
-                                style={{
-                                    padding: "6px 16px", fontSize: "11px", fontWeight: 600,
-                                    borderRadius: "6px", cursor: "pointer",
-                                    border: "none",
-                                    background: !canSave ? "var(--color-border)" : "var(--color-primary)",
-                                    color: !canSave ? "var(--color-text-muted)" : "#fff",
-                                    opacity: !canSave ? 0.5 : 1,
-                                    whiteSpace: "nowrap",
-                                }}
-                            >
-                                {t("flowkeys.modal_save")}
-                            </button>
-                        </div>
                     </div>
-                </div>
+                </section>
             </div>
         </div>
     );

@@ -695,7 +695,7 @@ export default function FlowMind() {
                                 </div>
 
                                 <Reorder.Group axis="y" values={getSortedEntries()} onReorder={(newEntries) => { setSortField(null); setEditingDict({ ...editingDict, entries: newEntries }); }} style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyleType: 'none', margin: 0, padding: 0 }}>
-                                    {getSortedEntries().map((entry, idx) => {
+                                    {getSortedEntries().map((entry, _idx) => {
                                         // Find real index in editingDict.entries by _id
                                         const realIdx = editingDict.entries.findIndex(e => e._id === entry._id);
                                         return (

@@ -85,8 +85,8 @@ export default function HintWindow() {
     const [visible, setVisible] = useState(false);
     const [posType, setPosType] = useState(0);
     const [scale, setScale] = useState(1.0);
-    const [hintWidth, setHintWidth] = useState(-1);
-    const [hintHeight, setHintHeight] = useState(-1);
+    const [, setHintWidth] = useState(-1);
+    const [, setHintHeight] = useState(-1);
     const [hoverIdx, setHoverIdx] = useState(-1);
 
     const T = buildTheme(scale);

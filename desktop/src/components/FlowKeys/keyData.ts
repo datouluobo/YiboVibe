@@ -156,6 +156,19 @@ const NAV_SECTION: KeySection = {
             ],
         },
         { keys: [] },
+        { keys: [] },
+        { keys: [] },
+    ],
+    marginLeft: 1,
+};
+
+const ARROW_SECTION: KeySection = {
+    id: "arrows",
+    rows: [
+        { keys: [] },
+        { keys: [] },
+        { keys: [] },
+        { keys: [] },
         {
             keys: [
                 { id: "_blank_arrow_spacer1", label: "", width: 1 },
@@ -171,7 +184,6 @@ const NAV_SECTION: KeySection = {
             ],
         },
     ],
-    marginLeft: 1,
 };
 
 const NUMPAD_SECTION: KeySection = {
@@ -232,12 +244,12 @@ export const KEYBOARD_LAYOUTS: KeyboardLayout[] = [
     {
         id: "ansi",
         name: "ANSI 全尺寸",
-        sections: [MAIN_SECTION, NAV_SECTION, NUMPAD_SECTION],
+        sections: [MAIN_SECTION, NAV_SECTION, ARROW_SECTION, NUMPAD_SECTION],
     },
     {
         id: "tkl",
         name: "TKL (87键)",
-        sections: [MAIN_SECTION, NAV_SECTION],
+        sections: [MAIN_SECTION, NAV_SECTION, ARROW_SECTION],
     },
     {
         id: "60",
@@ -379,6 +391,37 @@ export const KEY_CATEGORIES: KeyCategory[] = [
         ],
     },
 ];
+
+const UNIQUE_KEY_MAP = new Map<string, KeyDef>();
+
+for (const layout of KEYBOARD_LAYOUTS) {
+    for (const section of layout.sections) {
+        for (const row of section.rows) {
+            for (const key of row.keys) {
+                if (!key.id.startsWith("_blank_") && !UNIQUE_KEY_MAP.has(key.id)) {
+                    UNIQUE_KEY_MAP.set(key.id, key);
+                }
+            }
+        }
+    }
+}
+
+for (const category of KEY_CATEGORIES) {
+    for (const key of category.keys) {
+        if (!UNIQUE_KEY_MAP.has(key.id)) {
+            UNIQUE_KEY_MAP.set(key.id, key);
+        }
+    }
+}
+
+export const ALL_KEYS = Array.from(UNIQUE_KEY_MAP.values());
+export const KEY_LABEL_BY_ID = Object.fromEntries(
+    ALL_KEYS.map((key) => [key.id, key.label])
+) as Record<string, string>;
+
+export function getKeyLabelById(keyId: string): string {
+    return KEY_LABEL_BY_ID[keyId] || keyId;
+}
 
 export const MODIFIER_KEYS = ["Ctrl", "Alt", "Shift", "Win"] as const;
 export type ModifierKey = (typeof MODIFIER_KEYS)[number];

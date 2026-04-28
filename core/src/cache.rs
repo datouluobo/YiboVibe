@@ -1,4 +1,4 @@
-use log::{error, info, warn};
+use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -151,7 +151,7 @@ impl CacheManager {
                 }
                 let excess = (total - max_bytes as i64) as u64;
                 let candidates = get_lru_unpinned(excess);
-                for (id, entry_type, hash) in &candidates {
+                for (_id, entry_type, hash) in &candidates {
                     let _ = self.delete_file(entry_type, hash);
                 }
                 if !candidates.is_empty() {

@@ -142,6 +142,7 @@ impl FlowRulesConfig {
         if let Ok(mut lock) = RULES_CACHE.write() {
             *lock = RulesCache::from_config(&new_cfg);
         }
+        crate::hook_manager::invalidate_process_cache();
     }
 
     pub fn load_or_default() -> Self {
@@ -183,6 +184,7 @@ fn persist_and_rebuild() {
     cfg.save();
     let mut cache = RULES_CACHE.write().unwrap();
     *cache = RulesCache::from_config(&cfg);
+    crate::hook_manager::invalidate_process_cache();
 }
 
 // ---------------------------------------------------------------------------
@@ -326,5 +328,6 @@ pub fn force_reload_from_disk() {
     *config_lock = cfg.clone();
     let mut cache_lock = RULES_CACHE.write().unwrap();
     *cache_lock = RulesCache::from_config(&cfg);
+    crate::hook_manager::invalidate_process_cache();
     info!("FlowRules force reloaded from disk.");
 }
