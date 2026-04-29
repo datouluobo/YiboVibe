@@ -401,6 +401,7 @@ struct SettingsPayload {
     flowhint_min_chars: usize,
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
+    debug_mode: bool,
     dictionary_order: Vec<String>,
     image_transport_format: String,
 }
@@ -438,6 +439,7 @@ fn get_settings() -> Result<SettingsPayload, String> {
         flowhint_min_chars: cfg.flowhint_min_chars,
         flowhint_accept_tab: cfg.flowhint_accept_tab,
         flowhint_accept_right: cfg.flowhint_accept_right,
+        debug_mode: cfg.debug_mode,
         dictionary_order: cfg.dictionary_order.clone(),
         image_transport_format: cfg.cache.image_transport_format.clone(),
     })
@@ -445,10 +447,12 @@ fn get_settings() -> Result<SettingsPayload, String> {
 
 #[tauri::command]
 fn update_settings(
+    app: tauri::AppHandle,
     is_sync_enabled: bool, 
     flowhint_min_chars: usize,
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
+    debug_mode: bool,
     image_transport_format: String,
 ) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
@@ -456,6 +460,7 @@ fn update_settings(
     cfg.flowhint_min_chars = flowhint_min_chars;
     cfg.flowhint_accept_tab = flowhint_accept_tab;
     cfg.flowhint_accept_right = flowhint_accept_right;
+    cfg.debug_mode = debug_mode;
     cfg.cache.image_transport_format = match image_transport_format.as_str() {
         "png" | "webp_lossless" | "jpeg" => image_transport_format,
         _ => "png".to_string(),
@@ -463,6 +468,7 @@ fn update_settings(
     cfg.save();
     drop(cfg);
     refresh_hint_window_cfg();
+    let _ = app.emit("config-updated", ());
     Ok(())
 }
 
@@ -1697,13 +1703,17 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     yiboflow_core::hook_manager::start_global_hook();
 
+    let debug_mode_enabled = yiboflow_core::config::GLOBAL_CONFIG
+        .read()
+        .map(|cfg| cfg.debug_mode)
+        .unwrap_or(false);
     let allow_multi_instance = std::env::var("YIBOFLOW_ALLOW_MULTI_INSTANCE")
         .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .unwrap_or(false) || debug_mode_enabled;
     let data_dir = std::env::var("YIBOFLOW_DATA_DIR").unwrap_or_else(|_| "<default>".to_string());
     info!(
-        "[Startup] allow_multi_instance={}, data_dir={}",
-        allow_multi_instance, data_dir
+        "[Startup] allow_multi_instance={}, debug_mode={}, data_dir={}",
+        allow_multi_instance, debug_mode_enabled, data_dir
     );
 
     let builder = tauri::Builder::default()

@@ -106,6 +106,8 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub flowhint_accept_right: bool,
     #[serde(default)]
+    pub debug_mode: bool,
+    #[serde(default)]
     pub sync_meta: crate::sync::SyncMeta,
     #[serde(default)]
     pub probe_tool: ProbeToolConfig,
@@ -216,6 +218,7 @@ impl AppConfig {
             flowhint_min_chars: 2,
             flowhint_accept_tab: true,
             flowhint_accept_right: true,
+            debug_mode: false,
             probe_tool: ProbeToolConfig {
                 targets: default_probe_targets(),
                 timeout_ms: default_probe_timeout(),

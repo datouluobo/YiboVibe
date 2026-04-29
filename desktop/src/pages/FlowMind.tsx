@@ -29,6 +29,7 @@ export default function FlowMind() {
     const { t } = useTranslation();
     const [flowsnapOn, setFlowsnapOn] = useState(false);
     const [flowhintOn, setFlowhintOn] = useState(false);
+    const [debugMode, setDebugMode] = useState(false);
     const [minChars, setMinChars] = useState(2);
     const [posType, setPosType] = useState(0);
     const [hintScale, setHintScale] = useState(1.0);
@@ -43,6 +44,12 @@ export default function FlowMind() {
     const [isReadOnly, setIsReadOnly] = useState(false);
     const [sortField, setSortField] = useState<'trigger_key' | 'keyword' | 'content' | null>(null);
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+    useEffect(() => {
+        invoke<any>("get_settings")
+            .then((settings) => setDebugMode(!!settings?.debug_mode))
+            .catch(e => console.error("Failed to load debug mode:", e));
+    }, []);
 
     // Sort logic for entries
     const handleSort = (field: 'trigger_key' | 'keyword' | 'content') => {
@@ -339,6 +346,25 @@ export default function FlowMind() {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {debugMode && (
+                        <button
+                            onClick={runDiagnose}
+                            className="btn-primary"
+                            style={{
+                                padding: '8px 14px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                whiteSpace: 'nowrap',
+                                lineHeight: '20px',
+                                height: '36px',
+                            }}
+                        >
+                            {t('flowmind.diagnostics_run')}
+                        </button>
+                    )}
                     <span style={{
                         fontSize: '13px',
                         fontWeight: 500,
@@ -593,29 +619,24 @@ export default function FlowMind() {
                 </Reorder.Group>
             </div>
 
+            {debugMode && diagReport && (
             <div className="glass-panel" style={{ padding: '20px', marginTop: '20px', borderRadius: 'var(--radius-lg)' }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
-                    <button onClick={runDiagnose} className="btn-primary" style={{ padding: '6px 16px', fontSize: '12px' }}>
-                        运行诊断
-                    </button>
-                </div>
-                {diagReport && (
-                    <pre style={{
-                        background: 'var(--color-surface)',
-                        padding: '12px',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                        fontFamily: 'Consolas, monospace',
-                        whiteSpace: 'pre-wrap',
-                        color: 'var(--color-text-main)',
-                        border: '1px solid var(--color-border)',
-                        maxHeight: '300px',
-                        overflow: 'auto',
-                    }}>
-                        {diagReport}
-                    </pre>
-                )}
+                <pre style={{
+                    background: 'var(--color-surface)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    fontFamily: 'Consolas, monospace',
+                    whiteSpace: 'pre-wrap',
+                    color: 'var(--color-text-main)',
+                    border: '1px solid var(--color-border)',
+                    maxHeight: '300px',
+                    overflow: 'auto',
+                }}>
+                    {diagReport}
+                </pre>
             </div>
+            )}
 
             {isModalOpen && editingDict && (
                 <div style={{

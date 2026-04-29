@@ -13,6 +13,7 @@ export default function Settings() {
     const [appConfig, setAppConfig] = useState<any>(null);
     const [isAutostartEnabled, setIsAutostartEnabled] = useState(false);
     const [appVersion, setAppVersion] = useState("");
+    const [debugMode, setDebugMode] = useState(false);
 
 
     const fetchConfig = () => {
@@ -198,6 +199,7 @@ export default function Settings() {
             if (settings?.image_transport_format) {
                 setImageTransportFormat(settings.image_transport_format);
             }
+            setDebugMode(!!settings?.debug_mode);
         }).catch(console.error);
     };
 
@@ -221,6 +223,7 @@ export default function Settings() {
                 flowhintMinChars: settings.flowhint_min_chars,
                 flowhintAcceptTab: settings.flowhint_accept_tab,
                 flowhintAcceptRight: settings.flowhint_accept_right,
+                debugMode: !!settings.debug_mode,
                 imageTransportFormat: nextFormat,
             });
             setImageTransportFormat(nextFormat);
@@ -229,6 +232,28 @@ export default function Settings() {
             setAlertDialog({
                 isOpen: true,
                 message: formatOperationError(t, "SETTINGS_IMAGE_TRANSPORT_FORMAT_FAILED", "settings.error_image_transport_format_failed", { detail: String(e) }),
+                type: 'error'
+            });
+        }
+    };
+
+    const toggleDebugMode = async () => {
+        const next = !debugMode;
+        try {
+            const settings: any = await invoke("get_settings");
+            await invoke("update_settings", {
+                isSyncEnabled: settings.is_sync_enabled,
+                flowhintMinChars: settings.flowhint_min_chars,
+                flowhintAcceptTab: settings.flowhint_accept_tab,
+                flowhintAcceptRight: settings.flowhint_accept_right,
+                debugMode: next,
+                imageTransportFormat: settings.image_transport_format || "png",
+            });
+            setDebugMode(next);
+        } catch (e) {
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_DEBUG_MODE_FAILED", "settings.error_debug_mode_failed", { detail: String(e) }),
                 type: 'error'
             });
         }
@@ -371,6 +396,39 @@ export default function Settings() {
                             {isAutostartEnabled ? '开机自启: 已开启' : '开机自启: 已关闭'}
                         </button>
                     </div>
+                </div>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '18px 24px', borderRadius: 'var(--radius-lg)', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
+                    <div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--color-text-main)' }}>
+                            {t('settings.debug_mode_title')}
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '6px', lineHeight: 1.6, maxWidth: '680px' }}>
+                            {t('settings.debug_mode_desc')}
+                        </div>
+                    </div>
+                    <button
+                        onClick={toggleDebugMode}
+                        style={{
+                            background: debugMode ? 'rgba(245, 158, 11, 0.14)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${debugMode ? 'rgba(245, 158, 11, 0.35)' : 'var(--color-border)'}`,
+                            color: debugMode ? '#f59e0b' : 'var(--color-text-muted)',
+                            padding: '9px 18px',
+                            borderRadius: '100px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            fontSize: '13px',
+                            transition: 'all 0.2s'
+                        }}
+                    >
+                        {debugMode ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                        {debugMode ? t('settings.debug_mode_on') : t('settings.debug_mode_off')}
+                    </button>
                 </div>
             </div>
 
@@ -617,6 +675,7 @@ export default function Settings() {
             </div>
 
             {/* Advanced Vault Sync Manager */}
+            {debugMode && (
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px' }}>
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '24px' }}>
                     <button
@@ -645,8 +704,10 @@ export default function Settings() {
                     </button>
                 </div>
             </div>
+            )}
 
             {/* Device Identity & Collision Management */}
+            {debugMode && (
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px', border: '1px solid var(--color-glass-border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -696,6 +757,7 @@ export default function Settings() {
                     💡 提示：如果您通过“直接复制配置文件夹”的方式在另一台电脑部署了 YiboFlow，可能导致两台电脑拥有相同的指纹，从而无法同时被云端识别。点击重置后，两台电脑即可在仪表盘中互相看见。
                 </p>
             </div>
+            )}
 
             {/* Custom Confirm Dialog */}
             {

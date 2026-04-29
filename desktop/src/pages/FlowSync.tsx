@@ -114,9 +114,11 @@ export default function FlowSync() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [totalCount, setTotalCount] = useState(0);
     const [syncEnabled, setSyncEnabled] = useState(true);
+    const [debugMode, setDebugMode] = useState(false);
     const [receiveOnlyMode, setReceiveOnlyMode] = useState(false);
     const [diagnostics, setDiagnostics] = useState<FlowSyncDiagnostics | null>(null);
     const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+    const [showDiagnostics, setShowDiagnostics] = useState(true);
     const clearMenuRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -146,9 +148,19 @@ export default function FlowSync() {
     }, []);
 
     useEffect(() => {
-        invoke<{ receive_only_mode: boolean }>("get_flowsync_runtime_state")
-            .then((state) => setReceiveOnlyMode(!!state.receive_only_mode))
-            .catch(e => console.error("Failed to load FlowSync runtime state:", e));
+        invoke<any>("get_settings")
+            .then((settings) => {
+                const enabled = !!settings?.debug_mode;
+                setDebugMode(enabled);
+                if (!enabled) {
+                    setDiagnostics(null);
+                    return;
+                }
+                invoke<{ receive_only_mode: boolean }>("get_flowsync_runtime_state")
+                    .then((state) => setReceiveOnlyMode(!!state.receive_only_mode))
+                    .catch(e => console.error("Failed to load FlowSync runtime state:", e));
+            })
+            .catch(e => console.error("Failed to load debug mode:", e));
     }, []);
 
     const loadDiagnostics = useCallback(async () => {
@@ -165,8 +177,10 @@ export default function FlowSync() {
     }, []);
 
     useEffect(() => {
-        loadDiagnostics();
-    }, [loadDiagnostics]);
+        if (debugMode) {
+            loadDiagnostics();
+        }
+    }, [debugMode, loadDiagnostics]);
 
     const toggleSyncEnabled = async () => {
         try {
@@ -432,28 +446,30 @@ export default function FlowSync() {
                     </div>
                 </div>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    <button
-                        onClick={toggleReceiveOnlyMode}
-                        style={{
-                            background: receiveOnlyMode ? "rgba(245, 158, 11, 0.12)" : "var(--color-surface-elevated)",
-                            border: `1px solid ${receiveOnlyMode ? "rgba(245, 158, 11, 0.3)" : "var(--color-border)"}`,
-                            color: receiveOnlyMode ? "#f59e0b" : "var(--color-text-muted)",
-                            padding: "8px 14px",
-                            borderRadius: "100px",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "5px",
-                            cursor: "pointer",
-                            fontWeight: 600,
-                            fontSize: "12px",
-                            whiteSpace: "nowrap",
-                            transition: "all 0.15s",
-                            height: "36px",
-                        }}
-                    >
-                        {receiveOnlyMode ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
-                        {receiveOnlyMode ? t("sync.test_mode_on") : t("sync.test_mode_off")}
-                    </button>
+                    {debugMode && (
+                        <button
+                            onClick={() => setShowDiagnostics((v) => !v)}
+                            style={{
+                                background: showDiagnostics ? "var(--color-primary-glow)" : "var(--color-surface-elevated)",
+                                border: `1px solid ${showDiagnostics ? "rgba(94, 106, 210, 0.4)" : "var(--color-border)"}`,
+                                color: showDiagnostics ? "var(--color-primary)" : "var(--color-text-muted)",
+                                padding: "8px 14px",
+                                borderRadius: "100px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "5px",
+                                cursor: "pointer",
+                                fontWeight: 600,
+                                fontSize: "12px",
+                                whiteSpace: "nowrap",
+                                transition: "all 0.15s",
+                                height: "36px",
+                            }}
+                        >
+                            {showDiagnostics ? <ChevronDown size={16} /> : <ChevronDown size={16} style={{ transform: "rotate(-90deg)" }} />}
+                            {showDiagnostics ? t("sync.diagnostics_hide") : t("sync.diagnostics_show")}
+                        </button>
+                    )}
                     <button
                         onClick={toggleSyncEnabled}
                         style={{
@@ -479,43 +495,68 @@ export default function FlowSync() {
                 </div>
             </div>
 
-            <div style={{
-                marginBottom: "12px",
-                padding: "12px 14px",
+            {debugMode && showDiagnostics && (
+              <div style={{
+                  marginBottom: "12px",
+                  padding: "12px 14px",
                 background: "var(--color-surface-elevated)",
                 border: "1px solid var(--color-glass-border)",
                 borderRadius: "var(--radius-md)",
                 display: "flex",
                 flexDirection: "column",
                 gap: "10px",
-            }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                    <div>
-                        <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--color-text-main)" }}>
-                            {t("sync.diagnostics_title", "同步诊断")}
-                        </div>
-                        <div style={{ fontSize: "12px", color: "var(--color-text-muted)", marginTop: "3px" }}>
-                            {t("sync.diagnostics_desc", "用于确认当前窗口是否真的是新版本，以及它实际使用的设备身份和数据目录。")}
-                        </div>
-                    </div>
-                    <button
-                        onClick={loadDiagnostics}
-                        disabled={diagnosticsLoading}
-                        style={{
-                            padding: "6px 10px",
-                            borderRadius: "10px",
-                            border: "1px solid var(--color-border)",
-                            background: "var(--color-surface)",
-                            color: "var(--color-text-main)",
-                            cursor: diagnosticsLoading ? "default" : "pointer",
-                            opacity: diagnosticsLoading ? 0.6 : 1,
-                            fontSize: "12px",
-                            fontWeight: 600,
-                        }}
-                    >
-                        {diagnosticsLoading ? t("sync.diagnostics_refreshing", "刷新中...") : t("sync.diagnostics_refresh", "刷新诊断")}
-                    </button>
-                </div>
+              }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                      <div>
+                          <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--color-text-main)" }}>
+                              {t("sync.diagnostics_title", "同步诊断")}
+                          </div>
+                          <div style={{ fontSize: "12px", color: "var(--color-text-muted)", marginTop: "3px" }}>
+                              {t("sync.diagnostics_desc", "用于确认当前窗口是否真的是新版本，以及它实际使用的设备身份和数据目录。")}
+                          </div>
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          <button
+                              onClick={toggleReceiveOnlyMode}
+                              style={{
+                                  background: receiveOnlyMode ? "rgba(245, 158, 11, 0.12)" : "var(--color-surface-elevated)",
+                                  border: `1px solid ${receiveOnlyMode ? "rgba(245, 158, 11, 0.3)" : "var(--color-border)"}`,
+                                  color: receiveOnlyMode ? "#f59e0b" : "var(--color-text-muted)",
+                                  padding: "8px 14px",
+                                  borderRadius: "100px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  cursor: "pointer",
+                                  fontWeight: 600,
+                                  fontSize: "12px",
+                                  whiteSpace: "nowrap",
+                                  transition: "all 0.15s",
+                                  height: "36px",
+                              }}
+                          >
+                              {receiveOnlyMode ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                              {receiveOnlyMode ? t("sync.test_mode_on") : t("sync.test_mode_off")}
+                          </button>
+                          <button
+                              onClick={loadDiagnostics}
+                              disabled={diagnosticsLoading}
+                              style={{
+                                  padding: "6px 10px",
+                                  borderRadius: "10px",
+                                  border: "1px solid var(--color-border)",
+                                  background: "var(--color-surface)",
+                                  color: "var(--color-text-main)",
+                                  cursor: diagnosticsLoading ? "default" : "pointer",
+                                  opacity: diagnosticsLoading ? 0.6 : 1,
+                                  fontSize: "12px",
+                                  fontWeight: 600,
+                              }}
+                          >
+                            {diagnosticsLoading ? t("sync.diagnostics_refreshing", "刷新中...") : t("sync.diagnostics_refresh", "刷新诊断")}
+                          </button>
+                      </div>
+                  </div>
 
                 <div style={{
                     display: "grid",
@@ -555,6 +596,7 @@ export default function FlowSync() {
                     ))}
                 </div>
             </div>
+            )}
 
             {/* Filter Bar */}
             <div style={{
