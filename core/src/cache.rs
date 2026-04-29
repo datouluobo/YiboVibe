@@ -137,25 +137,28 @@ impl CacheManager {
         Ok(())
     }
 
-    pub fn enforce_size_limit(&self, get_lru_unpinned: impl Fn(u64) -> Vec<(i64, String, String)>) {
+    pub fn enforce_size_limit(&self, history: &crate::history::HistoryManager) {
         let max_bytes = *self.max_size_mb.lock().unwrap() * 1024 * 1024;
         if max_bytes == 0 {
             return;
         }
-        let history_lock = crate::cache::HISTORY_MANAGER.read().unwrap();
-        if let Some(history) = history_lock.as_ref() {
-            if let Ok((_, _, _)) = history.get_stats() {
-                let total = history.get_total_size();
-                if total <= max_bytes as i64 {
-                    return;
+        if let Ok((_, _, _)) = history.get_stats() {
+            let total = self.compute_total_size();
+            if total <= max_bytes {
+                return;
+            }
+            let excess = total - max_bytes;
+            let candidates = history.get_lru_unpinned(excess);
+            let ids: Vec<i64> = candidates.iter().map(|(id, _, _)| *id).collect();
+            for (_id, entry_type, hash) in &candidates {
+                if let Err(err) = self.delete_file(entry_type, hash) {
+                    log::warn!("Failed to delete cache file during eviction for {}:{}: {}", entry_type, hash, err);
                 }
-                let excess = (total - max_bytes as i64) as u64;
-                let candidates = get_lru_unpinned(excess);
-                for (_id, entry_type, hash) in &candidates {
-                    let _ = self.delete_file(entry_type, hash);
-                }
-                if !candidates.is_empty() {
-                    log::info!("Cache eviction: removed {} entries", candidates.len());
+            }
+            if !ids.is_empty() {
+                match history.delete_by_ids(&ids) {
+                    Ok(_) => log::info!("Cache eviction: removed {} entries", ids.len()),
+                    Err(err) => log::error!("Cache eviction failed to delete history rows: {}", err),
                 }
             }
         }
@@ -220,6 +223,14 @@ pub fn init_cache_and_history() -> Result<(), String> {
     Ok(())
 }
 
+pub fn enforce_cache_limit_now() {
+    let cache_lock = CACHE_MANAGER.read().unwrap();
+    let history_lock = HISTORY_MANAGER.read().unwrap();
+    if let (Some(cache), Some(history)) = (cache_lock.as_ref(), history_lock.as_ref()) {
+        cache.enforce_size_limit(history);
+    }
+}
+
 pub fn record_clipboard_text(content: &str, source: &str) {
     let hash = hash_bytes(content.as_bytes());
     let now = std::time::SystemTime::now()
@@ -232,6 +243,7 @@ pub fn record_clipboard_text(content: &str, source: &str) {
     if let (Some(cache), Some(history)) = (cache_lock.as_ref(), history_lock.as_ref()) {
         if history.exists_by_hash(&hash) {
             let _ = history.touch_by_hash(&hash, now);
+            let _ = history.update_source_by_hash(&hash, source);
             return;
         }
         let preview = if content.chars().count() > 200 {
@@ -247,12 +259,15 @@ pub fn record_clipboard_text(content: &str, source: &str) {
         if let Err(e) = history.insert(now, "text", &hash, size, Some(&preview), source) {
             log::error!("Failed to insert history: {}", e);
         }
-        cache.enforce_size_limit(|excess| history.get_lru_unpinned(excess));
+        cache.enforce_size_limit(history);
     }
 }
 
-pub fn record_clipboard_image(data: &[u8], source: &str) {
-    let hash = hash_bytes(data);
+pub fn record_clipboard_image(data: &[u8], source: &str, content_id: Option<&str>) {
+    let hash = content_id
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| hash_bytes(data));
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -263,6 +278,7 @@ pub fn record_clipboard_image(data: &[u8], source: &str) {
     if let (Some(cache), Some(history)) = (cache_lock.as_ref(), history_lock.as_ref()) {
         if history.exists_by_hash(&hash) {
             let _ = history.touch_by_hash(&hash, now);
+            let _ = history.update_source_by_hash(&hash, source);
             return;
         }
         let size = data.len() as i64;
@@ -274,13 +290,13 @@ pub fn record_clipboard_image(data: &[u8], source: &str) {
         if let Err(e) = history.insert(now, "image", &hash, size, preview.as_deref(), source) {
             log::error!("Failed to insert image history: {}", e);
         }
-        cache.enforce_size_limit(|excess| history.get_lru_unpinned(excess));
+        cache.enforce_size_limit(history);
     }
 }
 
-/// Longest edge in pixels. List rows can be ~200px tall; 512px gives headroom for HiDPI and
-/// `objectFit: contain` without upscaling a tiny bitmap. Lanczos keeps text/screenshots sharp.
-const PREVIEW_MAX_EDGE: u32 = 512;
+/// Longest edge in pixels. FlowSync list cards render much smaller than the full image, so
+/// a 320px preview keeps the activity stream snappy while staying clear enough for screenshots.
+const PREVIEW_MAX_EDGE: u32 = 320;
 
 fn downscale_for_preview(dyn_img: image::DynamicImage) -> image::DynamicImage {
     use image::imageops::FilterType;
@@ -291,7 +307,7 @@ fn downscale_for_preview(dyn_img: image::DynamicImage) -> image::DynamicImage {
     let scale = PREVIEW_MAX_EDGE as f32 / max_dim as f32;
     let tw = (dyn_img.width() as f32 * scale).round() as u32;
     let th = (dyn_img.height() as f32 * scale).round() as u32;
-    dyn_img.resize(tw.max(1), th.max(1), FilterType::Lanczos3)
+    dyn_img.resize(tw.max(1), th.max(1), FilterType::Triangle)
 }
 
 fn generate_image_thumbnail(data: &[u8]) -> Option<String> {

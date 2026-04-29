@@ -1,7 +1,10 @@
 use log::{info, warn};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
+
+mod probe;
 
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
@@ -32,6 +35,51 @@ use yiboflow_core::ws::WsClient;
 pub struct AppState {
     pub is_connected: Mutex<bool>,
     pub ws_tx: Mutex<Option<tokio::sync::mpsc::Sender<yiboflow_core::ws::WsMessage>>>,
+    pub runtime_server_url: Mutex<Option<String>>,
+    pub runtime_username: Mutex<Option<String>>,
+    pub runtime_device_name: Mutex<Option<String>>,
+    pub runtime_remote_device_id: Mutex<Option<u32>>,
+    pub persistent_device_fingerprint: Mutex<Option<String>>,
+    pub runtime_device_fingerprint: Mutex<Option<String>>,
+}
+
+#[derive(serde::Serialize)]
+struct FlowSyncRuntimeState {
+    receive_only_mode: bool,
+}
+
+#[derive(serde::Serialize)]
+struct FlowSyncDiagnostics {
+    exe_path: String,
+    global_dir: String,
+    active_user_dir: String,
+    active_user: Option<String>,
+    is_connected: bool,
+    receive_only_mode: bool,
+    server_url: Option<String>,
+    username: Option<String>,
+    device_name: Option<String>,
+    remote_device_id: Option<u32>,
+    persistent_device_fingerprint: String,
+    runtime_device_fingerprint: String,
+}
+
+fn resolve_runtime_device_fingerprint(base_fingerprint: &str) -> String {
+    let instance_tag = std::env::var("YIBOFLOW_INSTANCE_TAG")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::current_exe().ok().map(|exe| {
+                let mut hasher = DefaultHasher::new();
+                exe.to_string_lossy().hash(&mut hasher);
+                format!("exe-{:x}", hasher.finish())
+            })
+        });
+
+    match instance_tag {
+        Some(tag) => format!("{base_fingerprint}::{tag}"),
+        None => base_fingerprint.to_string(),
+    }
 }
 
 
@@ -111,6 +159,15 @@ async fn connect_engine(
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.device_fingerprint.clone()
     };
+    let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+    {
+        let mut persisted = state.persistent_device_fingerprint.lock().await;
+        *persisted = Some(config_fingerprint.clone());
+    }
+    {
+        let mut runtime = state.runtime_device_fingerprint.lock().await;
+        *runtime = Some(runtime_fingerprint.clone());
+    }
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
@@ -118,7 +175,7 @@ async fn connect_engine(
         password: password.clone(),
         device_name: device_name.clone(),
         device_type: "windows".to_string(),
-        device_fingerprint: config_fingerprint,
+        device_fingerprint: runtime_fingerprint,
     };
 
     let login_result = client.login(login_payload).await;
@@ -232,6 +289,7 @@ async fn connect_engine(
                             arc_mk,
                             ws_client.tx.clone(),
                             Some(ui_tx),
+                            device_name.clone(),
                         );
                         cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
@@ -240,10 +298,20 @@ async fn connect_engine(
                         *connected_flag = true;
                         let mut ws_tx = state.ws_tx.lock().await;
                         *ws_tx = Some(ws_client.tx.clone());
+                        let mut runtime_server_url = state.runtime_server_url.lock().await;
+                        *runtime_server_url = Some(server_url.clone());
+                        let mut runtime_username = state.runtime_username.lock().await;
+                        *runtime_username = Some(username.clone());
+                        let mut runtime_device_name = state.runtime_device_name.lock().await;
+                        *runtime_device_name = Some(device_name.clone());
+                        let mut runtime_remote_device_id = state.runtime_remote_device_id.lock().await;
+                        *runtime_remote_device_id = Some(d.device_id);
                         return Ok(true);
                     }
                     Err(e) => return Err(format!("WebSocket Connection Failed: {}", e)),
                 }
+            } else if res.code == 401 {
+                return Err(res.msg);
             } else {
                 (true, format!("Login failed via API: {}", res.msg))
             }
@@ -306,6 +374,7 @@ async fn connect_engine(
                 arc_mk,
                 dummy_ws_tx,
                 Some(ui_tx),
+                device_name.clone(),
             );
             cb_monitor.start_monitoring();
             // In offline mode we don't start WsClient RX receiving since there's no server
@@ -333,68 +402,27 @@ struct SettingsPayload {
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
     dictionary_order: Vec<String>,
-}
-
-#[derive(serde::Serialize)]
-pub struct TestResult {
-    pub success: bool,
-    pub message: String,
-    pub error_type: Option<String>,
-    pub latency_ms: Option<u64>,
+    image_transport_format: String,
 }
 
 #[tauri::command]
-async fn test_ai_endpoint(endpoint: yiboflow_core::config::AiEndpoint) -> Result<TestResult, String> {
-    let config = yiboflow_core::config::AiEngineConfig {
-        endpoints: vec![endpoint.clone()],
-        auto_mode: false,
-        timeout_ms: 5000,
-    };
-    let client = yiboflow_core::ai::client::AiClient::new(config);
-    
-    // Light probe with strict status check
-    match client.probe(&endpoint).await {
-        Ok(latency) => Ok(TestResult {
-            success: true,
-            message: "服务已就绪".into(),
-            error_type: None,
-            latency_ms: Some(latency),
-        }),
-        Err(e) => {
-            let err_str = e.to_string();
-            let error_type = if err_str.contains("401") || err_str.contains("Unauthorized") {
-                Some("Unauthorized".into())
-            } else if err_str.contains("timeout") {
-                Some("Timeout".into())
-            } else {
-                Some("NetworkError".into())
-            };
-
-            let msg = match error_type.as_deref() {
-                Some("Unauthorized") => "身份验证失败：请检查 API Key 是否正确".into(),
-                Some("Timeout") => "连接超时：请检查 NAS 地址或端口是否开放".into(),
-                _ => format!("网络错误: {}", err_str),
-            };
-
-            Ok(TestResult {
-                success: false,
-                message: msg,
-                error_type,
-                latency_ms: None,
-            })
-        }
-    }
+fn get_probe_targets() -> Result<Vec<probe::ProbeTargetPayload>, String> {
+    probe::get_probe_targets()
 }
 
 #[tauri::command]
-async fn list_endpoint_models(endpoint: yiboflow_core::config::AiEndpoint) -> Result<Vec<String>, String> {
-    let config = yiboflow_core::config::AiEngineConfig {
-        endpoints: vec![endpoint.clone()],
-        auto_mode: false,
-        timeout_ms: 10000,
-    };
-    let client = yiboflow_core::ai::client::AiClient::new(config);
-    client.list_models(&endpoint).await.map_err(|e| e.to_string())
+fn save_probe_targets(targets: Vec<probe::ProbeTargetPayload>) -> Result<(), String> {
+    probe::save_probe_targets(targets)
+}
+
+#[tauri::command]
+async fn probe_ai_target(target: probe::ProbeTargetPayload) -> Result<probe::ProbeResult, String> {
+    probe::probe_target(target).await
+}
+
+#[tauri::command]
+async fn list_probe_target_models(target: probe::ProbeTargetPayload) -> Result<Vec<String>, String> {
+    probe::list_probe_target_models(target).await
 }
 
 #[tauri::command]
@@ -411,6 +439,7 @@ fn get_settings() -> Result<SettingsPayload, String> {
         flowhint_accept_tab: cfg.flowhint_accept_tab,
         flowhint_accept_right: cfg.flowhint_accept_right,
         dictionary_order: cfg.dictionary_order.clone(),
+        image_transport_format: cfg.cache.image_transport_format.clone(),
     })
 }
 
@@ -420,12 +449,17 @@ fn update_settings(
     flowhint_min_chars: usize,
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
+    image_transport_format: String,
 ) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
     cfg.flowhint_accept_tab = flowhint_accept_tab;
     cfg.flowhint_accept_right = flowhint_accept_right;
+    cfg.cache.image_transport_format = match image_transport_format.as_str() {
+        "png" | "webp_lossless" | "jpeg" => image_transport_format,
+        _ => "png".to_string(),
+    };
     cfg.save();
     drop(cfg);
     refresh_hint_window_cfg();
@@ -438,18 +472,6 @@ fn update_settings(
 fn get_app_config() -> Result<yiboflow_core::config::AppConfig, String> {
     Ok(yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().clone())
 }
-
-#[tauri::command]
-fn update_ai_endpoints(endpoints: Vec<yiboflow_core::config::AiEndpoint>) -> Result<(), String> {
-    let mut lock = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    lock.ai_engine.endpoints = endpoints;
-    lock.save();
-    Ok(())
-}
-
-
-
-
 
 #[tauri::command]
 async fn change_local_password(new_password: String) -> Result<(), String> {
@@ -528,6 +550,7 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.device_fingerprint.clone()
     };
+    let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
@@ -535,7 +558,7 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: config_fingerprint,
+        device_fingerprint: runtime_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
@@ -587,13 +610,19 @@ async fn resolve_file_conflicts(
 ) -> Result<bool, String> {
     info!("Resolving file-level sync conflicts for {} files", resolutions.len());
 
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+    let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: "gui-native-1234".to_string(),
+        device_fingerprint: runtime_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
@@ -658,6 +687,7 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.device_fingerprint.clone()
     };
+    let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
@@ -665,7 +695,7 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: config_fingerprint,
+        device_fingerprint: runtime_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
@@ -734,6 +764,7 @@ async fn get_cluster_devices(server_url: String, username: String, password: Str
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.device_fingerprint.clone()
     };
+    let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
@@ -741,7 +772,7 @@ async fn get_cluster_devices(server_url: String, username: String, password: Str
         password: password.clone(),
         device_name: "YiboFlow Desktop Native".to_string(),
         device_type: "windows".to_string(),
-        device_fingerprint: config_fingerprint.clone(),
+        device_fingerprint: runtime_fingerprint,
     };
 
     let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
@@ -1109,6 +1140,73 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
+#[tauri::command]
+fn get_flowsync_runtime_state() -> Result<FlowSyncRuntimeState, String> {
+    Ok(FlowSyncRuntimeState {
+        receive_only_mode: yiboflow_core::clipboard::is_receive_only_mode(),
+    })
+}
+
+#[tauri::command]
+fn set_flowsync_receive_only_mode(enabled: bool) -> Result<bool, String> {
+    yiboflow_core::clipboard::set_receive_only_mode(enabled);
+    Ok(enabled)
+}
+
+#[tauri::command]
+async fn get_flowsync_diagnostics(
+    state: tauri::State<'_, AppState>,
+) -> Result<FlowSyncDiagnostics, String> {
+    let exe_path = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    let global_dir = yiboflow_core::local_auth::get_yiboflow_global_dir()
+        .display()
+        .to_string();
+    let active_user_dir = yiboflow_core::local_auth::get_active_user_dir()
+        .display()
+        .to_string();
+    let active_user = yiboflow_core::local_auth::ACTIVE_USER.read().unwrap().clone();
+    let is_connected = *state.is_connected.lock().await;
+    let receive_only_mode = yiboflow_core::clipboard::is_receive_only_mode();
+    let server_url = state.runtime_server_url.lock().await.clone();
+    let username = state.runtime_username.lock().await.clone();
+    let device_name = state.runtime_device_name.lock().await.clone();
+    let remote_device_id = *state.runtime_remote_device_id.lock().await;
+
+    let config_fingerprint = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.device_fingerprint.clone()
+    };
+    let persistent_device_fingerprint = state
+        .persistent_device_fingerprint
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| config_fingerprint.clone());
+    let runtime_device_fingerprint = state
+        .runtime_device_fingerprint
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| resolve_runtime_device_fingerprint(&config_fingerprint));
+
+    Ok(FlowSyncDiagnostics {
+        exe_path,
+        global_dir,
+        active_user_dir,
+        active_user,
+        is_connected,
+        receive_only_mode,
+        server_url,
+        username,
+        device_name,
+        remote_device_id,
+        persistent_device_fingerprint,
+        runtime_device_fingerprint,
+    })
+}
+
 // ─── Clipboard History Tauri Commands ───
 
 #[tauri::command]
@@ -1324,6 +1422,8 @@ fn set_cache_max_size(mb: u64) -> Result<(), String> {
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
     cache.set_max_size_mb(mb);
+    drop(cache_lock);
+    yiboflow_core::cache::enforce_cache_limit_now();
     if let Ok(mut cfg) = yiboflow_core::config::GLOBAL_CONFIG.write() {
         cfg.cache.cache_max_size_mb = mb;
         cfg.save();
@@ -1388,7 +1488,8 @@ async fn pull_today_history(state: tauri::State<'_, AppState>) -> Result<u32, St
         target_devices: vec![],
         r#type: "history_request".to_string(),
         payload: serde_json::json!({
-            "date": "today",
+            "mode": "recent",
+            "limit": 5,
         }),
     };
 
@@ -1596,7 +1697,16 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     yiboflow_core::hook_manager::start_global_hook();
 
-    tauri::Builder::default()
+    let allow_multi_instance = std::env::var("YIBOFLOW_ALLOW_MULTI_INSTANCE")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let data_dir = std::env::var("YIBOFLOW_DATA_DIR").unwrap_or_else(|_| "<default>".to_string());
+    info!(
+        "[Startup] allow_multi_instance={}, data_dir={}",
+        allow_multi_instance, data_dir
+    );
+
+    let builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&["hint"])
@@ -1606,16 +1716,28 @@ pub fn run() {
         .manage(AppState {
             is_connected: Mutex::new(false),
             ws_tx: Mutex::new(None),
+            runtime_server_url: Mutex::new(None),
+            runtime_username: Mutex::new(None),
+            runtime_device_name: Mutex::new(None),
+            runtime_remote_device_id: Mutex::new(None),
+            persistent_device_fingerprint: Mutex::new(None),
+            runtime_device_fingerprint: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_dialog::init());
+
+    let builder = if allow_multi_instance {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
-        .setup(|app| {
+    };
+
+    builder.setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             // Removed: use tauri::Manager; // Redundant with top-level import
@@ -1830,10 +1952,11 @@ pub fn run() {
             connect_engine,
             register_engine,
             resolve_sync_conflict,
-            list_endpoint_models,
-            test_ai_endpoint,
+            get_probe_targets,
+            save_probe_targets,
+            probe_ai_target,
+            list_probe_target_models,
             get_app_config,
-            update_ai_endpoints,
             get_settings,
             update_settings,
             set_dictionary_order,
@@ -1856,6 +1979,8 @@ pub fn run() {
             force_override_remote,
             manual_vault_compaction,
             get_vault_sync_status,
+            get_flowsync_runtime_state,
+            get_flowsync_diagnostics,
             get_cluster_devices,
             resolve_file_conflicts,
             regenerate_device_fingerprint,
@@ -1873,6 +1998,7 @@ pub fn run() {
             read_clipboard_content,
             write_to_clipboard,
             write_image_to_clipboard,
+            set_flowsync_receive_only_mode,
             init_clipboard_history,
             query_history,
             search_history,

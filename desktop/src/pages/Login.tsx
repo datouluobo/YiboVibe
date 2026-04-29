@@ -4,6 +4,7 @@ import { Lock, User, Server, ChevronDown, RefreshCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { formatOperationError, resolveAuthError } from "../utils/errorDisplay";
 
 export default function Login() {
     const navigate = useNavigate();
@@ -80,6 +81,18 @@ export default function Login() {
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        if (isRegistering) {
+            if (username.trim().length < 3) {
+                setErrorMsg(resolveAuthError("username must be at least 3", true, t));
+                return;
+            }
+            if (password.length < 8) {
+                setErrorMsg(resolveAuthError("password must be at least 8", true, t));
+                return;
+            }
+        }
+
         setLoading(true);
         setErrorMsg("");
         setSuccessMsg("");
@@ -93,10 +106,10 @@ export default function Login() {
                 });
 
                 if (result) {
-                    setSuccessMsg("Registration successful! You may now log in.");
+                    setSuccessMsg(t("login.register_success"));
                     setIsRegistering(false); // Switch to login view
                 } else {
-                    setErrorMsg("Failed to register user.");
+                    setErrorMsg(formatOperationError(t, "AUTH_REGISTER_FAILED", "login.error_register_failed"));
                 }
             } else {
                 const result: boolean = await invoke("connect_engine", {
@@ -127,7 +140,7 @@ export default function Login() {
                     updateHistory(serverUrl);
                     navigate("/app");
                 } else {
-                    setErrorMsg("Failed to authenticate with core engine.");
+                    setErrorMsg(formatOperationError(t, "AUTH_LOGIN_FAILED", "login.error_auth_failed"));
                 }
             }
         } catch (error) {
@@ -143,10 +156,10 @@ export default function Login() {
                     setConflictResolutions(initialResolutions);
                     setShowSyncConflictModal({ isOpen: true, files });
                 } catch {
-                    setErrorMsg("Failed to parse conflict metadata: " + errStr);
+                    setErrorMsg(formatOperationError(t, "SYNC_CONFLICT_PARSE_FAILED", "login.error_conflict_parse_failed", { detail: errStr }));
                 }
             } else {
-                setErrorMsg(errStr);
+                setErrorMsg(resolveAuthError(errStr, isRegistering, t));
             }
         } finally {
             setLoading(false);
@@ -332,6 +345,11 @@ export default function Login() {
                                 required
                             />
                         </div>
+                        {isRegistering && (
+                            <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+                                {t('login.register_password_hint')}
+                            </div>
+                        )}
                     </div>
 
                     {!isRegistering && (
@@ -437,11 +455,11 @@ export default function Login() {
                                             if (success) {
                                                 setUsername(renameValue);
                                                 setShowConflictModal(false);
-                                                setSuccessMsg("Local account renamed successfully! Try initializing again.");
+                                                setSuccessMsg(t("login.rename_success"));
                                                 localStorage.setItem('yiboflow_username', renameValue);
                                             }
                                         } catch (e) {
-                                            setErrorMsg("Rename failed: " + String(e));
+                                            setErrorMsg(formatOperationError(t, "AUTH_RENAME_LOCAL_FAILED", "login.error_rename_failed", { detail: String(e) }));
                                             setShowConflictModal(false);
                                         }
                                     }}>{t('login.conflict_rename')}</button>
@@ -454,7 +472,7 @@ export default function Login() {
                                             username
                                         });
                                     } catch (e) {
-                                        setErrorMsg("Override failed: " + String(e));
+                                        setErrorMsg(formatOperationError(t, "AUTH_OVERRIDE_REMOTE_FAILED", "login.error_override_failed", { detail: String(e) }));
                                         setShowConflictModal(false);
                                     }
                                 }}>{t('login.conflict_override')}</button>
@@ -533,7 +551,7 @@ export default function Login() {
                                     setLoading(false);
                                     navigate("/app");
                                 } catch (e) {
-                                    setErrorMsg("合并冲突执行失败: " + String(e));
+                                    setErrorMsg(formatOperationError(t, "SYNC_CONFLICT_RESOLVE_FAILED", "login.error_conflict_resolve_failed", { detail: String(e) }));
                                     setLoading(false);
                                 }
                             }}>

@@ -979,8 +979,8 @@ pub fn paste_text_only(text: &str) {
     }
 }
 
-/// Helper to restore focus to original window and paste text.
-/// Designed for FlowWriter insert/replace actions.
+/// Helper to restore focus to the original window and paste text.
+/// Used by text insertion and replacement flows after a window hop.
 pub fn paste_to_last_focused_window(text: String) {
     let hwnd_val = {
         if let Ok(lock) = LAST_HWND.lock() {

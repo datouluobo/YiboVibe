@@ -1,0 +1,113 @@
+# FlowProbe 收口上线清单
+
+更新时间：2026-04-28
+
+## 1. 目标
+
+本次上线目标是把 AI 相关能力收口为 `FlowProbe` 本机直连测试工具，并让服务端职责回归：
+
+- 登录
+- 认证
+- 配置保存
+- 配置同步
+
+## 2. 必须更新的组件
+
+### 客户端
+
+必须更新桌面客户端。原因：
+
+- `FlowProbe` 页面和交互已重做
+- Tauri 命令集已替换
+- AI 配置结构已改成 `probe_tool`
+- 新增了本机密钥存储与直连测试逻辑
+- 新增 Anthropic 协议支持
+
+涉及的关键代码：
+
+- [desktop/src/pages/FlowProbe.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowProbe.tsx)
+- [desktop/src/pages/FlowDeck.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowDeck.tsx)
+- [desktop/src-tauri/src/probe.rs](/F:/Download/GitHub/YiboFlow/desktop/src-tauri/src/probe.rs)
+- [desktop/src-tauri/src/lib.rs](/F:/Download/GitHub/YiboFlow/desktop/src-tauri/src/lib.rs)
+- [core/src/config.rs](/F:/Download/GitHub/YiboFlow/core/src/config.rs)
+
+### 服务端
+
+如果你要实际部署，服务端也必须一起更新。原因：
+
+- 旧的 AI 网关配置已删除
+- 现在服务端不应再承担第三方 AI API 转发
+- 服务端边界必须与新客户端保持一致
+
+涉及的关键代码：
+
+- [server/Caddyfile](/F:/Download/GitHub/YiboFlow/server/Caddyfile)
+
+## 3. 更新顺序
+
+1. 先更新服务端配置与网关。
+2. 再发布桌面客户端。
+3. 最后做联调验证。
+
+这样可以避免客户端已切到直连逻辑，但网关和部署说明仍停留在旧边界。
+
+## 4. 客户端发布检查
+
+- 构建通过：`npm run build`
+- Rust 核心检查通过：`cargo check -p yiboflow-core`
+- Tauri 检查通过：`cargo check -p tauri-app`
+- `FlowProbe` 可新增测试目标
+- `FlowProbe` 可直接测试：
+  - OpenAI Compatible
+  - Ollama
+  - Gemini OpenAI Compatible
+  - Anthropic
+  - Custom
+- 测试结果正确输出：
+  - `code`
+  - `summary`
+  - `detail`
+  - `latency_ms`
+  - `detected_protocol`
+  - `auth_status`
+  - `model_count`
+- API Key 不进入同步配置，只保存在本机 `probe_secrets.json`
+- `FlowDeck` 不再展示任何第三方 AI 运行状态
+
+## 5. 服务端发布检查
+
+- `Caddyfile` 已移除 `/v1/*` AI 代理
+- 服务端仅保留：
+  - 登录
+  - 认证
+  - 配置保存
+  - 配置同步
+- 反向代理只处理 YiboFlow 自身 API
+- 部署说明不再写 AI 网关或 Ollama 转发
+
+## 6. 联调验证
+
+至少验证以下场景：
+
+1. 本机 Ollama 地址可直连测试。
+2. NAS 地址可作为普通测试目标直连测试。
+3. 远程 OpenAI Compatible 地址可拉取模型。
+4. Anthropic 地址可拉取模型或正确返回认证失败。
+5. 错误结果能正确区分：
+   - 超时
+   - 认证失败
+   - 路径错误
+   - 协议不匹配
+   - 网络错误
+
+## 7. 上线后观察项
+
+- 是否仍有客户端尝试依赖服务端 AI 代理
+- 是否有配置同步把 API Key 一并带走
+- 是否有旧文档或部署脚本继续描述已废弃的 AI 主链路
+
+## 8. 结论
+
+如果只是看代码，不需要立刻更新服务端和客户端。
+
+如果要实际运行、联调、预发布或部署，客户端和服务端都要一起更新，不能只发一边。

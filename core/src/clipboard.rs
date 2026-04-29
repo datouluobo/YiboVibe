@@ -7,13 +7,23 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use image::DynamicImage;
 use lazy_static::lazy_static;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 lazy_static! {
     /// Shared clipboard caches used by both the monitor and the hook manager to prevent sync loops.
     pub static ref LAST_TEXT: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     pub static ref LAST_IMAGE_HASH: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+}
+
+static RECEIVE_ONLY_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_receive_only_mode(enabled: bool) {
+    RECEIVE_ONLY_MODE.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_receive_only_mode() -> bool {
+    RECEIVE_ONLY_MODE.load(Ordering::Relaxed)
 }
 
 #[cfg(target_os = "windows")]
@@ -26,6 +36,7 @@ struct Win32State {
     http_client: reqwest::Client,
     server_url: String,
     token: String,
+    device_label: String,
     runtime: tokio::runtime::Handle,
 }
 
@@ -45,10 +56,11 @@ pub struct ClipboardMonitor {
     master_key: Arc<MasterKey>,
     ws_tx: mpsc::Sender<WsMessage>,
     ui_tx: Option<mpsc::Sender<ClipboardEvent>>,
+    device_label: String,
 }
 
 impl ClipboardMonitor {
-    pub fn new(server_url: String, token: String, master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>) -> Self {
+    pub fn new(server_url: String, token: String, master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>, device_label: String) -> Self {
         Self {
             server_url,
             token,
@@ -61,6 +73,7 @@ impl ClipboardMonitor {
             master_key,
             ws_tx,
             ui_tx,
+            device_label,
         }
     }
 
@@ -81,31 +94,65 @@ impl ClipboardMonitor {
         hasher.finish()
     }
 
-    fn generate_thumbnail_base64(image_data: &arboard::ImageData<'_>) -> String {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
-        use image::imageops::FilterType;
-        const MAX_EDGE: u32 = 512;
+    fn image_preview_label(width: usize, height: usize) -> String {
+        format!("[Image {}x{}]", width, height)
+    }
+
+    fn compute_image_content_id(image_data: &arboard::ImageData<'_>) -> String {
+        let mut raw = Vec::with_capacity(16 + image_data.bytes.len());
+        raw.extend_from_slice(&(image_data.width as u64).to_le_bytes());
+        raw.extend_from_slice(&(image_data.height as u64).to_le_bytes());
+        raw.extend_from_slice(&image_data.bytes);
+        crate::cache::hash_bytes(&raw)
+    }
+
+    fn encode_image_for_transport(image_data: &arboard::ImageData<'_>, format: &str) -> Option<(Vec<u8>, &'static str)> {
         let width = image_data.width as u32;
         let height = image_data.height as u32;
+        let img_buffer = image::RgbaImage::from_raw(width, height, image_data.bytes.to_vec())?;
+        let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
+        let mut buf = std::io::Cursor::new(Vec::new());
 
-        if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, image_data.bytes.to_vec()) {
-            let dyn_img = DynamicImage::ImageRgba8(img_buffer);
-            let max_dim = width.max(height);
-            let thumb = if max_dim <= MAX_EDGE {
-                dyn_img
-            } else {
-                let scale = MAX_EDGE as f32 / max_dim as f32;
-                let tw = (width as f32 * scale).round() as u32;
-                let th = (height as f32 * scale).round() as u32;
-                dyn_img.resize(tw.max(1), th.max(1), FilterType::Lanczos3)
-            };
-            let mut buf = std::io::Cursor::new(Vec::new());
-            if thumb.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
-                let encoded = STANDARD.encode(buf.into_inner());
-                return format!("data:image/png;base64,{}", encoded);
+        match format {
+            "webp_lossless" => {
+                dyn_img.write_to(&mut buf, image::ImageFormat::WebP).ok()?;
+                Some((buf.into_inner(), "webp"))
+            }
+            "jpeg" => {
+                image::DynamicImage::ImageRgb8(dyn_img.to_rgb8())
+                    .write_to(&mut buf, image::ImageFormat::Jpeg)
+                    .ok()?;
+                Some((buf.into_inner(), "jpeg"))
+            }
+            _ => {
+                dyn_img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+                Some((buf.into_inner(), "png"))
             }
         }
-        format!("[Image {}x{}]", width, height)
+    }
+
+    fn decode_encoded_image_to_raw_image(data: &[u8], _format: &str) -> Option<Vec<u8>> {
+        let dyn_img = image::load_from_memory(data).ok()?;
+        let rgba = dyn_img.to_rgba8();
+        let mut raw = Vec::with_capacity(16 + rgba.len());
+        raw.extend_from_slice(&(rgba.width() as u64).to_le_bytes());
+        raw.extend_from_slice(&(rgba.height() as u64).to_le_bytes());
+        raw.extend_from_slice(rgba.as_raw());
+        Some(raw)
+    }
+
+    fn raw_image_to_arboard_image(data: &[u8]) -> Option<arboard::ImageData<'static>> {
+        if data.len() < 16 {
+            return None;
+        }
+        let width = u64::from_le_bytes(data[0..8].try_into().ok()?) as usize;
+        let height = u64::from_le_bytes(data[8..16].try_into().ok()?) as usize;
+        let bytes = data[16..].to_vec();
+        Some(arboard::ImageData {
+            width,
+            height,
+            bytes: std::borrow::Cow::Owned(bytes),
+        })
     }
 
     /// Spawns an asynchronous background task that monitors the system clipboard.
@@ -139,6 +186,7 @@ impl ClipboardMonitor {
         let client = self.http_client.clone();
         let srv_url = self.server_url.clone();
         let tok = self.token.clone();
+        let device_label = self.device_label.clone();
         let runtime_handle = tokio::runtime::Handle::current();
 
         std::thread::spawn(move || {
@@ -190,6 +238,7 @@ impl ClipboardMonitor {
                     http_client: client,
                     server_url: srv_url,
                     token: tok,
+                    device_label,
                     runtime: runtime_handle,
                 });
                 
@@ -228,7 +277,8 @@ impl ClipboardMonitor {
                     state.ui_tx.clone(),
                     state.http_client.clone(),
                     state.server_url.clone(),
-                    state.token.clone()
+                    state.token.clone(),
+                    state.device_label.clone(),
                 ));
             }
             return LRESULT(0);
@@ -245,7 +295,12 @@ impl ClipboardMonitor {
         client: reqwest::Client,
         srv_url: String,
         tok: String,
+        device_label: String,
     ) {
+        if is_receive_only_mode() {
+            return;
+        }
+
         // Debounce to allow OS or source app to finish I/O
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -274,7 +329,7 @@ impl ClipboardMonitor {
                     }).await;
                 }
                 if config.is_sync_enabled {
-                    Self::secure_dispatch(&text, &mk, &tx, &ui_tx).await;
+                    Self::secure_dispatch(&text, &mk, &tx, &ui_tx, &device_label).await;
                 }
             }
         } else {
@@ -282,6 +337,7 @@ impl ClipboardMonitor {
 
             if let Some(image) = current_image {
                 let hash = Self::calculate_image_hash(&image);
+                let content_id = Self::compute_image_content_id(&image);
                 let should_dispatch = {
                     let mut last = last_image_hash_ref.lock().unwrap();
                     if hash != *last {
@@ -298,32 +354,19 @@ impl ClipboardMonitor {
                         raw.extend_from_slice(&(image.width as u64).to_le_bytes());
                         raw.extend_from_slice(&(image.height as u64).to_le_bytes());
                         raw.extend_from_slice(img_bytes);
-                        crate::cache::record_clipboard_image(&raw, "local");
+                        crate::cache::record_clipboard_image(&raw, "local", Some(&content_id));
                     }
                     // Notify UI immediately, before the slow network upload
                     if let Some(chan) = ui_tx.as_ref() {
-                        let preview = tokio::task::spawn_blocking({
-                            let width = image.width;
-                            let height = image.height;
-                            let bytes = image.bytes.clone().into_owned();
-                            move || {
-                                let img_data = arboard::ImageData {
-                                    width,
-                                    height,
-                                    bytes: std::borrow::Cow::Owned(bytes),
-                                };
-                                Self::generate_thumbnail_base64(&img_data)
-                            }
-                        }).await.unwrap_or_else(|_| format!("[Image {}x{}]", image.width, image.height));
                         let _ = chan.send(ClipboardEvent {
                             status: "sent".to_string(),
-                            preview,
+                            preview: Self::image_preview_label(image.width, image.height),
                         }).await;
                     }
                     // Background sync upload happens after UI notification
                     let (is_sync_enabled, _, _, _) = crate::config::get_settings();
                     if is_sync_enabled {
-                        Self::secure_dispatch_image(image, &mk, &tx, &ui_tx, &client, &srv_url, &tok).await;
+                        Self::secure_dispatch_image(image, &content_id, &mk, &tx, &ui_tx, &client, &srv_url, &tok, &device_label).await;
                     }
                 }
             }
@@ -393,6 +436,7 @@ impl ClipboardMonitor {
         let client = self.http_client.clone();
         let srv_url = self.server_url.clone();
         let tok = self.token.clone();
+        let device_label = self.device_label.clone();
 
         tokio::spawn(async move {
             info!("Clipboard monitoring daemon started (polling fallback mode).");
@@ -406,13 +450,14 @@ impl ClipboardMonitor {
                     ui_tx.clone(),
                     client.clone(),
                     srv_url.clone(),
-                    tok.clone()
+                    tok.clone(),
+                    device_label.clone(),
                 ).await;
             }
         });
     }
 
-    async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>) {
+    async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>, device_label: &str) {
         let log_preview = if plaintext.chars().count() > 40 {
             format!("{}...", plaintext.chars().take(40).collect::<String>())
         } else {
@@ -448,7 +493,8 @@ impl ClipboardMonitor {
         let payload = serde_json::json!({
             "type": "text",
             "encrypted_data": enc_data,
-            "wrapped_key": wrapped_dk
+            "wrapped_key": wrapped_dk,
+            "sender_device_name": device_label
         });
 
         let msg = WsMessage {
@@ -474,29 +520,30 @@ impl ClipboardMonitor {
 
     async fn secure_dispatch_image(
         image: arboard::ImageData<'_>,
+        content_id: &str,
         mk: &MasterKey,
         tx: &mpsc::Sender<WsMessage>,
-        ui_tx: &Option<mpsc::Sender<ClipboardEvent>>,
+        _ui_tx: &Option<mpsc::Sender<ClipboardEvent>>,
         http_client: &reqwest::Client,
         server_url: &str,
         token: &str,
+        device_label: &str,
     ) {
         info!("[Intercepted] Preparing to E2EE encrypt locally: Image {}x{}", image.width, image.height);
 
         let dk = DataKey::generate();
 
-        #[derive(serde::Serialize)]
-        struct ImageBinaryFormat<'a> {
-            w: usize,
-            h: usize,
-            bytes: &'a [u8],
-        }
-
-        let payload = serde_json::to_vec(&ImageBinaryFormat {
-            w: image.width,
-            h: image.height,
-            bytes: &image.bytes,
-        }).unwrap();
+        let configured_format = {
+            let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
+            cfg.cache.image_transport_format.clone()
+        };
+        let (payload, blob_format) = match Self::encode_image_for_transport(&image, &configured_format) {
+            Some(result) => result,
+            None => {
+                error!("Failed to encode image payload using transport format {}", configured_format);
+                return;
+            }
+        };
 
         let enc_data = match dk.encrypt_binary(&payload) {
             Ok(d) => d,
@@ -557,7 +604,10 @@ impl ClipboardMonitor {
         let payload = serde_json::json!({
             "type": "image",
             "blob_uuid": uuid,
-            "wrapped_key": wrapped_dk
+            "blob_format": blob_format,
+            "content_id": content_id,
+            "wrapped_key": wrapped_dk,
+            "sender_device_name": device_label
         });
 
         let msg = WsMessage {
@@ -572,12 +622,6 @@ impl ClipboardMonitor {
             error!("Failed to dispatch image over WS channel: {}", e);
         } else {
             info!("Successfully dispatched encrypted image to WS channel.");
-            if let Some(chan) = ui_tx {
-                let _ = chan.send(ClipboardEvent {
-                    status: "sent".to_string(),
-                    preview: Self::generate_thumbnail_base64(&image),
-                }).await;
-            }
         }
     }
 
@@ -590,6 +634,7 @@ impl ClipboardMonitor {
         let srv_url = self.server_url.clone();
         let tok = self.token.clone();
         let ws_tx = self.ws_tx.clone();
+        let device_label = self.device_label.clone();
 
         tokio::spawn(async move {
             info!("Clipboard receiving daemon started.");
@@ -637,7 +682,8 @@ impl ClipboardMonitor {
 
                         info!("Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...", plaintext.len());
 
-                        crate::cache::record_clipboard_text(&plaintext, "sync");
+                        let sender_device_name = msg.payload["sender_device_name"].as_str().unwrap_or("其他设备");
+                        crate::cache::record_clipboard_text(&plaintext, &format!("sync:{sender_device_name}"));
 
                         // Set text with loopback protection
                         {
@@ -709,30 +755,39 @@ impl ClipboardMonitor {
                         };
 
                         #[derive(serde::Deserialize)]
-                        struct ImageBinaryFormat {
+                        struct LegacyImageBinaryFormat {
                             w: usize,
                             h: usize,
                             bytes: Vec<u8>,
                         }
 
-                        let img_data: ImageBinaryFormat = match serde_json::from_slice(&dec_bytes) {
-                            Ok(v) => v,
-                            Err(e) => { error!("Failed to parse decrypted image shape: {}", e); continue; }
+                        let blob_format = msg.payload["blob_format"].as_str().unwrap_or("png");
+                        let raw = if let Some(raw) = Self::decode_encoded_image_to_raw_image(&dec_bytes, blob_format) {
+                            raw
+                        } else {
+                            match serde_json::from_slice::<LegacyImageBinaryFormat>(&dec_bytes) {
+                                Ok(v) => {
+                                    let mut raw = Vec::with_capacity(16 + v.bytes.len());
+                                    raw.extend_from_slice(&(v.w as u64).to_le_bytes());
+                                    raw.extend_from_slice(&(v.h as u64).to_le_bytes());
+                                    raw.extend_from_slice(&v.bytes);
+                                    raw
+                                }
+                                Err(e) => {
+                                    error!("Failed to parse decrypted image payload: {}", e);
+                                    continue;
+                                }
+                            }
                         };
 
-                        {
-                            let mut raw = Vec::with_capacity(16 + img_data.bytes.len());
-                            raw.extend_from_slice(&(img_data.w as u64).to_le_bytes());
-                            raw.extend_from_slice(&(img_data.h as u64).to_le_bytes());
-                            raw.extend_from_slice(&img_data.bytes);
-                            crate::cache::record_clipboard_image(&raw, "sync");
-                        }
+                        let sender_device_name = msg.payload["sender_device_name"].as_str().unwrap_or("其他设备");
+                        let content_id = msg.payload["content_id"].as_str();
+                        crate::cache::record_clipboard_image(&raw, &format!("sync:{sender_device_name}"), content_id);
 
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let arboard_img = arboard::ImageData {
-                                width: img_data.w,
-                                height: img_data.h,
-                                bytes: std::borrow::Cow::Owned(img_data.bytes),
+                            let Some(arboard_img) = Self::raw_image_to_arboard_image(&raw) else {
+                                error!("Failed to convert raw image payload for clipboard");
+                                continue;
                             };
                             
                             let hash = Self::calculate_image_hash(&arboard_img);
@@ -745,10 +800,9 @@ impl ClipboardMonitor {
                             if let Err(e) = clipboard.set_image(arboard_img.clone()) {
                                 error!("Failed to set arboard image clipboard: {}", e);
                             } else if let Some(chan) = ui_tx.as_ref() {
-                                let preview = Self::generate_thumbnail_base64(&arboard_img);
                                 let _ = chan.send(ClipboardEvent {
                                     status: "received".to_string(),
-                                    preview,
+                                    preview: Self::image_preview_label(arboard_img.width, arboard_img.height),
                                 }).await;
                             }
                         }
@@ -770,7 +824,7 @@ impl ClipboardMonitor {
                     let items = {
                         let history_lock = crate::cache::HISTORY_MANAGER.read().unwrap();
                         if let Some(history) = history_lock.as_ref() {
-                            match history.get_today_entries() {
+                            match history.get_recent_entries(5) {
                                 Ok(entries) => {
                                     let mut items = Vec::new();
                                     for e in &entries {
@@ -782,16 +836,29 @@ impl ClipboardMonitor {
                                                     "type": "text",
                                                     "hash": e.hash,
                                                     "content": content,
+                                                    "source": e.source,
                                                 }))
                                         } else {
                                             cache_lock.as_ref().and_then(|c| c.read_image(&e.hash).ok())
                                                 .map(|data| {
                                                     use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                                    let configured_format = {
+                                                        let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
+                                                        cfg.cache.image_transport_format.clone()
+                                                    };
+                                                    let (payload_data, image_encoding) = match Self::raw_image_to_arboard_image(&data)
+                                                        .and_then(|img| Self::encode_image_for_transport(&img, &configured_format)) {
+                                                        Some((encoded, fmt)) => (encoded, fmt),
+                                                        None => (data, "raw"),
+                                                    };
                                                     serde_json::json!({
                                                         "timestamp": e.timestamp,
                                                         "type": "image",
                                                         "hash": e.hash,
-                                                        "data_b64": STANDARD.encode(&data),
+                                                        "content_id": e.hash,
+                                                        "data_b64": STANDARD.encode(&payload_data),
+                                                        "image_encoding": image_encoding,
+                                                        "source": e.source,
                                                     })
                                                 })
                                         };
@@ -814,21 +881,65 @@ impl ClipboardMonitor {
                         let response = crate::ws::WsMessage {
                             sender_uid: 0,
                             sender_device_id: 0,
-                            target_devices: vec![],
+                            target_devices: vec![msg.sender_device_id],
                             r#type: "history_response".to_string(),
                             payload: serde_json::json!({
-                                "items": items,
+                                "items": [],
                                 "has_more": false,
+                                "responder_device_name": device_label,
                             }),
                         };
-                        if let Err(e) = ws_tx.send(response).await {
-                            error!("Failed to send history_response: {}", e);
-                        } else {
-                            info!("Sent history_response with {} items", items.len());
+                        let mut batch: Vec<serde_json::Value> = Vec::new();
+                        let mut batch_size = 0usize;
+                        let max_batch_size = 256 * 1024;
+                        let mut sent_batches = 0u32;
+
+                        for item in items {
+                            let item_size = serde_json::to_vec(&item).map(|v| v.len()).unwrap_or(0);
+                            if !batch.is_empty() && batch_size + item_size > max_batch_size {
+                                let response = crate::ws::WsMessage {
+                                    payload: serde_json::json!({
+                                        "items": batch,
+                                        "has_more": true,
+                                        "responder_device_name": device_label,
+                                    }),
+                                    ..response.clone()
+                                };
+                                if let Err(e) = ws_tx.send(response).await {
+                                    error!("Failed to send history_response batch: {}", e);
+                                    batch = Vec::new();
+                                    break;
+                                }
+                                sent_batches += 1;
+                                batch = Vec::new();
+                                batch_size = 0;
+                            }
+                            batch_size += item_size;
+                            batch.push(item);
+                        }
+
+                        if !batch.is_empty() || sent_batches == 0 {
+                            let response = crate::ws::WsMessage {
+                                payload: serde_json::json!({
+                                    "items": batch,
+                                    "has_more": false,
+                                    "responder_device_name": device_label,
+                                }),
+                                ..response
+                            };
+                            if let Err(e) = ws_tx.send(response).await {
+                                error!("Failed to send final history_response batch: {}", e);
+                            } else {
+                                sent_batches += 1;
+                                info!("Sent history_response in {} batch(es)", sent_batches);
+                            }
                         }
                     }
                 } else if msg.r#type == "history_response" {
                     info!("Received history_response from peer device");
+                    let responder_device_name = msg.payload["responder_device_name"]
+                        .as_str()
+                        .unwrap_or("其他设备");
                     let items = match msg.payload["items"].as_array() {
                         Some(arr) => arr,
                         None => { error!("Invalid history_response: no items array"); continue; }
@@ -839,18 +950,36 @@ impl ClipboardMonitor {
                         let hash = item["hash"].as_str().unwrap_or("");
                         let _timestamp = item["timestamp"].as_i64().unwrap_or(0);
                         if hash.is_empty() { continue; }
+                        let source = item["source"].as_str().unwrap_or("pull:其他设备");
+                        let label = if let Some(rest) = source.strip_prefix("sync:") {
+                            format!("pull:{rest}")
+                        } else if source == "local" {
+                            format!("pull:{responder_device_name}")
+                        } else if let Some(rest) = source.strip_prefix("pull:") {
+                            format!("pull:{rest}")
+                        } else {
+                            format!("pull:{responder_device_name}")
+                        };
 
                         if entry_type == "text" {
                             if let Some(content) = item["content"].as_str() {
-                                crate::cache::record_clipboard_text(content, "pull");
+                                crate::cache::record_clipboard_text(content, &label);
                                 imported += 1;
                             }
                         } else if entry_type == "image" {
                             if let Some(data_b64) = item["data_b64"].as_str() {
                                 use base64::{Engine as _, engine::general_purpose::STANDARD};
                                 if let Ok(data) = STANDARD.decode(data_b64) {
-                                    crate::cache::record_clipboard_image(&data, "pull");
-                                    imported += 1;
+                                    let content_id = item["content_id"].as_str().or(Some(hash));
+                                    let raw = if item["image_encoding"].as_str().unwrap_or("") == "raw" {
+                                        Some(data)
+                                    } else {
+                                        Self::decode_encoded_image_to_raw_image(&data, item["image_encoding"].as_str().unwrap_or("png"))
+                                    };
+                                    if let Some(raw) = raw {
+                                        crate::cache::record_clipboard_image(&raw, &label, content_id);
+                                        imported += 1;
+                                    }
                                 }
                             }
                         }

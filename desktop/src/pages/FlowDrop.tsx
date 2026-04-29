@@ -81,7 +81,7 @@ export default function Drop() {
                 <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <span style={{ fontSize: '12px', background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', padding: '4px 10px', borderRadius: '100px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            {isLoading ? <RefreshCw size={12} className="animate-spin" /> : <><Wifi size={12} /> {onlineOtherDevices.length} 个可见节点</>}
+                            {isLoading ? <RefreshCw size={12} className="animate-spin" /> : <><Wifi size={12} /> {t('drop.visible_targets', { count: onlineOtherDevices.length })}</>}
                         </span>
                     </div>
 
@@ -89,8 +89,8 @@ export default function Drop() {
                         {onlineOtherDevices.length === 0 ? (
                             <div style={{ padding: '32px', textAlign: 'center', color: 'var(--color-text-dim)', background: 'var(--color-surface-elevated)', borderRadius: '12px', border: '1px solid var(--color-glass-border)' }}>
                                 <Smartphone size={32} style={{ opacity: 0.2, marginBottom: '12px' }} />
-                                <p style={{ margin: 0, fontSize: '14px' }}>暂未发现其他在线终端</p>
-                                <p style={{ margin: '8px 0 0 0', fontSize: '12px', opacity: 0.6 }}>确保另一台电脑已登录且网络畅通</p>
+                                <p style={{ margin: 0, fontSize: '14px' }}>{t('drop.no_targets_title')}</p>
+                                <p style={{ margin: '8px 0 0 0', fontSize: '12px', opacity: 0.6 }}>{t('drop.no_targets_desc')}</p>
                             </div>
                         ) : (
                             onlineOtherDevices.map(dev => (
@@ -106,7 +106,7 @@ export default function Drop() {
                                     </div>
                                     <div style={{ flex: 1 }}>
                                         <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', color: 'var(--color-text-main)', fontWeight: 600 }}>{dev.name}</h4>
-                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--color-text-muted)' }}>P2P 端到端直连分发就绪</p>
+                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--color-text-muted)' }}>{t('drop.target_ready')}</p>
                                     </div>
                                     <button
                                         onClick={() => handleSendFile(dev.name)}
@@ -144,9 +144,9 @@ export default function Drop() {
                         <UploadCloud size={48} color="var(--color-primary)" style={{ opacity: 0.8 }} />
                         <div style={{ textAlign: 'center' }}>
                             <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--color-text-main)', fontSize: '16px' }}>
-                                Click to Browse
+                                {t('drop.browse_title')}
                             </p>
-                            <p style={{ margin: 0, fontSize: '13px' }}>or drag & drop files here to beam</p>
+                            <p style={{ margin: 0, fontSize: '13px' }}>{t('drop.browse_desc')}</p>
                         </div>
                     </div>
                 </div>

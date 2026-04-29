@@ -9,7 +9,7 @@
 
 ## 一、项目概述
 
-YiboFlow 是一款以私有 NAS 为底座的跨平台生产力增强套件，核心功能包括：缩略语全局替换 (FlowSnap)、词库智能补全 (FlowHint)、端到端加密剪贴板同步 (FlowSync)、P2P 文件互传 (FlowDrop)。AI 引擎作为通用后端能力完整保留，FlowWriter 妙笔与 FlowPredict 先知功能已取消。
+YiboFlow 是一款以本地优先与私有同步为核心的跨平台生产力增强套件，核心功能包括：缩略语全局替换 (FlowSnap)、词库智能补全 (FlowHint)、端到端加密剪贴板同步 (FlowSync)、P2P 文件互传 (FlowDrop)，以及本机直连 AI 服务 API 测试工具 FlowProbe。服务端职责收束为登录、认证、配置保存与同步。
 
 ### 1.1 项目规模统计
 
@@ -82,7 +82,7 @@ YiboFlow 是一款以私有 NAS 为底座的跨平台生产力增强套件，核
 
 | # | 债务项 | 影响 |
 |---|--------|------|
-| TD1 | `Feature` 枚举缺少 `FlowWriter`、`FlowPredict`（已明确取消，代码中无需体现） | 无 |
+| TD1 | `Feature` 枚举仅覆盖当前保留模块，未再包含已取消的历史 AI 页面 | 无 |
 | TD2 | `main.rs` 中的硬编码 NAS URL `http://localhost:8080` | 无法适应生产环境 |
 | TD3 | `dictionary.rs` 中 `SmartEntry` 的 `trigger_key` 和 `keyword` 均为 `Option<String>` 但始终为 `None` | FlowSnap 触发机制设计未完整实现 |
 | TD4 | 缺少版本兼容性检查机制（规格 §16.3 要求 `compatibility.json`） | 客户端-服务端版本不匹配风险 |
@@ -100,7 +100,7 @@ YiboFlow 是一款以私有 NAS 为底座的跨平台生产力增强套件，核
 | **FlowSync 烽火** | MK/DK E2EE 同步 | ✅ 实现 | 图片同步完整，移动端推送未实现 |
 | **FlowDrop 走镖** | P2P TCP + 断点续传 + SHA-256 | ⚠️ 部分实现 | P2P offer/handle 存在但断点续传不完整 |
 | **FlowRules 中枢** | 矩阵 UI + 全功能权限 | ⚠️ 部分实现 | 仅 FlowSnap/FlowHint/FlowSync 三功能 |
-| **AI 引擎** | 多 Provider + 优先级链 | ✅ 配置完整 | `core/src/ai/` 模块完整保留 |
+| **FlowProbe API 测试** | 多协议直连探测 | ✅ 已实现 | 桌面端本机直连测试 OpenAI Compatible、Ollama、Gemini OpenAI Compatible、Anthropic、Custom |
 | **导入导出系统** | .ybflow 备份/恢复 | ⚠️ 部分实现 | `backup.rs` 存在但完整流程待验证 |
 | **本地账户系统** | 多用户隔离 + 会话管理 | ✅ 实现 | `local_auth.rs` 完整实现 |
 | **Vault 增量同步** | Delta sync + Compaction | ⚠️ 部分实现 | `sync/vault.rs`、`sync/packager.rs` 存在，compaction 未完整实现 |

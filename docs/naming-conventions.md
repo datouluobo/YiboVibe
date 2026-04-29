@@ -31,7 +31,7 @@
 | FlowMind | 灵思 | `FlowMind.tsx` | `/app/flowmind` | Sparkles | 统一智能输入引擎 |
 | FlowSync | 烽火 | `FlowSync.tsx` | `/app/flowsync` | Flame | 端到端加密剪贴板同步 |
 | FlowDrop | 走镖 | `FlowDrop.tsx` | `/app/flowdrop` | Truck | P2P 跨设备安全文件传输 |
-| FlowProbe | 探脉 | `FlowProbe.tsx` | `/app/flowprobe` | Activity | AI 端点探测与连通性测试 |
+| FlowProbe | 探脉 | `FlowProbe.tsx` | `/app/flowprobe` | Activity | 本机直连 AI 服务 API 测试工具 |
 | FlowKeys | 键谱 | `FlowKeys.tsx` | `/app/flowkeys` | Keyboard | 键盘按键重映射与快捷键配置 |
 | FlowRules | 中枢 | `FlowRules.tsx` | `/app/flowrules` | ShieldCheck | 按应用精细控制功能模块 |
 | Settings | 韬略 | `Settings.tsx` | `/app/settings` | Settings | 主题、语言与全局偏好配置 |

@@ -1,4 +1,5 @@
 /target/
+/target-*/
 /spikes/**/target/
 /core/target/
 /desktop/target/

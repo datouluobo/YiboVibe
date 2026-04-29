@@ -148,6 +148,16 @@ impl HistoryManager {
         Ok(())
     }
 
+    pub fn update_source_by_hash(&self, hash: &str, source: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE history SET source = ?1 WHERE hash = ?2",
+            params![source, hash],
+        )
+        .map_err(|e| format!("Update source failed: {}", e))?;
+        Ok(())
+    }
+
     pub fn touch_by_id(&self, id: i64, new_timestamp: i64) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -362,24 +372,17 @@ impl HistoryManager {
         results
     }
 
-    pub fn get_today_entries(&self) -> Result<Vec<HistoryEntry>, String> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let day_start = now - (now % 86_400_000);
-
+    pub fn get_recent_entries(&self, limit: u32) -> Result<Vec<HistoryEntry>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT id, timestamp, type, hash, size, preview, pinned, source
-                 FROM history WHERE timestamp >= ?1 ORDER BY timestamp ASC",
+                   FROM history ORDER BY timestamp DESC LIMIT ?1",
             )
             .map_err(|e| format!("Prepare failed: {}", e))?;
 
         let entries = stmt
-            .query_map(params![day_start], |row| self::row_to_entry(row))
+            .query_map(params![limit], |row| self::row_to_entry(row))
             .map_err(|e| format!("Query failed: {}", e))?
             .filter_map(|r| r.ok())
             .collect();

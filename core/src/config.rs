@@ -9,37 +9,31 @@ lazy_static! {
     pub static ref GLOBAL_CONFIG: Arc<RwLock<AppConfig>> = Arc::new(RwLock::new(AppConfig::load_or_default()));
 }
 
-
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum AiProvider {
-    DeepSeek,
-    OpenAI,
-    Gemini,
+pub enum ProbeProtocol {
+    OpenAiCompatible,
+    Ollama,
+    GeminiOpenAiCompatible,
     Anthropic,
-    OllamaLocal,
-    OllamaLAN,
     Custom,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct AiEndpoint {
-    pub provider: AiProvider,
+pub struct ProbeTarget {
+    pub id: String,
+    pub name: String,
+    pub protocol: ProbeProtocol,
     pub base_url: String,
-    pub api_key: String,
     pub model: String,
     pub is_enabled: bool,
-    pub priority: i32,
+    pub order: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct AiEngineConfig {
-    pub endpoints: Vec<AiEndpoint>,
-    pub auto_mode: bool,
+pub struct ProbeToolConfig {
+    pub targets: Vec<ProbeTarget>,
     pub timeout_ms: u64,
 }
-
-
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WindowConfig {
@@ -88,11 +82,14 @@ pub struct CacheConfig {
     pub cache_max_size_mb: u64,
     #[serde(default = "default_cleanup_days")]
     pub auto_cleanup_days: u32,
+    #[serde(default = "default_image_transport_format")]
+    pub image_transport_format: String,
 }
 
 fn default_cache_dir() -> String { String::new() }
 fn default_cache_max_size() -> u64 { 200 }
 fn default_cleanup_days() -> u32 { 7 }
+fn default_image_transport_format() -> String { "png".to_string() }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AppConfig {
@@ -111,7 +108,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub sync_meta: crate::sync::SyncMeta,
     #[serde(default)]
-    pub ai_engine: AiEngineConfig,
+    pub probe_tool: ProbeToolConfig,
     #[serde(default)]
     pub dictionary_order: Vec<String>,
     #[serde(default = "default_fingerprint")]
@@ -130,6 +127,48 @@ fn default_min_chars() -> usize { 2 }
 fn default_true() -> bool { true }
 fn default_empty_string() -> String { String::new() }
 fn default_fingerprint() -> String { uuid::Uuid::new_v4().to_string() }
+fn default_probe_timeout() -> u64 { 10000 }
+
+fn default_probe_targets() -> Vec<ProbeTarget> {
+    vec![
+        ProbeTarget {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Local Ollama".to_string(),
+            protocol: ProbeProtocol::Ollama,
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "".to_string(),
+            is_enabled: true,
+            order: 1,
+        },
+        ProbeTarget {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "NAS Ollama".to_string(),
+            protocol: ProbeProtocol::Ollama,
+            base_url: "http://192.168.1.88:11434".to_string(),
+            model: "".to_string(),
+            is_enabled: true,
+            order: 2,
+        },
+        ProbeTarget {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "DeepSeek API".to_string(),
+            protocol: ProbeProtocol::OpenAiCompatible,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            model: "deepseek-chat".to_string(),
+            is_enabled: true,
+            order: 3,
+        },
+        ProbeTarget {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Anthropic API".to_string(),
+            protocol: ProbeProtocol::Anthropic,
+            base_url: "https://api.anthropic.com".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            is_enabled: true,
+            order: 4,
+        },
+    ]
+}
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
@@ -150,25 +189,15 @@ impl AppConfig {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Self>(&content) {
                     Ok(mut config) => {
-                        if config.ai_engine.endpoints.is_empty() {
-                            config.ai_engine.endpoints = vec![
-                                AiEndpoint {
-                                    provider: AiProvider::OllamaLAN,
-                                    base_url: "http://192.168.1.88:11434/v1".to_string(),
-                                    api_key: "".to_string(),
-                                    model: "".to_string(), // Leave empty to force fetch
-                                    is_enabled: true,
-                                    priority: 1,
-                                },
-                                AiEndpoint {
-                                    provider: AiProvider::OllamaLAN,
-                                    base_url: "https://lisibo.top:98/v1".to_string(),
-                                    api_key: "".to_string(),
-                                    model: "".to_string(),
-                                    is_enabled: true,
-                                    priority: 2,
-                                },
-                            ];
+                        if config.probe_tool.targets.is_empty() {
+                            config.probe_tool.targets = default_probe_targets();
+                        }
+                        if config.probe_tool.timeout_ms == 0 {
+                            config.probe_tool.timeout_ms = default_probe_timeout();
+                            config.save();
+                        }
+                        if config.cache.image_transport_format.is_empty() {
+                            config.cache.image_transport_format = default_image_transport_format();
                             config.save();
                         }
                         return config;
@@ -187,27 +216,9 @@ impl AppConfig {
             flowhint_min_chars: 2,
             flowhint_accept_tab: true,
             flowhint_accept_right: true,
-            ai_engine: AiEngineConfig {
-                endpoints: vec![
-                    AiEndpoint {
-                        provider: AiProvider::OllamaLAN,
-                        base_url: "http://127.0.0.1:11434/v1".to_string(),
-                        api_key: "".to_string(),
-                        model: "".to_string(),
-                        is_enabled: true,
-                        priority: 1,
-                    },
-                    AiEndpoint {
-                        provider: AiProvider::OllamaLAN,
-                        base_url: "http://localhost:11434/v1".to_string(),
-                        api_key: "".to_string(),
-                        model: "".to_string(),
-                        is_enabled: true,
-                        priority: 2,
-                    },
-                ],
-                auto_mode: true,
-                timeout_ms: 30000,
+            probe_tool: ProbeToolConfig {
+                targets: default_probe_targets(),
+                timeout_ms: default_probe_timeout(),
             },
             sync_meta: crate::sync::SyncMeta::default(),
             dictionary_order: Vec::new(),

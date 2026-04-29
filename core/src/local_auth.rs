@@ -1,5 +1,6 @@
 use log::info;
 use serde::{Deserialize, Serialize};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -30,6 +31,24 @@ lazy_static! {
     pub static ref ACTIVE_USER: RwLock<Option<String>> = RwLock::new(None);
 }
 
+fn resolve_dev_instance_dir(base: &PathBuf) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_str = exe.to_string_lossy().to_ascii_lowercase();
+    if !exe_str.contains("\\target-sim") {
+        return None;
+    }
+
+    let scope = exe.parent().map(|p| p.to_path_buf()).unwrap_or(exe);
+    let mut hasher = DefaultHasher::new();
+    scope.to_string_lossy().hash(&mut hasher);
+    let instance_id = format!("{:x}", hasher.finish());
+
+    let mut path = base.clone();
+    path.push("instances");
+    path.push(instance_id);
+    Some(path)
+}
+
 /// Helper to get the base `%APPDATA%/YiboFlow` global dir
 pub fn get_yiboflow_global_dir() -> PathBuf {
     if let Ok(val) = std::env::var("YIBOFLOW_DATA_DIR") {
@@ -45,6 +64,14 @@ pub fn get_yiboflow_global_dir() -> PathBuf {
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
     }
+
+    if let Some(dev_path) = resolve_dev_instance_dir(&path) {
+        if !dev_path.exists() {
+            let _ = fs::create_dir_all(&dev_path);
+        }
+        return dev_path;
+    }
+
     path
 }
 

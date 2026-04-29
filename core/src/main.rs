@@ -108,7 +108,7 @@ async fn run_mock_api_test() {
                         // --- NEW: Start Clipboard Listener ---
                         let arc_mk = std::sync::Arc::new(mk);
                         let cb_monitor =
-                            clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), None);
+    clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), None, "Mocked Desktop Agent".to_string());
                         cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
 

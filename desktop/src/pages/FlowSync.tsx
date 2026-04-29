@@ -19,6 +19,21 @@ interface HistoryEntry {
     source: string;
 }
 
+interface FlowSyncDiagnostics {
+    exe_path: string;
+    global_dir: string;
+    active_user_dir: string;
+    active_user: string | null;
+    is_connected: boolean;
+    receive_only_mode: boolean;
+    server_url: string | null;
+    username: string | null;
+    device_name: string | null;
+    remote_device_id: number | null;
+    persistent_device_fingerprint: string;
+    runtime_device_fingerprint: string;
+}
+
 type TimeFilter = "all" | "today" | "yesterday" | "week" | "month";
 type TypeFilter = "all" | "text" | "image";
 
@@ -29,6 +44,19 @@ function getDayStart(d: Date): Date {
     const r = new Date(d);
     r.setHours(0, 0, 0, 0);
     return r;
+}
+
+function describeSource(source: string, t: (key: string, options?: any) => string) {
+    if (source === "local") {
+        return t("sync.source_local", "本机");
+    }
+    if (source.startsWith("sync:")) {
+        return t("sync.source_sync_device", { device: source.slice(5) || t("sync.source_other_device", "其他设备") });
+    }
+    if (source.startsWith("pull:")) {
+        return t("sync.source_pull_device", { device: source.slice(5) || t("sync.source_other_device", "其他设备") });
+    }
+    return source;
 }
 
 const FilterChip = memo(function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -86,6 +114,9 @@ export default function FlowSync() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [totalCount, setTotalCount] = useState(0);
     const [syncEnabled, setSyncEnabled] = useState(true);
+    const [receiveOnlyMode, setReceiveOnlyMode] = useState(false);
+    const [diagnostics, setDiagnostics] = useState<FlowSyncDiagnostics | null>(null);
+    const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
     const clearMenuRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -114,6 +145,29 @@ export default function FlowSync() {
         }).catch(e => console.error("Failed to load sync feature state:", e));
     }, []);
 
+    useEffect(() => {
+        invoke<{ receive_only_mode: boolean }>("get_flowsync_runtime_state")
+            .then((state) => setReceiveOnlyMode(!!state.receive_only_mode))
+            .catch(e => console.error("Failed to load FlowSync runtime state:", e));
+    }, []);
+
+    const loadDiagnostics = useCallback(async () => {
+        setDiagnosticsLoading(true);
+        try {
+            const data = await invoke<FlowSyncDiagnostics>("get_flowsync_diagnostics");
+            setDiagnostics(data);
+            setReceiveOnlyMode(!!data.receive_only_mode);
+        } catch (e) {
+            console.error("Failed to load FlowSync diagnostics:", e);
+        } finally {
+            setDiagnosticsLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadDiagnostics();
+    }, [loadDiagnostics]);
+
     const toggleSyncEnabled = async () => {
         try {
             await invoke("toggle_default_feature", { feature: "flowsync" });
@@ -122,6 +176,17 @@ export default function FlowSync() {
             console.error("Failed to toggle sync feature:", e);
         }
     };
+
+    const toggleReceiveOnlyMode = useCallback(async () => {
+        const next = !receiveOnlyMode;
+        try {
+            await invoke("set_flowsync_receive_only_mode", { enabled: next });
+            setReceiveOnlyMode(next);
+            loadDiagnostics();
+        } catch (e) {
+            console.error("Failed to toggle receive-only mode:", e);
+        }
+    }, [loadDiagnostics, receiveOnlyMode]);
 
     const fetchHistory = useCallback(async () => {
         try {
@@ -346,29 +411,149 @@ export default function FlowSync() {
                     <p style={{ color: "var(--color-text-muted)", fontSize: "13px", marginTop: "6px" }}>
                         {t("sync.subtitle")}
                     </p>
+                    <div style={{
+                        marginTop: "10px",
+                        display: "inline-flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        padding: "8px 12px",
+                        borderRadius: "12px",
+                        background: receiveOnlyMode ? "rgba(245, 158, 11, 0.12)" : "var(--color-surface-elevated)",
+                        border: `1px solid ${receiveOnlyMode ? "rgba(245, 158, 11, 0.28)" : "var(--color-border)"}`,
+                        color: receiveOnlyMode ? "#f59e0b" : "var(--color-text-muted)",
+                        maxWidth: "780px",
+                    }}>
+                        <span style={{ fontSize: "12px", fontWeight: 700, whiteSpace: "nowrap", paddingTop: "1px" }}>
+                            {receiveOnlyMode ? t("sync.test_mode_badge_on") : t("sync.test_mode_badge_off")}
+                        </span>
+                        <span style={{ fontSize: "12px", lineHeight: 1.5 }}>
+                            {receiveOnlyMode ? t("sync.test_mode_desc_on") : t("sync.test_mode_desc_off")}
+                        </span>
+                    </div>
                 </div>
-                <button
-                    onClick={toggleSyncEnabled}
-                    style={{
-                        background: syncEnabled ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
-                        border: `1px solid ${syncEnabled ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
-                        color: syncEnabled ? '#22c55e' : 'var(--color-text-muted)',
-                        padding: '8px 14px',
-                        borderRadius: '100px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontSize: '12px',
-                        whiteSpace: 'nowrap',
-                        transition: 'all 0.15s',
-                        height: '36px',
-                    }}
-                >
-                    {syncEnabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
-                    {syncEnabled ? t('sync.feature_on') : t('sync.feature_off')}
-                </button>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button
+                        onClick={toggleReceiveOnlyMode}
+                        style={{
+                            background: receiveOnlyMode ? "rgba(245, 158, 11, 0.12)" : "var(--color-surface-elevated)",
+                            border: `1px solid ${receiveOnlyMode ? "rgba(245, 158, 11, 0.3)" : "var(--color-border)"}`,
+                            color: receiveOnlyMode ? "#f59e0b" : "var(--color-text-muted)",
+                            padding: "8px 14px",
+                            borderRadius: "100px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "5px",
+                            cursor: "pointer",
+                            fontWeight: 600,
+                            fontSize: "12px",
+                            whiteSpace: "nowrap",
+                            transition: "all 0.15s",
+                            height: "36px",
+                        }}
+                    >
+                        {receiveOnlyMode ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                        {receiveOnlyMode ? t("sync.test_mode_on") : t("sync.test_mode_off")}
+                    </button>
+                    <button
+                        onClick={toggleSyncEnabled}
+                        style={{
+                            background: syncEnabled ? 'rgba(34, 197, 94, 0.12)' : 'var(--color-surface-elevated)',
+                            border: `1px solid ${syncEnabled ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                            color: syncEnabled ? '#22c55e' : 'var(--color-text-muted)',
+                            padding: '8px 14px',
+                            borderRadius: '100px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            fontSize: '12px',
+                            whiteSpace: 'nowrap',
+                            transition: 'all 0.15s',
+                            height: '36px',
+                        }}
+                    >
+                        {syncEnabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                        {syncEnabled ? t('sync.feature_on') : t('sync.feature_off')}
+                    </button>
+                </div>
+            </div>
+
+            <div style={{
+                marginBottom: "12px",
+                padding: "12px 14px",
+                background: "var(--color-surface-elevated)",
+                border: "1px solid var(--color-glass-border)",
+                borderRadius: "var(--radius-md)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+            }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                    <div>
+                        <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--color-text-main)" }}>
+                            {t("sync.diagnostics_title", "同步诊断")}
+                        </div>
+                        <div style={{ fontSize: "12px", color: "var(--color-text-muted)", marginTop: "3px" }}>
+                            {t("sync.diagnostics_desc", "用于确认当前窗口是否真的是新版本，以及它实际使用的设备身份和数据目录。")}
+                        </div>
+                    </div>
+                    <button
+                        onClick={loadDiagnostics}
+                        disabled={diagnosticsLoading}
+                        style={{
+                            padding: "6px 10px",
+                            borderRadius: "10px",
+                            border: "1px solid var(--color-border)",
+                            background: "var(--color-surface)",
+                            color: "var(--color-text-main)",
+                            cursor: diagnosticsLoading ? "default" : "pointer",
+                            opacity: diagnosticsLoading ? 0.6 : 1,
+                            fontSize: "12px",
+                            fontWeight: 600,
+                        }}
+                    >
+                        {diagnosticsLoading ? t("sync.diagnostics_refreshing", "刷新中...") : t("sync.diagnostics_refresh", "刷新诊断")}
+                    </button>
+                </div>
+
+                <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                    gap: "8px 14px",
+                    fontSize: "12px",
+                }}>
+                    {[
+                        [t("sync.diag_connected", "同步连接"), diagnostics?.is_connected ? t("sync.diag_yes", "是") : t("sync.diag_no", "否")],
+                        [t("sync.diag_receive_only", "同机接收测试"), diagnostics?.receive_only_mode ? t("sync.diag_yes", "是") : t("sync.diag_no", "否")],
+                        [t("sync.diag_active_user", "活动账号"), diagnostics?.active_user || "-"],
+                        [t("sync.diag_runtime_user", "远端登录账号"), diagnostics?.username || "-"],
+                        [t("sync.diag_device_name", "设备名"), diagnostics?.device_name || "-"],
+                        [t("sync.diag_remote_device_id", "远端 device_id"), diagnostics?.remote_device_id != null ? String(diagnostics.remote_device_id) : "-"],
+                        [t("sync.diag_server_url", "服务端"), diagnostics?.server_url || "-"],
+                        [t("sync.diag_exe_path", "当前 exe"), diagnostics?.exe_path || "-"],
+                        [t("sync.diag_global_dir", "实例数据根目录"), diagnostics?.global_dir || "-"],
+                        [t("sync.diag_active_user_dir", "当前用户目录"), diagnostics?.active_user_dir || "-"],
+                        [t("sync.diag_persistent_fp", "持久化指纹"), diagnostics?.persistent_device_fingerprint || "-"],
+                        [t("sync.diag_runtime_fp", "运行时指纹"), diagnostics?.runtime_device_fingerprint || "-"],
+                    ].map(([label, value]) => (
+                        <div key={String(label)} style={{ minWidth: 0 }}>
+                            <div style={{ color: "var(--color-text-dim)", marginBottom: "3px" }}>{label}</div>
+                            <div style={{
+                                color: "var(--color-text-main)",
+                                fontFamily: '"Fira Code", monospace, Consolas',
+                                background: "var(--color-surface)",
+                                border: "1px solid var(--color-border)",
+                                borderRadius: "8px",
+                                padding: "7px 9px",
+                                lineHeight: 1.45,
+                                wordBreak: "break-all",
+                            }}>
+                                {value}
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
 
             {/* Filter Bar */}
@@ -444,6 +629,9 @@ export default function FlowSync() {
                                                         <span style={{ fontSize: "12px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
                                                             {new Date(log.timestamp).toLocaleTimeString()}
                                                         </span>
+                                                    </div>
+                                                    <div style={{ fontSize: "11px", color: "var(--color-text-dim)", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                                        {describeSource(log.source, t)}
                                                     </div>
                                                     <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", color: "var(--color-text-muted)" }}>
                                                         {log.type === "image" ? <ImageIcon size={13} style={{ flexShrink: 0, opacity: 0.9 }} /> : <FileType size={13} style={{ flexShrink: 0, opacity: 0.9 }} />}
@@ -629,9 +817,10 @@ export default function FlowSync() {
                                 <span>
                                     {t("sync.meta_status")}：
                                     <span style={{ color: selectedLog.source === "local" ? "var(--color-primary)" : "#22c55e", fontWeight: 500 }}>
-                                        {selectedLog.source === "local" ? t("sync.status_sent") : t("sync.status_received")}
+                                        {selectedLog.source === "local" ? t("sync.status_sent") : selectedLog.source.startsWith("pull:") ? t("sync.status_pulled", "拉取导入") : t("sync.status_received")}
                                     </span>
                                 </span>
+                                <span>{t("sync.meta_source", "来源")}：{describeSource(selectedLog.source, t)}</span>
                                 <span>
                                     {t("sync.meta_type")}：
                                     {selectedLog.type === "image" ? (
@@ -754,7 +943,7 @@ export default function FlowSync() {
                     disabled={pulling}
                     style={{ padding: "4px 10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", opacity: pulling ? 0.5 : 1 }}
                 >
-                    <Download size={13} /> {pulling ? "拉取中..." : "拉取今天"}
+                    <Download size={13} /> {pulling ? "拉取中..." : "拉取最近5条"}
                 </button>
 
                 <div style={{ position: "relative" }} ref={clearMenuRef}>

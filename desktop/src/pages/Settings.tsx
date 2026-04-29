@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Palette, Monitor, Laptop, Zap, CheckCircle2, Save, UploadCloud, AlertTriangle, AlertCircle, ToggleRight, ToggleLeft, RefreshCw, HardDrive, FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
+import { formatOperationError } from "../utils/errorDisplay";
 
 export default function Settings() {
     const { t, i18n } = useTranslation();
@@ -57,7 +58,11 @@ export default function Settings() {
         const savedPwdB64 = localStorage.getItem('yiboflow_saved_pwd');
 
         if (!serverUrl || serverUrl === 'local' || !username || !savedPwdB64) {
-            setAlertDialog({ isOpen: true, message: "必须在已连接远程云端的账号下使用此高级同步库功能！(需开启记住密码)", type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_REMOTE_ACCOUNT_REQUIRED", "settings.error_remote_account_required"),
+                type: 'error'
+            });
             return;
         }
 
@@ -85,7 +90,11 @@ export default function Settings() {
                         setTimeout(() => window.location.reload(), 2000);
                     }
                 } catch (e) {
-                    setAlertDialog({ isOpen: true, message: "操作失败：" + String(e), type: 'error' });
+                    setAlertDialog({
+                        isOpen: true,
+                        message: formatOperationError(t, "SETTINGS_VAULT_ACTION_FAILED", "settings.error_vault_action_failed", { detail: String(e) }),
+                        type: 'error'
+                    });
                 } finally {
                     setSyncLoading(false);
                 }
@@ -105,7 +114,11 @@ export default function Settings() {
             }
         } catch (e) {
             console.error(e);
-            setAlertDialog({ isOpen: true, message: "导出失败: " + String(e), type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_EXPORT_FAILED", "settings.error_export_failed", { detail: String(e) }),
+                type: 'error'
+            });
         }
     };
 
@@ -126,14 +139,22 @@ export default function Settings() {
                             setAlertDialog({ isOpen: true, message: "导入成功，即将刷新！", type: 'success' });
                             setTimeout(() => window.location.reload(), 1500);
                         } catch (err) {
-                            setAlertDialog({ isOpen: true, message: "导入过程失败: " + String(err), type: 'error' });
+                            setAlertDialog({
+                                isOpen: true,
+                                message: formatOperationError(t, "SETTINGS_IMPORT_FAILED", "settings.error_import_failed", { detail: String(err) }),
+                                type: 'error'
+                            });
                         }
                     }
                 });
             }
         } catch (e) {
             console.error(e);
-            setAlertDialog({ isOpen: true, message: "打开文件失败: " + String(e), type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_OPEN_FILE_FAILED", "settings.error_open_file_failed", { detail: String(e) }),
+                type: 'error'
+            });
         }
     };
 
@@ -167,6 +188,18 @@ export default function Settings() {
 
     const [cacheStats, setCacheStats] = useState<any>(null);
     const [cacheMaxSize, setCacheMaxSize] = useState(200);
+    const [imageTransportFormat, setImageTransportFormat] = useState("png");
+    const cacheUsageRatio = cacheStats?.max_size_mb ? cacheStats.total_size_mb / cacheStats.max_size_mb : 0;
+    const cacheOverLimit = Boolean(cacheStats && cacheStats.total_size_mb > cacheStats.max_size_mb);
+    const cacheUsageTone = cacheOverLimit ? 'var(--color-danger)' : (cacheUsageRatio >= 0.85 ? 'var(--color-warning)' : 'var(--color-primary)');
+
+    const fetchRuntimeSettings = () => {
+        invoke("get_settings").then((settings: any) => {
+            if (settings?.image_transport_format) {
+                setImageTransportFormat(settings.image_transport_format);
+            }
+        }).catch(console.error);
+    };
 
     const fetchCacheStats = () => {
         invoke("get_cache_stats").then((stats: any) => {
@@ -175,7 +208,31 @@ export default function Settings() {
         }).catch(console.error);
     };
 
-    useEffect(() => { fetchCacheStats(); }, []);
+    useEffect(() => {
+        fetchCacheStats();
+        fetchRuntimeSettings();
+    }, []);
+
+    const persistImageTransportFormat = async (nextFormat: string) => {
+        try {
+            const settings: any = await invoke("get_settings");
+            await invoke("update_settings", {
+                isSyncEnabled: settings.is_sync_enabled,
+                flowhintMinChars: settings.flowhint_min_chars,
+                flowhintAcceptTab: settings.flowhint_accept_tab,
+                flowhintAcceptRight: settings.flowhint_accept_right,
+                imageTransportFormat: nextFormat,
+            });
+            setImageTransportFormat(nextFormat);
+            setAlertDialog({ isOpen: true, message: "图片传输格式已更新。新复制的图片会按新格式同步。", type: 'success' });
+        } catch (e) {
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_IMAGE_TRANSPORT_FORMAT_FAILED", "settings.error_image_transport_format_failed", { detail: String(e) }),
+                type: 'error'
+            });
+        }
+    };
 
     const handleCacheDirChange = async () => {
         try {
@@ -190,7 +247,11 @@ export default function Settings() {
                 setAlertDialog({ isOpen: true, message: "缓存目录已迁移！", type: 'success' });
             }
         } catch (e) {
-            setAlertDialog({ isOpen: true, message: "迁移失败: " + String(e), type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_CACHE_DIR_CHANGE_FAILED", "settings.error_cache_dir_change_failed", { detail: String(e) }),
+                type: 'error'
+            });
         }
     };
 
@@ -200,7 +261,11 @@ export default function Settings() {
             setCacheMaxSize(mb);
             fetchCacheStats();
         } catch (e) {
-            setAlertDialog({ isOpen: true, message: "设置失败: " + String(e), type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_CACHE_MAX_SIZE_FAILED", "settings.error_cache_max_size_failed", { detail: String(e) }),
+                type: 'error'
+            });
         }
     };
 
@@ -213,7 +278,11 @@ export default function Settings() {
             }
             setIsAutostartEnabled(!isAutostartEnabled);
         } catch (e) {
-            setAlertDialog({ isOpen: true, message: "设置自启失败: " + String(e), type: 'error' });
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_AUTOSTART_FAILED", "settings.error_autostart_failed", { detail: String(e) }),
+                type: 'error'
+            });
         }
     };
 
@@ -307,50 +376,163 @@ export default function Settings() {
 
             {/* Clipboard History Cache */}
             <div className="glass-panel" style={{ padding: '18px 24px', borderRadius: 'var(--radius-lg)', marginBottom: '24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-                    <HardDrive size={16} color="var(--color-primary)" />
-                    <span style={{ fontSize: '14px', fontWeight: 600 }}>剪贴板历史缓存</span>
-                    {cacheStats && (
-                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginLeft: 'auto' }}>
-                            {cacheStats.total_entries} 条 · {cacheStats.total_size_mb} MB / {cacheStats.max_size_mb} MB
-                        </span>
-                    )}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '200px' }}>
-                        <FolderOpen size={14} color="var(--color-text-muted)" />
-                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                            {cacheStats?.cache_dir || '...'}
-                        </span>
-                        <button
-                            onClick={handleCacheDirChange}
-                            className="btn-ghost"
-                            style={{ padding: '4px 10px', fontSize: '11px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
-                        >
-                            更改目录
-                        </button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', marginBottom: '18px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <HardDrive size={16} color="var(--color-primary)" />
+                        <div>
+                            <div style={{ fontSize: '14px', fontWeight: 600 }}>剪贴板历史缓存</div>
+                            <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', marginTop: '4px' }}>
+                                自动保留最近活动；超出上限后会按未固定条目的最早记录开始清理。
+                            </div>
+                        </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>空间上限：</span>
-                        {[100, 200, 500, 1000].map(mb => (
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', alignItems: 'stretch' }}>
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        padding: '14px 16px',
+                        borderRadius: '14px',
+                        background: 'var(--color-surface-elevated)',
+                        border: '1px solid var(--color-glass-border)',
+                        minWidth: 0,
+                        minHeight: '168px'
+                    }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-main)' }}>缓存目录</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                            <FolderOpen size={14} color="var(--color-text-muted)" />
+                            <span style={{ fontSize: '12px', color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+                                {cacheStats?.cache_dir || '...'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', lineHeight: 1.5 }}>
+                            迁移后会沿用现有数据库和缓存文件。
+                        </div>
+                        <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end' }}>
                             <button
-                                key={mb}
-                                onClick={() => handleCacheMaxSizeChange(mb)}
-                                style={{
-                                    padding: '3px 10px',
-                                    borderRadius: '4px',
-                                    fontSize: '11px',
-                                    fontWeight: cacheMaxSize === mb ? 600 : 400,
-                                    background: cacheMaxSize === mb ? 'var(--color-primary-glow)' : 'transparent',
-                                    color: cacheMaxSize === mb ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                                    border: cacheMaxSize === mb ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.15s',
-                                }}
+                                onClick={handleCacheDirChange}
+                                className="btn-ghost"
+                                style={{ padding: '6px 12px', fontSize: '11px', border: '1px solid var(--color-border)', borderRadius: '8px' }}
                             >
-                                {mb >= 1000 ? `${mb / 1000}G` : `${mb}M`}
+                                更改目录
                             </button>
-                        ))}
+                        </div>
+                    </div>
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        padding: '14px 16px',
+                        borderRadius: '14px',
+                        background: 'var(--color-surface-elevated)',
+                        border: '1px solid var(--color-glass-border)',
+                        minWidth: 0,
+                        minHeight: '168px'
+                    }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-main)' }}>图片传输格式</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                            {[
+                                { value: 'png', label: 'PNG 无损' },
+                                { value: 'webp_lossless', label: 'WebP 无损' },
+                                { value: 'jpeg', label: 'JPEG 有损' },
+                            ].map((option) => {
+                                const active = imageTransportFormat === option.value;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        onClick={() => void persistImageTransportFormat(option.value)}
+                                        style={{
+                                            padding: '6px 12px',
+                                            borderRadius: '999px',
+                                            fontSize: '11px',
+                                            fontWeight: active ? 600 : 500,
+                                            background: active ? 'var(--color-primary-glow)' : 'transparent',
+                                            color: active ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                            border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.15s',
+                                        }}
+                                    >
+                                        {option.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', lineHeight: 1.5 }}>
+                            PNG 最稳，WebP 更省流量，JPEG 最小但会损失画质。
+                        </div>
+                    </div>
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        padding: '14px 16px',
+                        borderRadius: '14px',
+                        background: 'var(--color-surface-elevated)',
+                        border: '1px solid var(--color-glass-border)',
+                        minWidth: 0,
+                        minHeight: '168px'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+                            <div>
+                                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-main)' }}>空间上限</div>
+                                <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', marginTop: '4px', lineHeight: 1.5 }}>
+                                    达到上限后自动按未固定条目的最早记录回收。
+                                </div>
+                            </div>
+                            {cacheStats && (
+                                <div style={{ textAlign: 'right' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 600, color: cacheUsageTone }}>
+                                        {cacheStats.total_entries} 条 · {cacheStats.total_size_mb} MB / {cacheStats.max_size_mb} MB
+                                    </div>
+                                    {cacheOverLimit && (
+                                        <div style={{ fontSize: '11px', color: 'var(--color-danger)', marginTop: '4px' }}>
+                                            当前已超上限
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                        <div style={{
+                            width: '100%',
+                            height: '8px',
+                            borderRadius: '999px',
+                            background: 'var(--color-bg-base)',
+                            overflow: 'hidden'
+                        }}>
+                            <div style={{
+                                width: `${Math.min(cacheUsageRatio * 100, 100)}%`,
+                                height: '100%',
+                                borderRadius: '999px',
+                                background: cacheUsageTone,
+                                transition: 'width 0.2s ease'
+                            }} />
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                            {[100, 200, 500, 1000].map(mb => (
+                                <button
+                                    key={mb}
+                                    onClick={() => handleCacheMaxSizeChange(mb)}
+                                    style={{
+                                        padding: '5px 12px',
+                                        borderRadius: '999px',
+                                        fontSize: '11px',
+                                        fontWeight: cacheMaxSize === mb ? 600 : 500,
+                                        background: cacheMaxSize === mb ? 'var(--color-primary-glow)' : 'transparent',
+                                        color: cacheMaxSize === mb ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                        border: cacheMaxSize === mb ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s',
+                                    }}
+                                >
+                                    {mb >= 1000 ? `${mb / 1000}G` : `${mb}M`}
+                                </button>
+                            ))}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', lineHeight: 1.5, marginTop: 'auto' }}>
+                            修改上限会立即触发一次回收检查，新写入条目也会继续自动检查。
+                        </div>
                     </div>
                 </div>
             </div>
@@ -484,7 +666,11 @@ export default function Settings() {
                                         setAppConfig((prev: any) => ({ ...prev, device_fingerprint: newFp }));
                                         setAlertDialog({ isOpen: true, message: "识别码重置成功！请重新启动本程序以完全生效（新身份将在下次登录时激活）。", type: 'success' });
                                     } catch (e) {
-                                        setAlertDialog({ isOpen: true, message: "重置失败: " + String(e), type: 'error' });
+                                        setAlertDialog({
+                                            isOpen: true,
+                                            message: formatOperationError(t, "SETTINGS_DEVICE_FINGERPRINT_RESET_FAILED", "settings.error_device_fingerprint_reset_failed", { detail: String(e) }),
+                                            type: 'error'
+                                        });
                                     }
                                 }
                             });

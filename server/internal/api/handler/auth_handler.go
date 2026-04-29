@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 
 	"github.com/datouluobo/YiboFlow/server/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 )
 
 // RegisterRequest represents the JSON payload for user registration
@@ -31,11 +33,57 @@ type GeneralResponse struct {
 	Data any    `json:"data,omitempty"`
 }
 
+func formatValidationError(err error) string {
+	var validationErrs validator.ValidationErrors
+	if !errors.As(err, &validationErrs) {
+		return "Invalid request payload. Please check the submitted fields and try again."
+	}
+
+	for _, fieldErr := range validationErrs {
+		switch fieldErr.Field() {
+		case "Username":
+			switch fieldErr.Tag() {
+			case "required":
+				return "Username is required."
+			case "min":
+				return "Username must be at least 3 characters long."
+			case "max":
+				return "Username must be 50 characters or fewer."
+			}
+		case "Password":
+			switch fieldErr.Tag() {
+			case "required":
+				return "Master password is required."
+			case "min":
+				return "Master password must be at least 8 characters long. Use a longer password to better protect your encrypted data."
+			}
+		case "KdfSalt":
+			if fieldErr.Tag() == "required" {
+				return "Missing key-derivation salt. Please retry the registration request."
+			}
+		case "DeviceName":
+			if fieldErr.Tag() == "required" {
+				return "Device name is required."
+			}
+		case "DeviceType":
+			if fieldErr.Tag() == "required" {
+				return "Device type is required."
+			}
+		case "DeviceFingerprint":
+			if fieldErr.Tag() == "required" {
+				return "Device fingerprint is required."
+			}
+		}
+	}
+
+	return "Invalid request payload. Please check the submitted fields and try again."
+}
+
 // Register as a handler function for `POST /api/v1/user/register`
 func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, GeneralResponse{Code: 400, Msg: "Invalid request paylaod: " + err.Error()})
+		c.JSON(http.StatusBadRequest, GeneralResponse{Code: 400, Msg: formatValidationError(err)})
 		return
 	}
 
@@ -64,7 +112,7 @@ func Register(c *gin.Context) {
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, GeneralResponse{Code: 400, Msg: "Invalid request paylaod: " + err.Error()})
+		c.JSON(http.StatusBadRequest, GeneralResponse{Code: 400, Msg: formatValidationError(err)})
 		return
 	}
 
