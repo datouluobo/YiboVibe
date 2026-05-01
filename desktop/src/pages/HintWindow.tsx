@@ -74,9 +74,6 @@ function buildTheme(s: number): Theme {
 
 interface CfgHintWindow {
     pos_type: number;
-    scale: number;
-    width: number;
-    height: number;
 }
 
 export default function HintWindow() {
@@ -84,20 +81,15 @@ export default function HintWindow() {
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [visible, setVisible] = useState(false);
     const [posType, setPosType] = useState(0);
-    const [scale, setScale] = useState(1.0);
-    const [, setHintWidth] = useState(-1);
-    const [, setHintHeight] = useState(-1);
     const [hoverIdx, setHoverIdx] = useState(-1);
 
+    const scale = 1.0;
     const T = buildTheme(scale);
 
     const loadConfig = useCallback(() => {
         invoke<{ hint_window: CfgHintWindow }>("get_app_config")
             .then(cfg => {
                 setPosType(cfg.hint_window.pos_type);
-                setScale(cfg.hint_window.scale || 1.0);
-                setHintWidth(cfg.hint_window.width ?? -1);
-                setHintHeight(cfg.hint_window.height ?? -1);
             })
             .catch(() => {});
     }, []);
@@ -200,69 +192,6 @@ export default function HintWindow() {
         document.addEventListener("mouseup", onDragEnd);
     }, [onDragMove, onDragEnd]);
 
-    // ── Resize logic (width + height, independent axes) ──
-    const resizeState = useRef({
-        active: false,
-        startScreenX: 0,
-        startScreenY: 0,
-        startWidth: 0,
-        startHeight: 0,
-        minHeight: 0,
-    });
-
-    const onResizeMove = useCallback((e: MouseEvent) => {
-        if (!resizeState.current.active) return;
-        const dpr = window.devicePixelRatio || 1;
-        const dx = Math.round((e.screenX - resizeState.current.startScreenX) * dpr);
-        const dy = Math.round((e.screenY - resizeState.current.startScreenY) * dpr);
-        const newW = Math.max(200, resizeState.current.startWidth + dx);
-        const newH = Math.max(resizeState.current.minHeight, resizeState.current.startHeight + dy);
-        setHintWidth(newW);
-        setHintHeight(newH);
-        invoke("resize_hint_window", { width: newW, height: newH }).catch(() => {});
-    }, []);
-
-    const onResizeEnd = useCallback(() => {
-        if (!resizeState.current.active) return;
-        resizeState.current.active = false;
-        document.removeEventListener("mousemove", onResizeMove);
-        document.removeEventListener("mouseup", onResizeEnd);
-        setHintWidth(w => {
-            setHintHeight(h => {
-                invoke("set_hint_window_size", { width: w, height: h }).catch(() => {});
-                return h;
-            });
-            return w;
-        });
-    }, [onResizeMove]);
-
-    const onResizeStart = useCallback(async (e: React.MouseEvent) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-
-        let currentW = Math.round(300 * scale);
-        let currentH = Math.round((58 + Math.min(candidates.length || 4, 8) * 34) * scale);
-
-        try {
-            const winSize = await getCurrentWindow().innerSize();
-            // innerSize() returns PhysicalSize (already in physical pixels)
-            currentW = Math.round(winSize.width);
-            currentH = Math.round(winSize.height);
-        } catch {}
-
-        const minH = Math.round((68 + 2 * 34) * scale);
-
-        resizeState.current.startScreenX = e.screenX;
-        resizeState.current.startScreenY = e.screenY;
-        resizeState.current.startWidth = currentW;
-        resizeState.current.startHeight = currentH;
-        resizeState.current.minHeight = minH;
-        resizeState.current.active = true;
-        document.addEventListener("mousemove", onResizeMove);
-        document.addEventListener("mouseup", onResizeEnd);
-    }, [scale, candidates.length, onResizeMove, onResizeEnd]);
-
     // ── Accept ──
     const handleAccept = async (index: number) => {
         if (!visible) return;
@@ -277,7 +206,6 @@ export default function HintWindow() {
     if (!visible) return null;
 
     const gripDotSize = Math.max(2, Math.round(3 * scale));
-    const resizeHandleSize = Math.max(10, Math.round(14 * scale));
 
     return (
         <div style={{
@@ -471,30 +399,6 @@ export default function HintWindow() {
                             </svg>
                         </span>
                     </div>
-                </div>
-
-                {/* Resize handle - bottom right corner */}
-                <div
-                    onMouseDown={onResizeStart}
-                    style={{
-                        position: 'absolute',
-                        right: 2,
-                        bottom: 2,
-                        width: resizeHandleSize,
-                        height: resizeHandleSize,
-                        cursor: 'nwse-resize',
-                        color: T.textDim,
-                        opacity: 0.3,
-                        transition: 'opacity 0.15s',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.3'; }}
-                >
-                    <svg width={resizeHandleSize} height={resizeHandleSize} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ display: 'block' }}>
-                        <path d="M12 14L14 14L14 12" />
-                        <path d="M8.5 14L14 8.5" />
-                        <path d="M5 14L14 5" />
-                    </svg>
                 </div>
             </div>
         </div>

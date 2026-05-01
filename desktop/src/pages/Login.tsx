@@ -51,6 +51,8 @@ export default function Login() {
         return "";
     });
     const [deviceName, setDeviceName] = useState(() => localStorage.getItem('yiboflow_device_name') || "Sim-PC-1");
+    const [passwordHint, setPasswordHint] = useState("");
+    const [loginHint, setLoginHint] = useState<{ attempts: number; hint: string } | null>(null);
     const [loading, setLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState("");
     const [isRegistering, setIsRegistering] = useState(false);
@@ -96,6 +98,7 @@ export default function Login() {
         setLoading(true);
         setErrorMsg("");
         setSuccessMsg("");
+        setLoginHint(null);
 
         try {
             if (isRegistering) {
@@ -103,6 +106,7 @@ export default function Login() {
                     serverUrl,
                     username,
                     password,
+                    passwordHint: passwordHint || "",
                 });
 
                 if (result) {
@@ -112,18 +116,19 @@ export default function Login() {
                     setErrorMsg(formatOperationError(t, "AUTH_REGISTER_FAILED", "login.error_register_failed"));
                 }
             } else {
-                const result: boolean = await invoke("connect_engine", {
+                const result: { success: boolean; role: string } = await invoke("connect_engine", {
                     serverUrl,
                     username,
                     password,
                     deviceName,
                 });
 
-                if (result) {
+                if (result.success) {
                     localStorage.setItem('yiboflow_server_url', serverUrl);
                     localStorage.setItem('yiboflow_username', username);
                     localStorage.setItem('yiboflow_device_name', deviceName);
                     localStorage.setItem('yiboflow_connected_at', new Date().toISOString());
+                    localStorage.setItem('yiboflow_user_role', result.role);
                     if (rememberPwd) {
                         localStorage.setItem('yiboflow_remember_pwd', 'true');
                         localStorage.setItem('yiboflow_saved_pwd', btoa(password));
@@ -145,7 +150,20 @@ export default function Login() {
             }
         } catch (error) {
             const errStr = String(error);
-            if (isRegistering && (errStr.includes("err") || errStr.toLowerCase().includes("exist") || errStr.includes("409"))) {
+            if (!isRegistering && errStr.includes("LOGIN_HINT:")) {
+                try {
+                    const parts = errStr.split("LOGIN_HINT:")[1].split(":");
+                    const attempts = parseInt(parts[0], 10);
+                    const hint = parts.slice(1).join(":");
+                    setLoginHint({ attempts, hint });
+                    setErrorMsg(formatOperationError(t, "AUTH_INVALID_CREDENTIALS", "login.error_login_invalid_credentials"));
+                } catch {
+                    setErrorMsg(resolveAuthError(errStr, isRegistering, t));
+                }
+            } else if (!isRegistering && errStr.includes("ACCOUNT_DISABLED")) {
+                setLoginHint(null);
+                setErrorMsg(t("login.error_account_disabled"));
+            } else if (isRegistering && (errStr.includes("err") || errStr.toLowerCase().includes("exist") || errStr.includes("409"))) {
                 setShowConflictModal(true);
             } else if (!isRegistering && errStr.includes("SYNC_CONFLICT_DIVERGED:")) {
                 try {
@@ -352,6 +370,33 @@ export default function Login() {
                         )}
                     </div>
 
+                    {isRegistering && (
+                        <div className="input-group">
+                            <label htmlFor="passwordHint">{t('login.password_hint')}</label>
+                            <input
+                                id="passwordHint"
+                                type="text"
+                                className="modern-input"
+                                placeholder={t('login.placeholder_password_hint')}
+                                value={passwordHint}
+                                onChange={(e) => setPasswordHint(e.target.value)}
+                                maxLength={200}
+                            />
+                            <div style={{ marginTop: "4px", fontSize: "11px", color: "var(--color-text-muted)" }}>
+                                {t('login.password_hint_warning')}
+                            </div>
+                        </div>
+                    )}
+
+                    {!isRegistering && loginHint && loginHint.hint && (
+                        <div style={{ marginTop: "8px", padding: "10px 12px", borderRadius: "8px", background: "rgba(255,159,10,0.1)", border: "1px solid rgba(255,159,10,0.2)", fontSize: "13px", color: "#ff9f0a" }}>
+                            <span style={{ fontWeight: 500 }}>{t('login.password_hint_label')}</span> {loginHint.hint}
+                            <span style={{ display: "block", marginTop: "4px", fontSize: "12px", color: "var(--color-text-muted)" }}>
+                                {t('login.failed_attempts', { count: loginHint.attempts })}
+                            </span>
+                        </div>
+                    )}
+
                     {!isRegistering && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "12px", marginBottom: "4px", gap: "10px", whiteSpace: "nowrap" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -407,6 +452,8 @@ export default function Login() {
                                 setIsRegistering(!isRegistering);
                                 setErrorMsg("");
                                 setSuccessMsg("");
+                                setLoginHint(null);
+                                setPasswordHint("");
                             }}
                             style={{ fontSize: "14px", color: "var(--color-primary)" }}
                         >

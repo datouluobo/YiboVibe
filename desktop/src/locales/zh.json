@@ -20,7 +20,9 @@
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
         "tooltip_settings": "主题、语言与全局偏好配置",
         "tooltip_flowinfo": "关于 YiboFlow 的版本与信息",
-        "tooltip_flowkeys": "键盘按键重映射与快捷键配置"
+        "tooltip_flowkeys": "键盘按键重映射与快捷键配置",
+        "admin": "管理",
+        "tooltip_admin": "管理员用户管理与设备管理"
     },
     "login": {
         "title_login": "登录 YiboFlow",
@@ -66,7 +68,13 @@
         "error_rename_failed": "本地账号重命名失败：{{detail}}",
         "error_override_failed": "强制覆盖远端账号失败：{{detail}}",
         "error_conflict_resolve_failed": "执行同步冲突处理失败：{{detail}}",
-        "rename_success": "本地账号已重命名，现在可以重新初始化。"
+        "rename_success": "本地账号已重命名，现在可以重新初始化。",
+        "password_hint": "密码提示（可选）",
+        "placeholder_password_hint": "帮助你回忆密码的线索",
+        "password_hint_warning": "请勿在提示中直接包含密码本身。",
+        "password_hint_label": "密码提示：",
+        "failed_attempts": "已失败 {{count}} 次",
+        "error_account_disabled": "该账号已被管理员禁用，请联系管理员。"
     },
     "dashboard": {
         "tab_sync": "仪表盘",
@@ -528,5 +536,44 @@
         "cat_mouse": "鼠标键",
         "feature_on": "已启用",
         "feature_off": "已禁用"
+    },
+    "admin": {
+        "title": "管理中心",
+        "subtitle": "管理员专用的用户管理与设备管理面板。",
+        "tab_users": "用户管理",
+        "tab_devices": "设备管理",
+        "search_placeholder": "搜索用户名或设备...",
+        "refresh": "刷新",
+        "loading": "加载数据中...",
+        "no_users": "暂无用户数据。",
+        "no_devices": "暂无设备数据。",
+        "col_uid": "UID",
+        "col_username": "用户名",
+        "col_role": "角色",
+        "col_status": "状态",
+        "col_created_at": "创建时间",
+        "col_actions": "操作",
+        "col_device_id": "ID",
+        "col_device_name": "设备名称",
+        "col_owner": "所属用户",
+        "col_device_type": "类型",
+        "col_last_seen": "最近活跃",
+        "enable_user": "启用",
+        "disable_user": "禁用",
+        "status_active": "已启用",
+        "status_disabled": "已禁用",
+        "reset_password": "重置密码",
+        "delete_user": "删除用户",
+        "kick_device": "踢出设备",
+        "confirm_delete_user": "确定要删除用户「{{username}}」吗？所有关联数据将被永久移除。",
+        "confirm_kick_device": "确定要踢出设备「{{deviceName}}」吗？该设备会话将被立即终止。",
+        "reset_password_warning": "正在为用户「{{username}}」重置密码。该用户需要用新密码重新登录。",
+        "e2ee_warning": "本系统采用端到端加密。重置密码后，所有此前同步的数据将不可恢复。用户需要从客户端设备重新配置。",
+        "new_password": "新密码",
+        "new_password_placeholder": "至少 8 个字符",
+        "new_password_hint": "密码提示（可选）",
+        "new_password_hint_placeholder": "帮助用户回忆密码的线索",
+        "cancel": "取消",
+        "confirm_reset": "确认重置"
     }
 }

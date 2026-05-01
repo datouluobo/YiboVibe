@@ -129,6 +129,22 @@ pub fn save_session(username: String) {
     crate::rules::reload();
 }
 
+pub fn clear_session() {
+    info!("[Session] Clearing active user");
+    *ACTIVE_USER.write().unwrap() = None;
+
+    let mut path = get_yiboflow_global_dir();
+    path.push("last_session.json");
+    let config = SessionConfig { last_username: None };
+    if let Ok(json) = serde_json::to_string_pretty(&config) {
+        let _ = fs::write(path, json);
+    }
+
+    crate::config::reload();
+    crate::dictionary::reload();
+    crate::rules::reload();
+}
+
 pub fn get_users_config_path() -> PathBuf {
     let mut path = get_yiboflow_global_dir();
     path.push("users.json");

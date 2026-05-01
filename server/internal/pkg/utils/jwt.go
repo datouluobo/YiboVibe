@@ -18,8 +18,10 @@ type Tokens struct {
 
 // CustomClaims represents the JWT payload
 type CustomClaims struct {
-	UID      uint `json:"uid"`
-	DeviceID uint `json:"device_id"`
+	UID      uint   `json:"uid"`
+	DeviceID uint   `json:"device_id"`
+	Role     string `json:"role"`
+	Status   string `json:"status"`
 	jwt.RegisteredClaims
 }
 
@@ -31,11 +33,13 @@ func getJWTSecret() []byte {
 	return []byte(secret)
 }
 
-func GenerateAccessToken(uid, deviceId uint) (string, error) {
+func GenerateAccessToken(uid, deviceId uint, role, status string) (string, error) {
 	expirationTime := time.Now().Add(15 * time.Minute) // Access Token TTL is 15 mins
 	claims := &CustomClaims{
 		UID:      uid,
 		DeviceID: deviceId,
+		Role:     role,
+		Status:   status,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

@@ -14,6 +14,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 const FlowInfo = lazy(() => import("./pages/FlowInfo"));
 const FlowKeys = lazy(() => import("./pages/FlowKeys"));
 const HintWindow = lazy(() => import("./pages/HintWindow"));
+const Admin = lazy(() => import("./pages/Admin"));
 
 import "./App.css";
 
@@ -121,6 +122,7 @@ function App() {
               <Route path="settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
               <Route path="flowinfo" element={<Suspense fallback={<PageFallback />}><FlowInfo /></Suspense>} />
               <Route path="flowkeys" element={<Suspense fallback={<PageFallback />}><FlowKeys /></Suspense>} />
+              <Route path="admin" element={<Suspense fallback={<PageFallback />}><Admin /></Suspense>} />
             </Route>
           </Routes>
         </div>
