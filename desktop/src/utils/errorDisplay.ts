@@ -19,7 +19,7 @@ export function resolveAuthError(rawError: string, isRegistering: boolean, t: Tr
         if (lower.includes("username") && lower.includes("at least 3")) {
             return withCode(t, t("login.error_register_username_too_short"), "AUTH_REGISTER_USERNAME_TOO_SHORT");
         }
-        if (lower.includes("user already exists") || lower.includes("already exists") || lower.includes("409")) {
+        if (lower.includes("user already exists") || lower.includes("already exists") || lower.includes("already taken") || lower.includes("409")) {
             return withCode(t, t("login.error_register_user_exists"), "AUTH_USER_EXISTS");
         }
         if (lower.includes("invalid request payload")) {

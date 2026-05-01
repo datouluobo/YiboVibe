@@ -8,7 +8,7 @@ mod probe;
 
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
-    static ref HINT_WINDOW_CFG: std::sync::Mutex<(i32, i32, i32, i32, i32, f32, i32, i32)> = std::sync::Mutex::new((0, -1, -1, 0, 20, 1.0, 0, 0));
+    static ref HINT_WINDOW_CFG: std::sync::Mutex<(i32, i32, i32, i32, i32)> = std::sync::Mutex::new((0, -1, -1, 0, 20));
 }
 
 fn refresh_hint_window_cfg() {
@@ -20,16 +20,16 @@ fn refresh_hint_window_cfg() {
         cfg.hint_window.fixed_y,
         cfg.hint_window.offset_x,
         cfg.hint_window.offset_y,
-        cfg.hint_window.scale,
-        cfg.hint_window.width,
-        cfg.hint_window.height,
     );
 }
 
-use yiboflow_core::api::{ApiClient, LoginRequest, RegisterRequest};
+use yiboflow_core::api::{ApiClient, LoginRequest, LoginFailData, RegisterRequest};
 use yiboflow_core::clipboard::ClipboardMonitor;
 use yiboflow_core::crypto::MasterKey;
 use yiboflow_core::ws::WsClient;
+
+const MAIN_WINDOW_DEFAULT_WIDTH: f64 = 1440.0;
+const MAIN_WINDOW_DEFAULT_HEIGHT: f64 = 900.0;
 
 // We can store shared state here later, like the WsClient channel for sending new text.
 pub struct AppState {
@@ -41,6 +41,8 @@ pub struct AppState {
     pub runtime_remote_device_id: Mutex<Option<u32>>,
     pub persistent_device_fingerprint: Mutex<Option<String>>,
     pub runtime_device_fingerprint: Mutex<Option<String>>,
+    pub runtime_access_token: Mutex<Option<String>>,
+    pub runtime_role: Mutex<Option<String>>,
 }
 
 #[derive(serde::Serialize)]
@@ -82,6 +84,49 @@ fn resolve_runtime_device_fingerprint(base_fingerprint: &str) -> String {
     }
 }
 
+fn normalize_main_window_size(window: &tauri::WebviewWindow) {
+    let window = window.clone();
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        if window.is_maximized().unwrap_or(false) {
+            return;
+        }
+
+        let Ok(size) = window.inner_size() else {
+            return;
+        };
+
+        let current_width = size.width as f64;
+        let current_height = size.height as f64;
+        let needs_resize =
+            current_width < MAIN_WINDOW_DEFAULT_WIDTH || current_height < MAIN_WINDOW_DEFAULT_HEIGHT;
+
+        if !needs_resize {
+            return;
+        }
+
+        info!(
+            "Normalize main window size from {}x{} to {}x{}",
+            size.width,
+            size.height,
+            MAIN_WINDOW_DEFAULT_WIDTH as u32,
+            MAIN_WINDOW_DEFAULT_HEIGHT as u32
+        );
+
+        if let Err(err) = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            MAIN_WINDOW_DEFAULT_WIDTH,
+            MAIN_WINDOW_DEFAULT_HEIGHT,
+        ))) {
+            warn!("Failed to normalize main window size: {}", err);
+            return;
+        }
+
+        let _ = window.center();
+    });
+}
+
 
 
 #[tauri::command]
@@ -89,6 +134,7 @@ async fn register_engine(
     server_url: String,
     username: String,
     password: String,
+    password_hint: Option<String>,
 ) -> Result<bool, String> {
     info!(
         "Tauri Command Received: register_engine -> Server: {}, User: {}",
@@ -107,6 +153,7 @@ async fn register_engine(
         username,
         password,
         kdf_salt,
+        password_hint: password_hint.unwrap_or_default(),
     };
 
     let res = client
@@ -121,6 +168,12 @@ async fn register_engine(
     }
 }
 
+#[derive(serde::Serialize)]
+struct ConnectResult {
+    success: bool,
+    role: String,
+}
+
 #[tauri::command]
 async fn connect_engine(
     app: tauri::AppHandle,
@@ -129,12 +182,13 @@ async fn connect_engine(
     username: String,
     password: String,
     device_name: String,
-) -> Result<bool, String> {
+) -> Result<ConnectResult, String> {
     {
         let connected_flag = state.is_connected.lock().await;
         if *connected_flag {
              info!("Already connected. Bypassing engine setup to prevent duplicate monitors.");
-             return Ok(true);
+             let role = state.runtime_role.lock().await.clone().unwrap_or_else(|| "user".to_string());
+             return Ok(ConnectResult { success: true, role });
         }
     }
 
@@ -152,7 +206,8 @@ async fn connect_engine(
     );
 
     if server_url == "local" {
-        return yiboflow_core::local_auth::login_local_user(&username, &password);
+        yiboflow_core::local_auth::login_local_user(&username, &password)?;
+        return Ok(ConnectResult { success: true, role: "user".to_string() });
     }
 
     let config_fingerprint = {
@@ -183,15 +238,34 @@ async fn connect_engine(
     let _is_mock_target = server_url.contains("127.0.0.1") || server_url.contains("localhost");
     let (needs_mock, api_err) = match login_result {
         Ok(res) => {
-            if res.code == 200 && res.data.is_some() {
-                let d = res.data.unwrap();
+            if res.code == 403 {
+                return Err("ACCOUNT_DISABLED".to_string());
+            }
+            if res.code == 401 {
+                // Extract fail data (attempts + password_hint) and propagate to frontend
+                let fail_data: LoginFailData = res.data
+                    .as_ref()
+                    .and_then(|d| serde_json::from_value(d.clone()).ok())
+                    .unwrap_or_default();
+                if fail_data.password_hint.is_empty() {
+                    return Err(format!("Auth Failed: {}", res.msg));
+                } else {
+                    return Err(format!("LOGIN_HINT:{}:{}", fail_data.attempts, fail_data.password_hint));
+                }
+            }
+            if res.code == 200 {
+                let d = res.data.as_ref().unwrap();
+                let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let login_device_id = d.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let login_role = d.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string();
                 info!(
                     "Logged in from GUI! Received Token: {}...",
-                    &d.access_token[0..10]
+                    &access_token[0..10]
                 );
 
                 let pwd = password.clone();
-                let salt_b64 = d.kdf_salt.clone();
+                let salt_b64 = kdf_salt.clone();
                 let mk = tokio::task::spawn_blocking(move || MasterKey::derive(&pwd, &salt_b64))
                     .await
                     .map_err(|e| format!("Task failed: {}", e))?;
@@ -210,7 +284,7 @@ async fn connect_engine(
 
                 // Derive Vault key
                 let vk_pwd = password.clone();
-                let vk_salt = d.kdf_salt.clone();
+                let vk_salt = kdf_salt.clone();
                 let vault_key_res = tokio::task::spawn_blocking(move || {
                     yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
                 })
@@ -258,7 +332,7 @@ async fn connect_engine(
                 yiboflow_core::local_auth::save_session(username.clone());
 
                 // Auto cache the local password for unified offline use
-                let auto_salt = d.kdf_salt.clone();
+                let auto_salt = kdf_salt.clone();
                 let auto_pwd = password.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Ok(hash) =
@@ -274,7 +348,7 @@ async fn connect_engine(
                 .await;
 
                 // Attempt WS connection
-                match WsClient::connect(&server_url, &d.access_token).await {
+                match WsClient::connect(&server_url, &access_token).await {
                     Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Handshake sent implicitly.");
 
@@ -285,7 +359,7 @@ async fn connect_engine(
                         let arc_mk = Arc::new(mk);
                         let cb_monitor = ClipboardMonitor::new(
                             server_url.clone(),
-                            d.access_token.clone(),
+                            access_token.clone(),
                             arc_mk,
                             ws_client.tx.clone(),
                             Some(ui_tx),
@@ -305,8 +379,12 @@ async fn connect_engine(
                         let mut runtime_device_name = state.runtime_device_name.lock().await;
                         *runtime_device_name = Some(device_name.clone());
                         let mut runtime_remote_device_id = state.runtime_remote_device_id.lock().await;
-                        *runtime_remote_device_id = Some(d.device_id);
-                        return Ok(true);
+                        *runtime_remote_device_id = Some(login_device_id);
+                        let mut runtime_access_token = state.runtime_access_token.lock().await;
+                        *runtime_access_token = Some(access_token.clone());
+                        let mut runtime_role = state.runtime_role.lock().await;
+                        *runtime_role = Some(login_role.clone());
+                        return Ok(ConnectResult { success: true, role: login_role });
                     }
                     Err(e) => return Err(format!("WebSocket Connection Failed: {}", e)),
                 }
@@ -383,7 +461,7 @@ async fn connect_engine(
             *connected_flag = true;
 
             info!("Running in Pure Offline Mode! Snippets engine active.");
-            return Ok(true);
+            return Ok(ConnectResult { success: true, role: "user".to_string() });
         } else {
             return Err(format!(
                 "Network Error: {}. Offline login also failed (Wrong password or Uncached).",
@@ -572,10 +650,11 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Login failed during sync resolve: {}", login_result.msg));
     }
-    let d = login_result.data.unwrap();
+    let d = login_result.data.as_ref().unwrap();
+    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     let vk_pwd = password.clone();
-    let vk_salt = d.kdf_salt.clone();
+    let vk_salt = resp_kdf_salt.clone();
     let vault_key = tokio::task::spawn_blocking(move || {
         yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
     })
@@ -636,10 +715,11 @@ async fn resolve_file_conflicts(
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Login failed during sync resolve: {}", login_result.msg));
     }
-    let d = login_result.data.unwrap();
+    let d = login_result.data.as_ref().unwrap();
+    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     let vk_pwd = password.clone();
-    let vk_salt = d.kdf_salt.clone();
+    let vk_salt = resp_kdf_salt;
     let vault_key = tokio::task::spawn_blocking(move || {
         yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
     })
@@ -708,10 +788,11 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Auth Failed: {}", login_result.msg));
     }
-    let d = login_result.data.unwrap();
+    let d = login_result.data.as_ref().unwrap();
+    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     let vk_pwd = password.clone();
-    let vk_salt = d.kdf_salt.clone();
+    let vk_salt = resp_kdf_salt;
     let vault_key = tokio::task::spawn_blocking(move || {
         yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
     }).await.map_err(|e| e.to_string())??;
@@ -785,14 +866,16 @@ async fn get_cluster_devices(server_url: String, username: String, password: Str
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Auth Failed: {}", login_result.msg));
     }
-    let d = login_result.data.unwrap();
+    let d = login_result.data.as_ref().unwrap();
+    let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let resp_device_id = d.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     // Query /api/v1/sync/devices
-    let devices_res = client.get_devices(&d.access_token).await.map_err(|e| e.to_string())?;
+    let devices_res = client.get_devices(&access_token).await.map_err(|e| e.to_string())?;
 
     let mut out = Vec::new();
     for dev in devices_res {
-        let is_local = dev.id == d.device_id;
+        let is_local = dev.id == resp_device_id;
         
         out.push(ClusterDevice {
             id: format!("{}", dev.id),
@@ -1645,46 +1728,127 @@ fn set_hint_window_mode(app: tauri::AppHandle, pos_type: i32) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
-fn resize_hint_window(width: i32, height: i32) -> Result<(), String> {
-    if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
-        let _ = tx.send(yiboflow_core::hook_manager::HintEvent::Resize { width, height });
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn set_hint_window_size(app: tauri::AppHandle, width: i32, height: i32) -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
-    cfg.hint_window.width = width;
-    cfg.hint_window.height = height;
-    cfg.save();
-    drop(cfg);
-    info!("Hint window size set to: {}x{}", width, height);
-    let _ = app.emit("config-updated", ());
-    Ok(())
-}
-
-#[tauri::command]
-fn set_hint_window_scale(app: tauri::AppHandle, scale: f32) -> Result<(), String> {
-    let s = scale.max(0.6).min(1.8);
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
-    cfg.hint_window.scale = s;
-    cfg.save();
-    drop(cfg);
-    info!("Hint window scale set to: {:.1}", s);
-    let _ = app.emit("config-updated", ());
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[tauri::command]
 fn regenerate_device_fingerprint() -> Result<String, String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
-    let new_fp = uuid::Uuid::new_v4().to_string();
+    let new_fp = format!("manual-{}", uuid::Uuid::new_v4());
     cfg.device_fingerprint = new_fp.clone();
     let _ = cfg.save();
     Ok(new_fp)
+}
+
+// ---------------------------------------------------------------------------
+// Admin Commands — user management, device management (admin role required)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn get_user_role(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let role = state.runtime_role.lock().await.clone().unwrap_or_else(|| "user".to_string());
+    Ok(role)
+}
+
+#[tauri::command]
+async fn logout_engine(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    *state.is_connected.lock().await = false;
+    *state.ws_tx.lock().await = None;
+    *state.runtime_server_url.lock().await = None;
+    *state.runtime_username.lock().await = None;
+    *state.runtime_device_name.lock().await = None;
+    *state.runtime_remote_device_id.lock().await = None;
+    *state.runtime_access_token.lock().await = None;
+    *state.runtime_role.lock().await = None;
+
+    yiboflow_core::local_auth::clear_session();
+    Ok(true)
+}
+
+#[tauri::command]
+async fn admin_list_users(state: tauri::State<'_, AppState>) -> Result<Vec<yiboflow_core::api::AdminUserInfo>, String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_list_users(&token).await
+}
+
+#[tauri::command]
+async fn admin_update_user_status(
+    state: tauri::State<'_, AppState>,
+    uid: u32,
+    new_status: String,
+) -> Result<(), String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_update_user_status(&token, uid, &new_status).await
+}
+
+#[tauri::command]
+async fn admin_delete_user(
+    state: tauri::State<'_, AppState>,
+    uid: u32,
+) -> Result<(), String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_delete_user(&token, uid).await
+}
+
+#[tauri::command]
+async fn admin_reset_password(
+    state: tauri::State<'_, AppState>,
+    uid: u32,
+    new_password: String,
+    new_password_hint: String,
+) -> Result<(), String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_reset_password(&token, uid, &new_password, &new_password_hint).await
+}
+
+#[tauri::command]
+async fn admin_list_devices(state: tauri::State<'_, AppState>) -> Result<Vec<yiboflow_core::api::AdminDeviceInfo>, String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_list_devices(&token).await
+}
+
+#[tauri::command]
+async fn admin_kick_device(
+    state: tauri::State<'_, AppState>,
+    device_id: u32,
+) -> Result<(), String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_kick_device(&token, device_id).await
+}
+
+#[tauri::command]
+async fn admin_delete_user_vault(
+    state: tauri::State<'_, AppState>,
+    uid: u32,
+) -> Result<(), String> {
+    let token = state.runtime_access_token.lock().await.clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state.runtime_server_url.lock().await.clone()
+        .ok_or("Not connected to server".to_string())?;
+    let client = yiboflow_core::api::ApiClient::new(server_url);
+    client.admin_delete_user_vault(&token, uid).await
 }
 
 pub fn run() {
@@ -1732,6 +1896,8 @@ pub fn run() {
             runtime_remote_device_id: Mutex::new(None),
             persistent_device_fingerprint: Mutex::new(None),
             runtime_device_fingerprint: Mutex::new(None),
+            runtime_access_token: Mutex::new(None),
+            runtime_role: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
@@ -1791,6 +1957,7 @@ pub fn run() {
                 .build(app)?;
 
             let main_window = app.get_webview_window("main").unwrap();
+            normalize_main_window_size(&main_window);
 
             let window_clone = main_window.clone();
             main_window.on_window_event(move |event| {
@@ -1857,22 +2024,18 @@ pub fn run() {
                             use windows::Win32::UI::WindowsAndMessaging::{
                                 ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
                                 HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOZORDER, SWP_NOSIZE,
-                                SWP_NOMOVE,
                             };
                             match &ev_clone {
                                 HintEvent::Show { candidates, x, y, .. } => {
                                     let visible_count = candidates.len().min(8) as i32;
 
-                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy, cfg_scale, cfg_w, cfg_h) = {
+                                    let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy) = {
                                         let hint_cfg = HINT_WINDOW_CFG.lock().unwrap();
-                                        (hint_cfg.0, hint_cfg.1, hint_cfg.2, hint_cfg.3, hint_cfg.4, hint_cfg.5, hint_cfg.6, hint_cfg.7)
+                                        (hint_cfg.0, hint_cfg.1, hint_cfg.2, hint_cfg.3, hint_cfg.4)
                                     };
 
-                                    let scale = cfg_scale.max(0.6).min(1.8);
-                                    let auto_w = (300.0 * scale) as i32;
-                                    let auto_h = ((68 + visible_count * 34) as f32 * scale) as i32;
-                                    let outer_width = if cfg_w > 0 { cfg_w.max(200) } else { auto_w };
-                                    let outer_height = if cfg_h > 0 { cfg_h.max(auto_h) } else { auto_h };
+                                    let outer_width = 300;
+                                    let outer_height = 68 + visible_count * 34;
 
                                     let mut pos_x = *x;
                                     let mut pos_y = *y;
@@ -1935,17 +2098,6 @@ pub fn run() {
                                         );
                                     }
                                 }
-                                HintEvent::Resize { width, height } => {
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            hint_hwnd,
-                                            None,
-                                            0, 0,
-                                            *width, *height,
-                                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
-                                        );
-                                    }
-                                }
                                 _ => {}
                             }
                         }
@@ -2002,9 +2154,6 @@ pub fn run() {
             move_hint_window,
             reset_hint_position,
             set_hint_window_mode,
-            resize_hint_window,
-            set_hint_window_size,
-            set_hint_window_scale,
             read_clipboard_content,
             write_to_clipboard,
             write_image_to_clipboard,
@@ -2021,6 +2170,15 @@ pub fn run() {
             set_cache_max_size,
             get_history_content,
             pull_today_history,
+            get_user_role,
+            logout_engine,
+            admin_list_users,
+            admin_update_user_status,
+            admin_delete_user,
+            admin_reset_password,
+            admin_list_devices,
+            admin_kick_device,
+            admin_delete_user_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

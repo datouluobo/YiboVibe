@@ -39,7 +39,7 @@ pub struct SmartDictionary {
 fn default_type_custom() -> String { "custom".to_string() }
 
 fn default_min_trigger() -> usize {
-    2
+    3
 }
 
 pub fn get_dict_dir() -> PathBuf {
@@ -327,7 +327,7 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<(String,
 
     for id in dict_ids {
         if let Some(dict) = cache.get(id) {
-            let min_chars = crate::config::GLOBAL_CONFIG.read().unwrap().flowhint_min_chars;
+            let min_chars = dict.min_trigger_chars.max(1);
             for entry in &dict.entries {
                 let cand = &entry.content;
                 let cand_lower = cand.to_lowercase();

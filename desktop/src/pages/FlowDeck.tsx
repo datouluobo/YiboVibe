@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
     AlertTriangle,
     CheckCircle2,
@@ -11,7 +12,7 @@ import {
     ShieldCheck,
     UserCircle2,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { resolveSyncError } from "../utils/errorDisplay";
 
@@ -87,6 +88,23 @@ function formatTimestamp(value?: string | number | null) {
     return date.toLocaleString();
 }
 
+const INFO_TILE_STYLE: CSSProperties = {
+    padding: "12px 14px",
+    borderRadius: "12px",
+    background: "var(--color-surface-elevated)",
+    border: "1px solid var(--color-border)",
+};
+
+const MAXIMIZED_BOTTOM_EXTENSION = 10;
+
+const appWindow = (() => {
+    try {
+        return getCurrentWindow();
+    } catch {
+        return null;
+    }
+})();
+
 function SummaryCard({
     icon,
     label,
@@ -96,7 +114,7 @@ function SummaryCard({
 }: {
     icon: ReactNode;
     label: string;
-    value: string;
+    value: ReactNode;
     note: string;
     tone?: Tone;
 }) {
@@ -111,8 +129,8 @@ function SummaryCard({
                 border: `1px solid ${style.border}`,
                 display: "flex",
                 flexDirection: "column",
-                gap: "10px",
-                minHeight: "116px",
+                gap: "8px",
+                minHeight: "104px",
             }}
         >
             <div style={{ display: "flex", alignItems: "center", gap: "8px", color: style.color }}>
@@ -129,10 +147,12 @@ function SectionCard({
     title,
     children,
     action,
+    style,
 }: {
     title: string;
     children: ReactNode;
     action?: ReactNode;
+    style?: CSSProperties;
 }) {
     return (
         <div
@@ -143,6 +163,7 @@ function SectionCard({
                 display: "flex",
                 flexDirection: "column",
                 gap: "16px",
+                ...style,
             }}
         >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
@@ -156,6 +177,15 @@ function SectionCard({
 
 export default function FlowDeck() {
     const { t } = useTranslation();
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const headerRef = useRef<HTMLDivElement | null>(null);
+    const summaryRef = useRef<HTMLDivElement | null>(null);
+    const [viewport, setViewport] = useState(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+    }));
+    const [isMaximized, setIsMaximized] = useState(false);
+    const [overviewCardHeight, setOverviewCardHeight] = useState<number | null>(null);
     const [vaultStatus, setVaultStatus] = useState<any>(null);
     const [devices, setDevices] = useState<DeviceItem[]>([]);
     const [isSyncLoading, setIsSyncLoading] = useState(true);
@@ -170,8 +200,36 @@ export default function FlowDeck() {
     const savedPwdB64 = localStorage.getItem("yiboflow_saved_pwd") || "";
     const currentDeviceName = localStorage.getItem("yiboflow_device_name") || t("flowdeck.unknown_device");
     const connectedAt = localStorage.getItem("yiboflow_connected_at");
+    const userRole = localStorage.getItem("yiboflow_user_role") || "user";
     const isRemote = !!serverUrl && serverUrl !== "local";
     const rememberPassword = !!savedPwdB64;
+
+    useEffect(() => {
+        const handleResize = () => {
+            setViewport({
+                width: window.innerWidth,
+                height: window.innerHeight,
+            });
+        };
+
+        window.addEventListener("resize", handleResize);
+        return () => {
+            window.removeEventListener("resize", handleResize);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!appWindow) return;
+
+        appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+        const unlisten = appWindow.onResized(() => {
+            appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+        });
+
+        return () => {
+            unlisten.then((cleanup) => cleanup()).catch(() => {});
+        };
+    }, []);
 
     useEffect(() => {
         const loadRemoteStatus = async () => {
@@ -404,9 +462,71 @@ export default function FlowDeck() {
                 ? "warn"
                 : syncStatus.tone;
 
+    const isWideLayout = viewport.width >= 1800;
+    const isMediumLayout = viewport.width >= 1320;
+    const summaryColumns = isWideLayout ? 4 : isMediumLayout ? 2 : 1;
+    const overviewColumns = isWideLayout ? 3 : isMediumLayout ? 2 : 1;
+    const shouldUseEqualHeightCards = isMaximized && overviewColumns > 1;
+    const deviceMetricColumns = viewport.width >= 1520 ? 4 : viewport.width >= 960 ? 2 : 1;
+    const infoPairColumns = viewport.width >= 900 ? 2 : 1;
+    const featureColumns = isWideLayout ? 1 : viewport.width >= 900 ? 2 : 1;
+
+    useEffect(() => {
+        if (!shouldUseEqualHeightCards) {
+            setOverviewCardHeight(null);
+            return;
+        }
+
+        const recalcOverviewHeight = () => {
+            const root = rootRef.current;
+            const header = headerRef.current;
+            const summary = summaryRef.current;
+            if (!root || !header || !summary) return;
+
+            const rootHeight = root.clientHeight;
+            const headerHeight = header.offsetHeight;
+            const summaryHeight = summary.offsetHeight;
+            const reservedHeight = headerHeight + 22 + summaryHeight + 16;
+            const nextHeight = Math.max(320, rootHeight - reservedHeight);
+
+            setOverviewCardHeight((current) =>
+                current !== null && Math.abs(current - nextHeight) < 1 ? current : nextHeight,
+            );
+        };
+
+        recalcOverviewHeight();
+
+        const observer = new ResizeObserver(() => {
+            recalcOverviewHeight();
+        });
+
+        if (rootRef.current) observer.observe(rootRef.current);
+        if (headerRef.current) observer.observe(headerRef.current);
+        if (summaryRef.current) observer.observe(summaryRef.current);
+        window.addEventListener("resize", recalcOverviewHeight);
+
+        return () => {
+            observer.disconnect();
+            window.removeEventListener("resize", recalcOverviewHeight);
+        };
+    }, [shouldUseEqualHeightCards, viewport.width, viewport.height]);
+
     return (
-        <div style={{ width: "100%", paddingBottom: "40px" }}>
-            <div style={{ marginBottom: "28px" }}>
+        <div
+            ref={rootRef}
+            style={{
+                width: "100%",
+                height: shouldUseEqualHeightCards ? `calc(100% + ${MAXIMIZED_BOTTOM_EXTENSION}px)` : "100%",
+                overflowY: shouldUseEqualHeightCards ? "hidden" : "auto",
+                paddingRight: "6px",
+                paddingBottom: shouldUseEqualHeightCards ? "0px" : "20px",
+                marginBottom: shouldUseEqualHeightCards ? `-${MAXIMIZED_BOTTOM_EXTENSION}px` : 0,
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+            }}
+        >
+            <div ref={headerRef} style={{ marginBottom: "22px", flexShrink: 0 }}>
                 <h1 style={{ fontSize: "22px", fontWeight: 700, display: "flex", alignItems: "center", gap: "10px", margin: 0 }}>
                     <LayoutDashboard size={22} color="var(--color-primary)" />
                     {t("flowdeck.title")}
@@ -416,7 +536,10 @@ export default function FlowDeck() {
                 </p>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "16px", marginBottom: "18px" }}>
+            <div
+                ref={summaryRef}
+                style={{ display: "grid", gridTemplateColumns: `repeat(${summaryColumns}, minmax(0, 1fr))`, gap: "14px", marginBottom: "16px", flexShrink: 0 }}
+            >
                 <SummaryCard
                     icon={<ShieldCheck size={15} />}
                     label={t("flowdeck.summary_mode_label")}
@@ -427,7 +550,29 @@ export default function FlowDeck() {
                 <SummaryCard
                     icon={<UserCircle2 size={15} />}
                     label={t("flowdeck.summary_account_label")}
-                    value={username || t("flowdeck.unknown_user")}
+                    value={username ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                            <span>{username}</span>
+                            {userRole === "admin" && (
+                                <span
+                                    style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        padding: "3px 8px",
+                                        borderRadius: "999px",
+                                        fontSize: "11px",
+                                        fontWeight: 700,
+                                        letterSpacing: "0.04em",
+                                        color: "var(--color-primary)",
+                                        background: "rgba(99, 102, 241, 0.15)",
+                                        border: "1px solid rgba(99, 102, 241, 0.3)",
+                                    }}
+                                >
+                                    管理员
+                                </span>
+                            )}
+                        </span>
+                    ) : t("flowdeck.unknown_user")}
                     note={connectedAt ? t("flowdeck.summary_connected_at", { time: formatTimestamp(connectedAt) || connectedAt }) : t("flowdeck.summary_no_login_time")}
                     tone={username ? "ok" : "warn"}
                 />
@@ -447,9 +592,24 @@ export default function FlowDeck() {
                 />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "16px" }}>
+            <div
+                style={{
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${overviewColumns}, minmax(0, 1fr))`,
+                    gap: "16px",
+                    alignItems: shouldUseEqualHeightCards ? "stretch" : "start",
+                    minHeight: 0,
+                    flex: shouldUseEqualHeightCards ? 1 : undefined,
+                    height: shouldUseEqualHeightCards && overviewCardHeight ? `${overviewCardHeight}px` : undefined,
+                }}
+            >
                 <SectionCard
                     title={t("flowdeck.sync_title")}
+                    style={{
+                        ...PRIMARY_SECTION_STYLE,
+                        minHeight: shouldUseEqualHeightCards ? 0 : undefined,
+                        height: shouldUseEqualHeightCards && overviewCardHeight ? `${overviewCardHeight}px` : undefined,
+                    }}
                     action={
                         <button
                             className="btn-ghost"
@@ -498,24 +658,24 @@ export default function FlowDeck() {
                         </div>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px" }}>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${infoPairColumns}, minmax(0, 1fr))`, gap: "12px" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_mode")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{isRemote ? t("flowdeck.mode_remote") : t("flowdeck.mode_local")}</div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_server")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600, wordBreak: "break-all" }}>
                                 {serverUrl || t("flowdeck.server_unused")}
                             </div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_password")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>
                                 {rememberPassword ? t("flowdeck.password_saved") : t("flowdeck.password_missing")}
                             </div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_checked_at")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>
                                 {checkedAt ? formatTimestamp(checkedAt) || checkedAt : t("flowdeck.not_checked")}
@@ -524,78 +684,47 @@ export default function FlowDeck() {
                     </div>
                 </SectionCard>
 
-                <SectionCard title={t("flowdeck.features_title")}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "10px" }}>
-                        {featureItems.map((item) => {
-                            const tone = statusTone(item.status);
-                            return (
-                                <div
-                                    key={item.id}
-                                    style={{
-                                        padding: "14px 16px",
-                                        borderRadius: "12px",
-                                        border: "1px solid var(--color-border)",
-                                        background: "var(--color-surface-elevated)",
-                                        display: "flex",
-                                        justifyContent: "space-between",
-                                        gap: "12px",
-                                    }}
-                                >
-                                    <div style={{ minWidth: 0 }}>
-                                        <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>{item.label}</div>
-                                        <div style={{ fontSize: "12px", color: "var(--color-text-muted)", lineHeight: 1.45 }}>{item.description}</div>
-                                        <div style={{ fontSize: "12px", color: "var(--color-text-dim)", marginTop: "6px" }}>{item.meta}</div>
-                                    </div>
-                                    <div
-                                        style={{
-                                            alignSelf: "flex-start",
-                                            padding: "6px 10px",
-                                            borderRadius: "999px",
-                                            background: TONE_STYLES[tone].bg,
-                                            color: TONE_STYLES[tone].color,
-                                            border: `1px solid ${TONE_STYLES[tone].border}`,
-                                            fontSize: "11px",
-                                            fontWeight: 700,
-                                            whiteSpace: "nowrap",
-                                        }}
-                                    >
-                                        {t(`flowdeck.status_${item.status.toLowerCase()}`)}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </SectionCard>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "16px", marginTop: "16px" }}>
-                <SectionCard title={t("flowdeck.devices_title")}>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px" }}>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                <SectionCard title={t("flowdeck.devices_title")} style={{
+                    ...PRIMARY_SECTION_STYLE,
+                    minHeight: shouldUseEqualHeightCards ? 0 : undefined,
+                    height: shouldUseEqualHeightCards && overviewCardHeight ? `${overviewCardHeight}px` : undefined,
+                }}>
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${deviceMetricColumns}, minmax(0, 1fr))`, gap: "12px" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_current_device")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{currentDeviceName}</div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_total_devices")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{devices.length}</div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_online_devices")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{onlineDeviceCount}</div>
                         </div>
-                        <div style={{ padding: "12px 14px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)" }}>
+                        <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_visible_drop_targets")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{otherOnlineDeviceCount}</div>
                         </div>
                     </div>
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "10px",
+                            minHeight: 0,
+                            flex: shouldUseEqualHeightCards ? 1 : undefined,
+                            overflowY: shouldUseEqualHeightCards ? "auto" : "visible",
+                            paddingRight: shouldUseEqualHeightCards ? "4px" : undefined,
+                        }}
+                    >
                         {isDevicesLoading ? (
-                            <div style={{ padding: "18px 16px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)", fontSize: "13px" }}>
+                            <div style={{ ...INFO_TILE_STYLE, padding: "18px 16px", color: "var(--color-text-muted)", fontSize: "13px" }}>
                                 {t("flowdeck.loading_devices")}
                             </div>
                         ) : sortedDevices.length === 0 ? (
-                            <div style={{ padding: "18px 16px", borderRadius: "12px", background: "var(--color-surface-elevated)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)", fontSize: "13px" }}>
+                            <div style={{ ...INFO_TILE_STYLE, padding: "18px 16px", color: "var(--color-text-muted)", fontSize: "13px" }}>
                                 {t("flowdeck.no_devices")}
                             </div>
                         ) : (
@@ -607,10 +736,8 @@ export default function FlowDeck() {
                                     <div
                                         key={device.id || `${device.name}-${device.deviceType}`}
                                         style={{
+                                            ...INFO_TILE_STYLE,
                                             padding: "14px 16px",
-                                            borderRadius: "12px",
-                                            border: "1px solid var(--color-border)",
-                                            background: "var(--color-surface-elevated)",
                                             display: "flex",
                                             justifyContent: "space-between",
                                             alignItems: "center",
@@ -652,7 +779,68 @@ export default function FlowDeck() {
                         )}
                     </div>
                 </SectionCard>
+
+                <SectionCard title={t("flowdeck.features_title")} style={{
+                    ...PRIMARY_SECTION_STYLE,
+                    minHeight: shouldUseEqualHeightCards ? 0 : undefined,
+                    height: shouldUseEqualHeightCards && overviewCardHeight ? `${overviewCardHeight}px` : undefined,
+                }}>
+                    <div
+                        style={{
+                            display: "grid",
+                            gridTemplateColumns: `repeat(${featureColumns}, minmax(0, 1fr))`,
+                            gap: "10px",
+                            minHeight: 0,
+                            flex: shouldUseEqualHeightCards ? 1 : undefined,
+                            overflowY: shouldUseEqualHeightCards ? "auto" : "visible",
+                            paddingRight: shouldUseEqualHeightCards ? "4px" : undefined,
+                        }}
+                    >
+                        {featureItems.map((item) => {
+                            const tone = statusTone(item.status);
+                            return (
+                                <div
+                                    key={item.id}
+                                    style={{
+                                        ...INFO_TILE_STYLE,
+                                        padding: "14px 16px",
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        gap: "12px",
+                                    }}
+                                >
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>{item.label}</div>
+                                        <div style={{ fontSize: "12px", color: "var(--color-text-muted)", lineHeight: 1.45 }}>{item.description}</div>
+                                        <div style={{ fontSize: "12px", color: "var(--color-text-dim)", marginTop: "6px" }}>{item.meta}</div>
+                                    </div>
+                                    <div
+                                        style={{
+                                            alignSelf: "flex-start",
+                                            padding: "6px 10px",
+                                            borderRadius: "999px",
+                                            background: TONE_STYLES[tone].bg,
+                                            color: TONE_STYLES[tone].color,
+                                            border: `1px solid ${TONE_STYLES[tone].border}`,
+                                            fontSize: "11px",
+                                            fontWeight: 700,
+                                            whiteSpace: "nowrap",
+                                        }}
+                                    >
+                                        {t(`flowdeck.status_${item.status.toLowerCase()}`)}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </SectionCard>
             </div>
         </div>
     );
 }
+
+const PRIMARY_SECTION_STYLE: CSSProperties = {
+    background: "var(--color-surface)",
+    boxShadow: "none",
+    border: "1px solid var(--color-border)",
+};
