@@ -74,9 +74,11 @@ async fn run_mock_api_test() {
         Ok(res) => {
             if res.code == 200 && res.data.is_some() {
                 let d = res.data.unwrap();
-                info!("Logged in! Received Token: {}...", &d.access_token[0..10]);
+                let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                info!("Logged in! Received Token: {}...", &access_token[0..10]);
 
-                let mk = crypto::MasterKey::derive("my_strong_password", &d.kdf_salt).unwrap();
+                let mk = crypto::MasterKey::derive("my_strong_password", &kdf_salt).unwrap();
                 info!("Locally derived MasterKey from password & salt is ready.");
 
                 // Test querying online devices
@@ -85,7 +87,7 @@ async fn run_mock_api_test() {
 
                 // --- NEW: Test WebSocket Connection ---
                 // We use the tokio-tungstenite module we built here!
-                match ws::WsClient::connect("http://localhost:8080", &d.access_token).await {
+                match ws::WsClient::connect("http://localhost:8080", &access_token).await {
                     Ok((ws_client, ws_rx)) => {
                         info!("WS client created! Attempting to send a handshake payload...");
 
@@ -108,7 +110,7 @@ async fn run_mock_api_test() {
                         // --- NEW: Start Clipboard Listener ---
                         let arc_mk = std::sync::Arc::new(mk);
                         let cb_monitor =
-    clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), d.access_token.clone(), arc_mk, ws_client.tx.clone(), None, "Mocked Desktop Agent".to_string());
+    clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), access_token, arc_mk, ws_client.tx.clone(), None, "Mocked Desktop Agent".to_string());
                         cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
 

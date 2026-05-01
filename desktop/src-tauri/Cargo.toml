@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.9.0"
+version = "0.9.1"
 description = "YiboFlow Desktop Native"
 authors = ["YiboFlow Team"]
 edition = "2021"

@@ -62,3 +62,8 @@ func GetDevicesByUID(uid uint) ([]model.Device, error) {
 	result := config.DB.Where("uid = ?", uid).Find(&devices)
 	return devices, result.Error
 }
+
+// DeleteDevicesByUID removes all devices for a user
+func DeleteDevicesByUID(uid uint) error {
+	return config.DB.Where("uid = ?", uid).Delete(&model.Device{}).Error
+}

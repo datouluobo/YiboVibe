@@ -438,10 +438,6 @@ pub enum HintEvent {
         x: i32,
         y: i32,
     },
-    Resize {
-        width: i32,
-        height: i32,
-    },
 }
 
 pub static HINT_TX: Mutex<Option<std::sync::mpsc::Sender<HintEvent>>> = Mutex::new(None);

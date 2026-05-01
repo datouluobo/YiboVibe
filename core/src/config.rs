@@ -1,5 +1,6 @@
 use log::error;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -42,16 +43,7 @@ pub struct WindowConfig {
     pub fixed_y: i32,
     pub offset_x: i32,
     pub offset_y: i32,
-    #[serde(default = "default_scale")]
-    pub scale: f32,
-    #[serde(default = "default_neg1")]
-    pub width: i32,  // -1 = auto (300 * scale)
-    #[serde(default = "default_neg1")]
-    pub height: i32, // -1 = auto (base * scale)
 }
-
-fn default_scale() -> f32 { 1.0 }
-fn default_neg1() -> i32 { -1 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
@@ -61,9 +53,6 @@ impl Default for WindowConfig {
             fixed_y: -1,
             offset_x: 0,
             offset_y: 0,
-            scale: default_scale(),
-            width: -1,
-            height: -1,
         }
     }
 }
@@ -128,8 +117,99 @@ fn default_min_chars() -> usize { 2 }
 
 fn default_true() -> bool { true }
 fn default_empty_string() -> String { String::new() }
-fn default_fingerprint() -> String { uuid::Uuid::new_v4().to_string() }
+fn default_fingerprint() -> String { stable_device_fingerprint() }
 fn default_probe_timeout() -> u64 { 10000 }
+
+fn stable_device_fingerprint() -> String {
+    let mut seed_parts = Vec::new();
+
+    if let Ok(value) = std::env::var("YIBOFLOW_MACHINE_FINGERPRINT") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            seed_parts.push(format!("env:{trimmed}"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(value) = read_windows_machine_guid() {
+        seed_parts.push(format!("machine-guid:{value}"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    if let Some(value) = read_machine_id_file() {
+        seed_parts.push(format!("machine-id:{value}"));
+    }
+
+    for (key, label) in [
+        ("COMPUTERNAME", "computer"),
+        ("HOSTNAME", "hostname"),
+        ("USERDOMAIN", "domain"),
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                seed_parts.push(format!("{label}:{trimmed}"));
+            }
+        }
+    }
+
+    if seed_parts.is_empty() {
+        return format!("machine-{}", uuid::Uuid::new_v4());
+    }
+
+    let digest = Sha256::digest(seed_parts.join("|").as_bytes());
+    format!("machine-{}", hex::encode(&digest[..16]))
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_machine_guid() -> Option<String> {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Cryptography",
+            "/v",
+            "MachineGuid",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout.lines().find_map(|line| {
+        if !line.contains("MachineGuid") {
+            return None;
+        }
+
+        let value = line.split_whitespace().last()?.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_machine_id_file() -> Option<String> {
+    ["/etc/machine-id", "/var/lib/dbus/machine-id"]
+        .iter()
+        .find_map(|path| {
+            let value = fs::read_to_string(path).ok()?;
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+}
+
+fn needs_fingerprint_migration(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok()
+}
 
 fn default_probe_targets() -> Vec<ProbeTarget> {
     vec![
@@ -191,15 +271,26 @@ impl AppConfig {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Self>(&content) {
                     Ok(mut config) => {
+                        let mut mutated = false;
                         if config.probe_tool.targets.is_empty() {
                             config.probe_tool.targets = default_probe_targets();
+                            mutated = true;
                         }
                         if config.probe_tool.timeout_ms == 0 {
                             config.probe_tool.timeout_ms = default_probe_timeout();
-                            config.save();
+                            mutated = true;
                         }
                         if config.cache.image_transport_format.is_empty() {
                             config.cache.image_transport_format = default_image_transport_format();
+                            mutated = true;
+                        }
+                        if config.device_fingerprint.trim().is_empty()
+                            || needs_fingerprint_migration(&config.device_fingerprint)
+                        {
+                            config.device_fingerprint = stable_device_fingerprint();
+                            mutated = true;
+                        }
+                        if mutated {
                             config.save();
                         }
                         return config;

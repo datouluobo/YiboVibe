@@ -20,7 +20,9 @@
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
         "tooltip_settings": "Theme, language and global preferences",
         "tooltip_flowinfo": "About YiboFlow — version, credits & info",
-        "tooltip_flowkeys": "Keyboard key remapping and shortcut configuration"
+        "tooltip_flowkeys": "Keyboard key remapping and shortcut configuration",
+        "admin": "Admin",
+        "tooltip_admin": "User and device management for administrators"
     },
     "login": {
         "title_login": "Login to YiboFlow",
@@ -66,7 +68,13 @@
         "error_rename_failed": "Failed to rename the local account: {{detail}}",
         "error_override_failed": "Failed to override the remote account: {{detail}}",
         "error_conflict_resolve_failed": "Failed to complete sync conflict resolution: {{detail}}",
-        "rename_success": "Local account renamed successfully. You can now initialize again."
+        "rename_success": "Local account renamed successfully. You can now initialize again.",
+        "password_hint": "Password Hint (optional)",
+        "placeholder_password_hint": "A clue to help you remember your password",
+        "password_hint_warning": "Do not include the actual password in the hint.",
+        "password_hint_label": "Password hint:",
+        "failed_attempts": "Failed {{count}} time(s)",
+        "error_account_disabled": "This account has been disabled. Please contact the administrator."
     },
     "dashboard": {
         "tab_sync": "Dashboard",
@@ -527,5 +535,44 @@
         "cat_mouse": "Mouse",
         "feature_on": "Enabled",
         "feature_off": "Disabled"
+    },
+    "admin": {
+        "title": "Admin Panel",
+        "subtitle": "User management and device management for administrators.",
+        "tab_users": "Users",
+        "tab_devices": "Devices",
+        "search_placeholder": "Search username or device...",
+        "refresh": "Refresh",
+        "loading": "Loading data...",
+        "no_users": "No users found.",
+        "no_devices": "No devices found.",
+        "col_uid": "UID",
+        "col_username": "Username",
+        "col_role": "Role",
+        "col_status": "Status",
+        "col_created_at": "Created At",
+        "col_actions": "Actions",
+        "col_device_id": "ID",
+        "col_device_name": "Device Name",
+        "col_owner": "Owner",
+        "col_device_type": "Type",
+        "col_last_seen": "Last Seen",
+        "enable_user": "Enable",
+        "disable_user": "Disable",
+        "status_active": "Enabled",
+        "status_disabled": "Disabled",
+        "reset_password": "Reset Password",
+        "delete_user": "Delete User",
+        "kick_device": "Kick Device",
+        "confirm_delete_user": "Are you sure you want to delete user \"{{username}}\"? All associated data will be permanently removed.",
+        "confirm_kick_device": "Are you sure you want to kick device \"{{deviceName}}\"? The session will be terminated immediately.",
+        "reset_password_warning": "You are resetting the password for user \"{{username}}\". The user will need to log in again with the new password.",
+        "e2ee_warning": "This system uses end-to-end encryption. Resetting the password will make all previously synced data unrecoverable. The user must reconfigure from their client device.",
+        "new_password": "New Password",
+        "new_password_placeholder": "Minimum 8 characters",
+        "new_password_hint": "Password Hint (optional)",
+        "new_password_hint_placeholder": "A clue to help remember the password",
+        "cancel": "Cancel",
+        "confirm_reset": "Reset Password"
     }
 }

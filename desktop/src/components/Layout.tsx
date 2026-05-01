@@ -1,9 +1,10 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
     LayoutDashboard, Sparkles,
-    Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen, Keyboard
+    Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield
 } from "lucide-react";
 
 interface NavItem {
@@ -32,19 +33,64 @@ const NAV_ITEMS: NavItem[] = [
     // Group 4: System
     { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
     { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
-    { id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo" },
 ];
+
+const ADMIN_NAV_ITEM: NavItem = {
+    id: "admin", path: "/app/admin", icon: Shield, labelKey: "nav.admin", tooltipKey: "nav.tooltip_admin"
+};
+
+const FLOWINFO_NAV_ITEM: NavItem = {
+    id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo"
+};
 
 export default function Layout() {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const location = useLocation();
+    const [userRole, setUserRole] = useState(() => localStorage.getItem('yiboflow_user_role') || 'user');
+    const isAdmin = userRole === 'admin';
 
-    const handleLogout = useCallback(() => {
+    useEffect(() => {
+        let mounted = true;
+
+        const syncRole = async () => {
+            try {
+                const role = await invoke<string>("get_user_role");
+                if (!mounted) return;
+                const normalizedRole = role || "user";
+                setUserRole(normalizedRole);
+                localStorage.setItem('yiboflow_user_role', normalizedRole);
+            } catch {
+                if (!mounted) return;
+                const fallbackRole = localStorage.getItem('yiboflow_user_role') || 'user';
+                setUserRole(fallbackRole);
+            }
+        };
+
+        syncRole();
+        return () => {
+            mounted = false;
+        };
+    }, []);
+
+    const navItems = useMemo(() => {
+        if (!isAdmin) return [...NAV_ITEMS, FLOWINFO_NAV_ITEM];
+        return [...NAV_ITEMS, ADMIN_NAV_ITEM, FLOWINFO_NAV_ITEM];
+    }, [isAdmin]);
+
+    const handleLogout = useCallback(async () => {
+        try {
+            await invoke("logout_engine");
+        } catch {
+            // Keep client logout resilient even if native state reset fails.
+        }
+
         localStorage.removeItem('yiboflow_server_url');
         localStorage.removeItem('yiboflow_username');
         localStorage.removeItem('yiboflow_connected_at');
         localStorage.removeItem('yiboflow_auto_login');
+        localStorage.removeItem('yiboflow_user_role');
+        setUserRole('user');
         navigate("/");
     }, [navigate]);
 
@@ -68,7 +114,7 @@ export default function Layout() {
 
                 {/* Nav Items */}
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', padding: '0 12px', overflowY: 'auto' }}>
-                    {NAV_ITEMS.map((item, idx) => {
+                    {navItems.map((item, idx) => {
                         const isActive = location.pathname === item.path;
                         // Insert divider between groups
                         const groupDividers = [1, 4, 6]; // before these indices
