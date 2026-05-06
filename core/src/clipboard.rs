@@ -1,19 +1,20 @@
 use crate::crypto::{DataKey, MasterKey};
 use crate::ws::WsMessage;
 use arboard::Clipboard;
+use lazy_static::lazy_static;
 use log::{error, info};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use lazy_static::lazy_static;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 lazy_static! {
     /// Shared clipboard caches used by both the monitor and the hook manager to prevent sync loops.
     pub static ref LAST_TEXT: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     pub static ref LAST_IMAGE_HASH: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+    pub static ref LAST_PATH_SIGNATURE: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 }
 
 static RECEIVE_ONLY_MODE: AtomicBool = AtomicBool::new(false);
@@ -24,6 +25,13 @@ pub fn set_receive_only_mode(enabled: bool) {
 
 pub fn is_receive_only_mode() -> bool {
     RECEIVE_ONLY_MODE.load(Ordering::Relaxed)
+}
+
+fn current_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 #[cfg(target_os = "windows")]
@@ -60,7 +68,14 @@ pub struct ClipboardMonitor {
 }
 
 impl ClipboardMonitor {
-    pub fn new(server_url: String, token: String, master_key: Arc<MasterKey>, ws_tx: mpsc::Sender<WsMessage>, ui_tx: Option<mpsc::Sender<ClipboardEvent>>, device_label: String) -> Self {
+    pub fn new(
+        server_url: String,
+        token: String,
+        master_key: Arc<MasterKey>,
+        ws_tx: mpsc::Sender<WsMessage>,
+        ui_tx: Option<mpsc::Sender<ClipboardEvent>>,
+        device_label: String,
+    ) -> Self {
         Self {
             server_url,
             token,
@@ -82,15 +97,15 @@ impl ClipboardMonitor {
         image.width.hash(&mut hasher);
         image.height.hash(&mut hasher);
         image.bytes.len().hash(&mut hasher);
-        
+
         let sample_len = 1024;
         if image.bytes.len() > sample_len * 2 {
             image.bytes[..sample_len].hash(&mut hasher);
-            image.bytes[image.bytes.len()-sample_len..].hash(&mut hasher);
+            image.bytes[image.bytes.len() - sample_len..].hash(&mut hasher);
         } else {
             image.bytes.hash(&mut hasher);
         }
-        
+
         hasher.finish()
     }
 
@@ -106,7 +121,10 @@ impl ClipboardMonitor {
         crate::cache::hash_bytes(&raw)
     }
 
-    fn encode_image_for_transport(image_data: &arboard::ImageData<'_>, format: &str) -> Option<(Vec<u8>, &'static str)> {
+    fn encode_image_for_transport(
+        image_data: &arboard::ImageData<'_>,
+        format: &str,
+    ) -> Option<(Vec<u8>, &'static str)> {
         let width = image_data.width as u32;
         let height = image_data.height as u32;
         let img_buffer = image::RgbaImage::from_raw(width, height, image_data.bytes.to_vec())?;
@@ -171,11 +189,11 @@ impl ClipboardMonitor {
 
     #[cfg(target_os = "windows")]
     fn start_win32_listener(&self) {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, CS_HREDRAW,
-            CS_VREDRAW, CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-        };
         use windows::Win32::System::DataExchange::AddClipboardFormatListener;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DispatchMessageW, GetMessageW,
+            MSG, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+        };
         use windows::core::PCWSTR;
 
         let last_text_ref = Arc::clone(&self.last_text);
@@ -191,16 +209,17 @@ impl ClipboardMonitor {
 
         std::thread::spawn(move || {
             unsafe {
-                let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
+                let instance =
+                    windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
                 let class_name_str = "YiboFlowClipboardListener\0";
                 let class_name_u16: Vec<u16> = class_name_str.encode_utf16().collect();
-                
+
                 let wnd_class = WNDCLASSW {
                     style: CS_HREDRAW | CS_VREDRAW,
                     lpfnWndProc: Some(Self::clipboard_wnd_proc),
                     hInstance: instance.into(),
                     lpszClassName: PCWSTR(class_name_u16.as_ptr()),
-                     ..Default::default()
+                    ..Default::default()
                 };
 
                 RegisterClassW(&wnd_class);
@@ -227,7 +246,7 @@ impl ClipboardMonitor {
 
                 // Start listening
                 let _ = AddClipboardFormatListener(hwnd);
-                
+
                 // Store state in window long ptr for the static wnd_proc to access
                 let state = Box::new(Win32State {
                     last_text: last_text_ref,
@@ -241,14 +260,14 @@ impl ClipboardMonitor {
                     device_label,
                     runtime: runtime_handle,
                 });
-                
+
                 #[cfg(target_pointer_width = "64")]
                 windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
                     hwnd,
                     windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
                     Box::into_raw(state) as isize,
                 );
-                
+
                 info!("Clipboard monitoring daemon started (Win32 Message Listener mode).");
 
                 let mut msg = MSG::default();
@@ -260,13 +279,22 @@ impl ClipboardMonitor {
     }
 
     #[cfg(target_os = "windows")]
-    unsafe extern "system" fn clipboard_wnd_proc(hwnd: windows::Win32::Foundation::HWND, msg: u32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
-        use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, GWLP_USERDATA, WM_CLIPBOARDUPDATE};
+    unsafe extern "system" fn clipboard_wnd_proc(
+        hwnd: windows::Win32::Foundation::HWND,
+        msg: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> windows::Win32::Foundation::LRESULT {
         use windows::Win32::Foundation::LRESULT;
-        
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DefWindowProcW, GWLP_USERDATA, WM_CLIPBOARDUPDATE,
+        };
+
         if msg == WM_CLIPBOARDUPDATE {
             #[cfg(target_pointer_width = "64")]
-            let ptr = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+            let ptr = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+            };
             if ptr != 0 {
                 let state = unsafe { &*(ptr as *const Win32State) };
                 state.runtime.spawn(Self::on_clipboard_change(
@@ -316,23 +344,87 @@ impl ClipboardMonitor {
                     info!("Clipboard [Text] changed via message listener.");
                     *last = text.clone();
                     true
-                } else { false }
+                } else {
+                    false
+                }
             };
 
             if should_dispatch {
+                if let Ok(mut last_path) = LAST_PATH_SIGNATURE.lock() {
+                    last_path.clear();
+                }
                 let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
                 crate::cache::record_clipboard_text(&text, "local");
                 if let Some(chan) = ui_tx.as_ref() {
-                    let _ = chan.send(ClipboardEvent {
-                        status: "sent".to_string(),
-                        preview: text.clone(),
-                    }).await;
+                    let _ = chan
+                        .send(ClipboardEvent {
+                            status: "sent".to_string(),
+                            preview: text.clone(),
+                        })
+                        .await;
                 }
-                if config.is_sync_enabled {
+                if config.is_sync_enabled && config.auto_sync_text {
                     Self::secure_dispatch(&text, &mk, &tx, &ui_tx, &device_label).await;
                 }
             }
         } else {
+            #[cfg(target_os = "windows")]
+            if let Some(path) = Self::try_read_clipboard_single_path() {
+                let path_signature = path.display().to_string();
+                let should_record = {
+                    let mut last_path = LAST_PATH_SIGNATURE.lock().unwrap();
+                    if *last_path != path_signature {
+                        *last_path = path_signature.clone();
+                        true
+                    } else {
+                        false
+                    }
+                };
+
+                if should_record {
+                    let entry_source = if path.is_dir() {
+                        "clipboard_folder"
+                    } else {
+                        "clipboard_file"
+                    };
+                    match crate::cache::record_local_path_entry(&path, entry_source) {
+                        Ok(entry_id) => {
+                            if let Some(chan) = ui_tx.as_ref() {
+                                let preview = path
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().to_string())
+                                    .filter(|name| !name.is_empty())
+                                    .unwrap_or_else(|| path.display().to_string());
+                                let _ = chan
+                                    .send(ClipboardEvent {
+                                        status: "sent".to_string(),
+                                        preview,
+                                    })
+                                    .await;
+                            }
+                            let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
+                            if config.is_sync_enabled {
+                                let record = {
+                                    let flow_store_lock =
+                                        crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                                    flow_store_lock.as_ref().and_then(|flow_store| {
+                                        flow_store
+                                            .get_history_record_compat(entry_id)
+                                            .ok()
+                                            .flatten()
+                                    })
+                                };
+                                if let Some(record) = record {
+                                    Self::send_flow_entry_offer(&record, &tx, &device_label).await;
+                                }
+                            }
+                        }
+                        Err(e) => error!("Failed to record clipboard path entry: {}", e),
+                    }
+                }
+                return;
+            }
+
             let current_image = Self::try_read_clipboard_image(2, Duration::from_millis(50)).await;
 
             if let Some(image) = current_image {
@@ -344,10 +436,15 @@ impl ClipboardMonitor {
                         info!("Clipboard [Image] changed via message listener.");
                         *last = hash;
                         true
-                    } else { false }
+                    } else {
+                        false
+                    }
                 };
 
                 if should_dispatch {
+                    if let Ok(mut last_path) = LAST_PATH_SIGNATURE.lock() {
+                        last_path.clear();
+                    }
                     {
                         let img_bytes = &image.bytes;
                         let mut raw = Vec::with_capacity(16 + img_bytes.len());
@@ -358,15 +455,28 @@ impl ClipboardMonitor {
                     }
                     // Notify UI immediately, before the slow network upload
                     if let Some(chan) = ui_tx.as_ref() {
-                        let _ = chan.send(ClipboardEvent {
-                            status: "sent".to_string(),
-                            preview: Self::image_preview_label(image.width, image.height),
-                        }).await;
+                        let _ = chan
+                            .send(ClipboardEvent {
+                                status: "sent".to_string(),
+                                preview: Self::image_preview_label(image.width, image.height),
+                            })
+                            .await;
                     }
                     // Background sync upload happens after UI notification
-                    let (is_sync_enabled, _, _, _) = crate::config::get_settings();
-                    if is_sync_enabled {
-                        Self::secure_dispatch_image(image, &content_id, &mk, &tx, &ui_tx, &client, &srv_url, &tok, &device_label).await;
+                    let config = crate::config::GLOBAL_CONFIG.read().unwrap().clone();
+                    if config.is_sync_enabled && config.auto_sync_image {
+                        Self::secure_dispatch_image(
+                            image,
+                            &content_id,
+                            &mk,
+                            &tx,
+                            &ui_tx,
+                            &client,
+                            &srv_url,
+                            &tok,
+                            &device_label,
+                        )
+                        .await;
                     }
                 }
             }
@@ -390,8 +500,22 @@ impl ClipboardMonitor {
         None
     }
 
+    #[cfg(target_os = "windows")]
+    fn try_read_clipboard_single_path() -> Option<std::path::PathBuf> {
+        let paths: Vec<std::path::PathBuf> =
+            clipboard_win::get_clipboard(clipboard_win::formats::FileList).ok()?;
+        if paths.len() == 1 {
+            paths.into_iter().next()
+        } else {
+            None
+        }
+    }
+
     /// Open the system clipboard, read image, and release immediately.
-    async fn try_read_clipboard_image(max_retries: u32, retry_delay: Duration) -> Option<arboard::ImageData<'static>> {
+    async fn try_read_clipboard_image(
+        max_retries: u32,
+        retry_delay: Duration,
+    ) -> Option<arboard::ImageData<'static>> {
         for i in 0..max_retries {
             if let Ok(mut cb) = Clipboard::new() {
                 if let Ok(img) = cb.get_image() {
@@ -452,12 +576,19 @@ impl ClipboardMonitor {
                     srv_url.clone(),
                     tok.clone(),
                     device_label.clone(),
-                ).await;
+                )
+                .await;
             }
         });
     }
 
-    async fn secure_dispatch(plaintext: &str, mk: &MasterKey, tx: &mpsc::Sender<WsMessage>, ui_tx: &Option<mpsc::Sender<ClipboardEvent>>, device_label: &str) {
+    async fn secure_dispatch(
+        plaintext: &str,
+        mk: &MasterKey,
+        tx: &mpsc::Sender<WsMessage>,
+        ui_tx: &Option<mpsc::Sender<ClipboardEvent>>,
+        device_label: &str,
+    ) {
         let log_preview = if plaintext.chars().count() > 40 {
             format!("{}...", plaintext.chars().take(40).collect::<String>())
         } else {
@@ -510,11 +641,57 @@ impl ClipboardMonitor {
         } else {
             info!("Successfully dispatched encrypted payload to WS channel.");
             if let Some(chan) = ui_tx {
-                let _ = chan.send(ClipboardEvent {
-                    status: "sent".to_string(),
-                    preview: plaintext.to_string(),
-                }).await;
+                let _ = chan
+                    .send(ClipboardEvent {
+                        status: "sent".to_string(),
+                        preview: plaintext.to_string(),
+                    })
+                    .await;
             }
+        }
+    }
+
+    pub async fn send_flow_entry_offer(
+        record: &crate::flow_store::FlowHistoryEntryRecord,
+        tx: &mpsc::Sender<WsMessage>,
+        device_label: &str,
+    ) {
+        Self::send_flow_entry_offer_to(record, tx, device_label, vec![], false).await;
+    }
+
+    pub async fn send_flow_entry_offer_to(
+        record: &crate::flow_store::FlowHistoryEntryRecord,
+        tx: &mpsc::Sender<WsMessage>,
+        device_label: &str,
+        target_devices: Vec<u32>,
+        auto_accept: bool,
+    ) {
+        if !matches!(record.entry.entry_type.as_str(), "file" | "bundle") {
+            return;
+        }
+
+        let msg = WsMessage {
+            sender_uid: 0,
+            sender_device_id: 0,
+            target_devices,
+            r#type: "flow_entry_offer".to_string(),
+            payload: serde_json::json!({
+                "kind": record.entry.entry_type,
+                "root_hash": record.entry.hash,
+                "size_bytes": record.entry.size,
+                "title": record.title,
+                "preview": record.entry.preview,
+                "manifest_json": record.manifest_json,
+                "created_at": record.entry.timestamp,
+                "sender_device_name": device_label,
+                "auto_accept": auto_accept,
+            }),
+        };
+
+        if let Err(e) = tx.send(msg).await {
+            error!("Failed to dispatch flow entry offer over WS channel: {}", e);
+        } else {
+            info!("Successfully dispatched flow entry offer to WS channel.");
         }
     }
 
@@ -529,7 +706,10 @@ impl ClipboardMonitor {
         token: &str,
         device_label: &str,
     ) {
-        info!("[Intercepted] Preparing to E2EE encrypt locally: Image {}x{}", image.width, image.height);
+        info!(
+            "[Intercepted] Preparing to E2EE encrypt locally: Image {}x{}",
+            image.width, image.height
+        );
 
         let dk = DataKey::generate();
 
@@ -537,13 +717,17 @@ impl ClipboardMonitor {
             let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
             cfg.cache.image_transport_format.clone()
         };
-        let (payload, blob_format) = match Self::encode_image_for_transport(&image, &configured_format) {
-            Some(result) => result,
-            None => {
-                error!("Failed to encode image payload using transport format {}", configured_format);
-                return;
-            }
-        };
+        let (payload, blob_format) =
+            match Self::encode_image_for_transport(&image, &configured_format) {
+                Some(result) => result,
+                None => {
+                    error!(
+                        "Failed to encode image payload using transport format {}",
+                        configured_format
+                    );
+                    return;
+                }
+            };
 
         let enc_data = match dk.encrypt_binary(&payload) {
             Ok(d) => d,
@@ -562,13 +746,21 @@ impl ClipboardMonitor {
         };
 
         let enc_bytes = serde_json::to_vec(&enc_data).unwrap();
-        let mut http_base = server_url.replace("ws://", "http://").replace("wss://", "https://");
+        let mut http_base = server_url
+            .replace("ws://", "http://")
+            .replace("wss://", "https://");
         if http_base.ends_with("/api/v1/ws") {
             http_base = http_base.replace("/api/v1/ws", "");
         }
         let url = format!("{}/api/v1/sync/blob", http_base);
 
-        let res = match http_client.post(&url).bearer_auth(token).body(enc_bytes).send().await {
+        let res = match http_client
+            .post(&url)
+            .bearer_auth(token)
+            .body(enc_bytes)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 error!("Failed to upload encrypted image blob: {}", e);
@@ -658,32 +850,54 @@ impl ClipboardMonitor {
                         }
 
                         // Parse wrapped DK and enc data to proper types
-                        let wrapped_dk: crate::crypto::WrappedDataKey = match serde_json::from_value(wrapped_dk_val.clone()) {
-                            Ok(v) => v,
-                            Err(e) => { error!("Failed to parse wrapped key: {}", e); continue; }
-                        };
-                        
-                        let enc_data: crate::crypto::EncryptedData = match serde_json::from_value(enc_data_val.clone()) {
-                            Ok(v) => v,
-                            Err(e) => { error!("Failed to parse enc data: {}", e); continue; }
-                        };
+                        let wrapped_dk: crate::crypto::WrappedDataKey =
+                            match serde_json::from_value(wrapped_dk_val.clone()) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to parse wrapped key: {}", e);
+                                    continue;
+                                }
+                            };
+
+                        let enc_data: crate::crypto::EncryptedData =
+                            match serde_json::from_value(enc_data_val.clone()) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to parse enc data: {}", e);
+                                    continue;
+                                }
+                            };
 
                         // Unwrap DK using MK
                         let dk = match mk.unwrap_dk(&wrapped_dk) {
                             Ok(v) => v,
-                            Err(e) => { error!("Failed to unwrap DK: {:?}", e); continue; }
+                            Err(e) => {
+                                error!("Failed to unwrap DK: {:?}", e);
+                                continue;
+                            }
                         };
 
                         // Decrypt Payload using DK
                         let plaintext = match dk.decrypt_payload(&enc_data) {
                             Ok(v) => v,
-                            Err(e) => { error!("Failed to decrypt payload: {:?}", e); continue; }
+                            Err(e) => {
+                                error!("Failed to decrypt payload: {:?}", e);
+                                continue;
+                            }
                         };
 
-                        info!("Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...", plaintext.len());
+                        info!(
+                            "Successfully decrypted incoming clipboard (len {}). Setting OS clipboard...",
+                            plaintext.len()
+                        );
 
-                        let sender_device_name = msg.payload["sender_device_name"].as_str().unwrap_or("其他设备");
-                        crate::cache::record_clipboard_text(&plaintext, &format!("sync:{sender_device_name}"));
+                        let sender_device_name = msg.payload["sender_device_name"]
+                            .as_str()
+                            .unwrap_or("其他设备");
+                        crate::cache::record_clipboard_text(
+                            &plaintext,
+                            &format!("sync:{sender_device_name}"),
+                        );
 
                         // Set text with loopback protection
                         {
@@ -691,12 +905,16 @@ impl ClipboardMonitor {
                             *last = plaintext.clone();
                         }
 
-                        if Self::try_set_clipboard_text(&plaintext, 5, Duration::from_millis(100)).await {
+                        if Self::try_set_clipboard_text(&plaintext, 5, Duration::from_millis(100))
+                            .await
+                        {
                             if let Some(chan) = ui_tx.as_ref() {
-                                let _ = chan.send(ClipboardEvent {
-                                    status: "received".to_string(),
-                                    preview: plaintext.clone(),
-                                }).await;
+                                let _ = chan
+                                    .send(ClipboardEvent {
+                                        status: "received".to_string(),
+                                        preview: plaintext.clone(),
+                                    })
+                                    .await;
                             }
                         } else {
                             error!("Failed to set clipboard text after retries (received sync).");
@@ -704,23 +922,32 @@ impl ClipboardMonitor {
                     } else if format_type == "image" {
                         let uuid = msg.payload["blob_uuid"].as_str().unwrap_or("");
                         let wrapped_dk_val = &msg.payload["wrapped_key"];
-                        
+
                         if uuid.is_empty() || wrapped_dk_val.is_null() {
                             error!("Missing image payload fields");
                             continue;
                         }
 
-                        let wrapped_dk: crate::crypto::WrappedDataKey = match serde_json::from_value(wrapped_dk_val.clone()) {
-                            Ok(v) => v,
-                            Err(e) => { error!("Failed to parse wrapped key: {}", e); continue; }
-                        };
+                        let wrapped_dk: crate::crypto::WrappedDataKey =
+                            match serde_json::from_value(wrapped_dk_val.clone()) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to parse wrapped key: {}", e);
+                                    continue;
+                                }
+                            };
 
                         let dk = match mk.unwrap_dk(&wrapped_dk) {
                             Ok(v) => v,
-                            Err(e) => { error!("Failed to unwrap DK: {:?}", e); continue; }
+                            Err(e) => {
+                                error!("Failed to unwrap DK: {:?}", e);
+                                continue;
+                            }
                         };
 
-                        let mut http_base = srv_url.replace("ws://", "http://").replace("wss://", "https://");
+                        let mut http_base = srv_url
+                            .replace("ws://", "http://")
+                            .replace("wss://", "https://");
                         if http_base.ends_with("/api/v1/ws") {
                             http_base = http_base.replace("/api/v1/ws", "");
                         }
@@ -741,17 +968,27 @@ impl ClipboardMonitor {
 
                         let enc_bytes = match res.bytes().await {
                             Ok(b) => b,
-                            Err(e) => { error!("Failed to read image bytes: {}", e); continue; }
+                            Err(e) => {
+                                error!("Failed to read image bytes: {}", e);
+                                continue;
+                            }
                         };
 
-                        let enc_data: crate::crypto::EncryptedData = match serde_json::from_slice(&enc_bytes) {
-                            Ok(v) => v,
-                            Err(e) => { error!("Failed to parse downloaded encrypted data: {}", e); continue; }
-                        };
+                        let enc_data: crate::crypto::EncryptedData =
+                            match serde_json::from_slice(&enc_bytes) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to parse downloaded encrypted data: {}", e);
+                                    continue;
+                                }
+                            };
 
                         let dec_bytes = match dk.decrypt_binary(&enc_data) {
                             Ok(v) => v,
-                            Err(e) => { error!("Failed to decrypt image: {:?}", e); continue; }
+                            Err(e) => {
+                                error!("Failed to decrypt image: {:?}", e);
+                                continue;
+                            }
                         };
 
                         #[derive(serde::Deserialize)]
@@ -762,7 +999,9 @@ impl ClipboardMonitor {
                         }
 
                         let blob_format = msg.payload["blob_format"].as_str().unwrap_or("png");
-                        let raw = if let Some(raw) = Self::decode_encoded_image_to_raw_image(&dec_bytes, blob_format) {
+                        let raw = if let Some(raw) =
+                            Self::decode_encoded_image_to_raw_image(&dec_bytes, blob_format)
+                        {
                             raw
                         } else {
                             match serde_json::from_slice::<LegacyImageBinaryFormat>(&dec_bytes) {
@@ -780,16 +1019,22 @@ impl ClipboardMonitor {
                             }
                         };
 
-                        let sender_device_name = msg.payload["sender_device_name"].as_str().unwrap_or("其他设备");
+                        let sender_device_name = msg.payload["sender_device_name"]
+                            .as_str()
+                            .unwrap_or("其他设备");
                         let content_id = msg.payload["content_id"].as_str();
-                        crate::cache::record_clipboard_image(&raw, &format!("sync:{sender_device_name}"), content_id);
+                        crate::cache::record_clipboard_image(
+                            &raw,
+                            &format!("sync:{sender_device_name}"),
+                            content_id,
+                        );
 
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                             let Some(arboard_img) = Self::raw_image_to_arboard_image(&raw) else {
                                 error!("Failed to convert raw image payload for clipboard");
                                 continue;
                             };
-                            
+
                             let hash = Self::calculate_image_hash(&arboard_img);
                             {
                                 let mut last = last_image_hash_ref.lock().unwrap();
@@ -800,24 +1045,325 @@ impl ClipboardMonitor {
                             if let Err(e) = clipboard.set_image(arboard_img.clone()) {
                                 error!("Failed to set arboard image clipboard: {}", e);
                             } else if let Some(chan) = ui_tx.as_ref() {
-                                let _ = chan.send(ClipboardEvent {
-                                    status: "received".to_string(),
-                                    preview: Self::image_preview_label(arboard_img.width, arboard_img.height),
-                                }).await;
+                                let _ = chan
+                                    .send(ClipboardEvent {
+                                        status: "received".to_string(),
+                                        preview: Self::image_preview_label(
+                                            arboard_img.width,
+                                            arboard_img.height,
+                                        ),
+                                    })
+                                    .await;
                             }
                         }
                     }
-                } else if msg.r#type == "p2p_file_offer" {
-                    if let Ok(offer) = serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone()) {
-                        let mut save_dir = std::env::temp_dir();
-                        if let Some(dirs) = directories::UserDirs::new()
-                            && let Some(dl) = dirs.download_dir() {
-                                save_dir = dl.to_path_buf();
-                            }
-                        
-                        crate::p2p::handle_p2p_offer(offer, save_dir).await;
+                } else if msg.r#type == "flow_transfer_offer" {
+                    if let Ok(offer) =
+                        serde_json::from_value::<crate::p2p::P2POffer>(msg.payload.clone())
+                    {
+                        if let Err(e) = crate::p2p::handle_flow_transfer_offer(
+                            offer,
+                            msg.sender_device_id,
+                            ws_tx.clone(),
+                            device_label.clone(),
+                        )
+                        .await
+                        {
+                            error!("Failed to handle FlowSync transfer offer: {}", e);
+                        }
                     } else {
-                        error!("Failed to parse p2p_file_offer payload.");
+                        error!("Failed to parse flow_transfer_offer payload.");
+                    }
+                } else if msg.r#type == "flow_entry_offer" {
+                    let kind = msg.payload["kind"].as_str().unwrap_or("");
+                    if !matches!(kind, "file" | "bundle") {
+                        continue;
+                    }
+                    let root_hash = msg.payload["root_hash"].as_str().unwrap_or("");
+                    if root_hash.is_empty() {
+                        error!("Missing root_hash in flow_entry_offer payload.");
+                        continue;
+                    }
+                    let size_bytes = msg.payload["size_bytes"].as_i64().unwrap_or(0);
+                    let title = msg.payload["title"].as_str();
+                    let preview = msg.payload["preview"].as_str();
+                    let manifest_json = msg.payload["manifest_json"].as_str();
+                    let sender_device_name = msg.payload["sender_device_name"]
+                        .as_str()
+                        .unwrap_or("其他设备");
+                    let sender_device_id = if msg.sender_device_id > 0 {
+                        Some(msg.sender_device_id.to_string())
+                    } else {
+                        None
+                    };
+                    let auto_accept = msg.payload["auto_accept"].as_bool().unwrap_or(false);
+                    let created_at = msg.payload["created_at"].as_i64().unwrap_or_else(|| {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as i64
+                    });
+
+                    let persisted_entry_id = {
+                        let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                        let Some(flow_store) = flow_store_lock.as_ref() else {
+                            error!(
+                                "FlowSync store not initialized while receiving flow_entry_offer."
+                            );
+                            continue;
+                        };
+                        match flow_store.upsert_remote_entry_offer(
+                            kind,
+                            root_hash,
+                            size_bytes,
+                            title,
+                            preview,
+                            manifest_json,
+                            sender_device_name,
+                            sender_device_id.as_deref(),
+                            created_at,
+                        ) {
+                            Ok(entry_id) => entry_id,
+                            Err(e) => {
+                                error!("Failed to persist flow_entry_offer: {}", e);
+                                continue;
+                            }
+                        }
+                    };
+
+                    if let Some(chan) = ui_tx.as_ref() {
+                        let preview_label = preview
+                            .filter(|value| !value.trim().is_empty())
+                            .map(|value| value.to_string())
+                            .or_else(|| title.map(|value| value.to_string()))
+                            .unwrap_or_else(|| format!("{} 条目", kind));
+                        let _ = chan
+                            .send(ClipboardEvent {
+                                status: "received".to_string(),
+                                preview: preview_label,
+                            })
+                            .await;
+                    }
+
+                    if auto_accept && msg.sender_device_id > 0 {
+                        let transfer_id = uuid::Uuid::new_v4().to_string();
+                        let update_result = {
+                            let flow_store_lock =
+                                crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                            let Some(flow_store) = flow_store_lock.as_ref() else {
+                                error!(
+                                    "FlowSync store not initialized while auto-accepting flow entry offer."
+                                );
+                                continue;
+                            };
+                            flow_store.upsert_transfer_session(
+                                persisted_entry_id,
+                                &transfer_id,
+                                "inbound",
+                                "accepted",
+                                Some(sender_device_name),
+                                Some(&device_label),
+                                size_bytes,
+                                0,
+                                created_at,
+                            )
+                        };
+                        if let Err(e) = update_result {
+                            error!(
+                                "Failed to create inbound transfer session for auto-accept: {}",
+                                e
+                            );
+                            continue;
+                        }
+                        let accept_msg = WsMessage {
+                            sender_uid: 0,
+                            sender_device_id: 0,
+                            target_devices: vec![msg.sender_device_id],
+                            r#type: "flow_entry_accept".to_string(),
+                            payload: serde_json::json!({
+                                "transfer_id": transfer_id,
+                                "kind": kind,
+                                "root_hash": root_hash,
+                                "title": title,
+                                "requester_device_name": device_label,
+                            }),
+                        };
+                        if let Err(e) = ws_tx.send(accept_msg).await {
+                            error!(
+                                "Failed to dispatch auto-accept FlowSync transfer request: {}",
+                                e
+                            );
+                        }
+                    }
+                } else if msg.r#type == "flow_entry_accept" {
+                    let transfer_id = msg.payload["transfer_id"].as_str().unwrap_or("");
+                    let kind = msg.payload["kind"].as_str().unwrap_or("");
+                    let root_hash = msg.payload["root_hash"].as_str().unwrap_or("");
+                    let requester_device_name = msg.payload["requester_device_name"]
+                        .as_str()
+                        .unwrap_or("目标设备");
+                    if transfer_id.is_empty()
+                        || root_hash.is_empty()
+                        || !matches!(kind, "file" | "bundle")
+                    {
+                        error!("Invalid flow_entry_accept payload.");
+                        continue;
+                    }
+
+                    let record = {
+                        let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                        let Some(flow_store) = flow_store_lock.as_ref() else {
+                            error!(
+                                "FlowSync store not initialized while handling flow_entry_accept."
+                            );
+                            continue;
+                        };
+                        match flow_store.get_history_record_by_kind_hash(kind, root_hash) {
+                            Ok(Some(record)) => record,
+                            Ok(None) => {
+                                error!(
+                                    "Could not find local FlowSync entry for accepted transfer {transfer_id}."
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to load FlowSync entry for accepted transfer {transfer_id}: {}",
+                                    e
+                                );
+                                continue;
+                            }
+                        }
+                    };
+
+                    let prep_result = {
+                        let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                        let Some(flow_store) = flow_store_lock.as_ref() else {
+                            error!(
+                                "FlowSync store not initialized while preparing outbound transfer."
+                            );
+                            continue;
+                        };
+                        flow_store.upsert_transfer_session(
+                            record.entry.id,
+                            transfer_id,
+                            "outbound",
+                            "accepted",
+                            Some(&device_label),
+                            Some(requester_device_name),
+                            record.entry.size,
+                            0,
+                            current_unix_ms(),
+                        )
+                    };
+                    if let Err(e) = prep_result {
+                        error!(
+                            "Failed to prepare outbound FlowSync transfer {transfer_id}: {}",
+                            e
+                        );
+                        continue;
+                    }
+
+                    if let Err(e) = crate::p2p::start_flow_entry_send(
+                        &record,
+                        transfer_id,
+                        msg.sender_device_id,
+                        requester_device_name,
+                        ws_tx.clone(),
+                        &device_label,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Failed to start outbound FlowSync transfer {transfer_id}: {}",
+                            e
+                        );
+                        let _ = ws_tx
+                            .send(WsMessage {
+                                sender_uid: 0,
+                                sender_device_id: 0,
+                                target_devices: vec![msg.sender_device_id],
+                                r#type: "flow_transfer_failed".to_string(),
+                                payload: serde_json::json!({
+                                    "transfer_id": transfer_id,
+                                    "status": "failed",
+                                    "message": e,
+                                }),
+                            })
+                            .await;
+                    }
+                } else if msg.r#type == "flow_transfer_progress" {
+                    let transfer_id = msg.payload["transfer_id"].as_str().unwrap_or("");
+                    if transfer_id.is_empty() {
+                        continue;
+                    }
+                    let bytes_done = msg.payload["bytes_done"].as_i64().unwrap_or(0);
+                    let bytes_total = msg.payload["bytes_total"].as_i64().unwrap_or(0);
+                    let update_result = {
+                        let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+                        let Some(flow_store) = flow_store_lock.as_ref() else {
+                            continue;
+                        };
+                        let latest_match = flow_store
+                            .query_history_compat(None, None, None, None, 500, 0)
+                            .ok()
+                            .and_then(|entries| {
+                                entries.into_iter().find(|entry| {
+                                    flow_store
+                                        .get_entry_transfer_state(entry.id)
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|state| state.latest_transfer)
+                                        .map(|transfer| transfer.transfer_id == transfer_id)
+                                        .unwrap_or(false)
+                                })
+                            });
+                        if let Some(entry) = latest_match {
+                            flow_store.upsert_transfer_session(
+                                entry.id,
+                                transfer_id,
+                                "outbound",
+                                "transferring",
+                                None,
+                                None,
+                                bytes_total,
+                                bytes_done,
+                                current_unix_ms(),
+                            )
+                        } else {
+                            Ok(())
+                        }
+                    };
+                    if let Err(e) = update_result {
+                        error!("Failed to update flow_transfer_progress: {}", e);
+                    }
+                } else if msg.r#type == "flow_transfer_completed" {
+                    let transfer_id = msg.payload["transfer_id"].as_str().unwrap_or("");
+                    if transfer_id.is_empty() {
+                        continue;
+                    }
+                    if let Some(flow_store) = crate::flow_store::FLOW_STORE_MANAGER
+                        .read()
+                        .unwrap()
+                        .as_ref()
+                        && let Err(e) =
+                            flow_store.mark_transfer_completed(transfer_id, current_unix_ms())
+                    {
+                        error!("Failed to update flow_transfer_completed: {}", e);
+                    }
+                } else if msg.r#type == "flow_transfer_failed" {
+                    let transfer_id = msg.payload["transfer_id"].as_str().unwrap_or("");
+                    if transfer_id.is_empty() {
+                        continue;
+                    }
+                    if let Some(flow_store) = crate::flow_store::FLOW_STORE_MANAGER
+                        .read()
+                        .unwrap()
+                        .as_ref()
+                        && let Err(e) =
+                            flow_store.mark_transfer_failed(transfer_id, current_unix_ms())
+                    {
+                        error!("Failed to update flow_transfer_failed: {}", e);
                     }
                 } else if msg.r#type == "history_request" {
                     info!("Received history_request from peer device");
@@ -828,29 +1374,49 @@ impl ClipboardMonitor {
                                 Ok(entries) => {
                                     let mut items = Vec::new();
                                     for e in &entries {
-                                        let cache_lock = crate::cache::CACHE_MANAGER.read().unwrap();
+                                        let cache_lock =
+                                            crate::cache::CACHE_MANAGER.read().unwrap();
                                         let data_val = if e.entry_type == "text" {
-                                            cache_lock.as_ref().and_then(|c| c.read_text(&e.hash).ok())
-                                                .map(|content| serde_json::json!({
-                                                    "timestamp": e.timestamp,
-                                                    "type": "text",
-                                                    "hash": e.hash,
-                                                    "content": content,
-                                                    "source": e.source,
-                                                }))
+                                            cache_lock
+                                                .as_ref()
+                                                .and_then(|c| c.read_text(&e.hash).ok())
+                                                .map(|content| {
+                                                    serde_json::json!({
+                                                        "timestamp": e.timestamp,
+                                                        "type": "text",
+                                                        "hash": e.hash,
+                                                        "content": content,
+                                                        "source": e.source,
+                                                    })
+                                                })
                                         } else {
-                                            cache_lock.as_ref().and_then(|c| c.read_image(&e.hash).ok())
+                                            cache_lock
+                                                .as_ref()
+                                                .and_then(|c| c.read_image(&e.hash).ok())
                                                 .map(|data| {
-                                                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                                    use base64::{
+                                                        Engine as _,
+                                                        engine::general_purpose::STANDARD,
+                                                    };
                                                     let configured_format = {
-                                                        let cfg = crate::config::GLOBAL_CONFIG.read().unwrap();
+                                                        let cfg = crate::config::GLOBAL_CONFIG
+                                                            .read()
+                                                            .unwrap();
                                                         cfg.cache.image_transport_format.clone()
                                                     };
-                                                    let (payload_data, image_encoding) = match Self::raw_image_to_arboard_image(&data)
-                                                        .and_then(|img| Self::encode_image_for_transport(&img, &configured_format)) {
-                                                        Some((encoded, fmt)) => (encoded, fmt),
-                                                        None => (data, "raw"),
-                                                    };
+                                                    let (payload_data, image_encoding) =
+                                                        match Self::raw_image_to_arboard_image(
+                                                            &data,
+                                                        )
+                                                        .and_then(|img| {
+                                                            Self::encode_image_for_transport(
+                                                                &img,
+                                                                &configured_format,
+                                                            )
+                                                        }) {
+                                                            Some((encoded, fmt)) => (encoded, fmt),
+                                                            None => (data, "raw"),
+                                                        };
                                                     serde_json::json!({
                                                         "timestamp": e.timestamp,
                                                         "type": "image",
@@ -942,14 +1508,19 @@ impl ClipboardMonitor {
                         .unwrap_or("其他设备");
                     let items = match msg.payload["items"].as_array() {
                         Some(arr) => arr,
-                        None => { error!("Invalid history_response: no items array"); continue; }
+                        None => {
+                            error!("Invalid history_response: no items array");
+                            continue;
+                        }
                     };
                     let mut imported = 0u32;
                     for item in items {
                         let entry_type = item["type"].as_str().unwrap_or("");
                         let hash = item["hash"].as_str().unwrap_or("");
                         let _timestamp = item["timestamp"].as_i64().unwrap_or(0);
-                        if hash.is_empty() { continue; }
+                        if hash.is_empty() {
+                            continue;
+                        }
                         let source = item["source"].as_str().unwrap_or("pull:其他设备");
                         let label = if let Some(rest) = source.strip_prefix("sync:") {
                             format!("pull:{rest}")
@@ -971,13 +1542,19 @@ impl ClipboardMonitor {
                                 use base64::{Engine as _, engine::general_purpose::STANDARD};
                                 if let Ok(data) = STANDARD.decode(data_b64) {
                                     let content_id = item["content_id"].as_str().or(Some(hash));
-                                    let raw = if item["image_encoding"].as_str().unwrap_or("") == "raw" {
-                                        Some(data)
-                                    } else {
-                                        Self::decode_encoded_image_to_raw_image(&data, item["image_encoding"].as_str().unwrap_or("png"))
-                                    };
+                                    let raw =
+                                        if item["image_encoding"].as_str().unwrap_or("") == "raw" {
+                                            Some(data)
+                                        } else {
+                                            Self::decode_encoded_image_to_raw_image(
+                                                &data,
+                                                item["image_encoding"].as_str().unwrap_or("png"),
+                                            )
+                                        };
                                     if let Some(raw) = raw {
-                                        crate::cache::record_clipboard_image(&raw, &label, content_id);
+                                        crate::cache::record_clipboard_image(
+                                            &raw, &label, content_id,
+                                        );
                                         imported += 1;
                                     }
                                 }
@@ -986,10 +1563,12 @@ impl ClipboardMonitor {
                     }
                     info!("Imported {} history items from peer", imported);
                     if let Some(chan) = ui_tx.as_ref() {
-                        let _ = chan.send(ClipboardEvent {
-                            status: "history_pulled".to_string(),
-                            preview: format!("Imported {} items", imported),
-                        }).await;
+                        let _ = chan
+                            .send(ClipboardEvent {
+                                status: "history_pulled".to_string(),
+                                preview: format!("Imported {} items", imported),
+                            })
+                            .await;
                     }
                 }
             }

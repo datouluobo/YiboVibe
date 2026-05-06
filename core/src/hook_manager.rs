@@ -5,21 +5,21 @@ use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::thread;
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM, MAX_PATH};
+use windows::Win32::Foundation::{LPARAM, LRESULT, MAX_PATH, WPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyboardState, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, ToUnicode, VIRTUAL_KEY,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
-    GetForegroundWindow, GetWindowThreadProcessId,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardState, ToUnicode, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
+    CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
+    HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 
 /// Maps OEM / layout keys (e.g. full-width ￥) and any key not covered by the ASCII branches.
@@ -36,10 +36,7 @@ fn key_event_to_unicode_char(vk: u32, scan: u32) -> Option<char> {
     }
     let take = (n as usize).min(buf.len());
     if let Ok(s) = String::from_utf16(&buf[..take]) {
-        return s
-            .chars()
-            .next()
-            .filter(|c| !c.is_control());
+        return s.chars().next().filter(|c| !c.is_control());
     }
     None
 }
@@ -64,7 +61,10 @@ lazy_static::lazy_static! {
 pub fn update_key_remap_table(entries: Vec<KeyRemapEntry>) {
     if let Ok(mut table) = KEY_REMAP_TABLE.lock() {
         *table = entries;
-        log::info!("[FlowKeys] Remap table updated: {} active entries", table.iter().filter(|e| e.enabled).count());
+        log::info!(
+            "[FlowKeys] Remap table updated: {} active entries",
+            table.iter().filter(|e| e.enabled).count()
+        );
     }
 }
 
@@ -92,31 +92,53 @@ fn key_name_to_vk(name: &str) -> Option<u32> {
         "Insert" => Some(0x2D),
         "Delete" => Some(0x2E),
         "Win" | "MetaLeft" | "MetaRight" => Some(0x5B),
-        "F1" => Some(0x70), "F2" => Some(0x71), "F3" => Some(0x72), "F4" => Some(0x73),
-        "F5" => Some(0x74), "F6" => Some(0x75), "F7" => Some(0x76), "F8" => Some(0x77),
-        "F9" => Some(0x78), "F10" => Some(0x79), "F11" => Some(0x7A), "F12" => Some(0x7B),
+        "F1" => Some(0x70),
+        "F2" => Some(0x71),
+        "F3" => Some(0x72),
+        "F4" => Some(0x73),
+        "F5" => Some(0x74),
+        "F6" => Some(0x75),
+        "F7" => Some(0x76),
+        "F8" => Some(0x77),
+        "F9" => Some(0x78),
+        "F10" => Some(0x79),
+        "F11" => Some(0x7A),
+        "F12" => Some(0x7B),
         "NumLock" => Some(0x90),
         "ScrollLock" => Some(0x91),
         "PrintScreen" => Some(0x2C),
         "ContextMenu" => Some(0x5D),
-        "Numpad0" => Some(0x60), "Numpad1" => Some(0x61), "Numpad2" => Some(0x62),
-        "Numpad3" => Some(0x63), "Numpad4" => Some(0x64), "Numpad5" => Some(0x65),
-        "Numpad6" => Some(0x66), "Numpad7" => Some(0x67), "Numpad8" => Some(0x68),
+        "Numpad0" => Some(0x60),
+        "Numpad1" => Some(0x61),
+        "Numpad2" => Some(0x62),
+        "Numpad3" => Some(0x63),
+        "Numpad4" => Some(0x64),
+        "Numpad5" => Some(0x65),
+        "Numpad6" => Some(0x66),
+        "Numpad7" => Some(0x67),
+        "Numpad8" => Some(0x68),
         "Numpad9" => Some(0x69),
-        "NumpadMultiply" => Some(0x6A), "NumpadAdd" => Some(0x6B),
-        "NumpadSubtract" => Some(0x6D), "NumpadDecimal" => Some(0x6E),
-        "NumpadDivide" => Some(0x6F), "NumpadEnter" => Some(0x0D),
+        "NumpadMultiply" => Some(0x6A),
+        "NumpadAdd" => Some(0x6B),
+        "NumpadSubtract" => Some(0x6D),
+        "NumpadDecimal" => Some(0x6E),
+        "NumpadDivide" => Some(0x6F),
+        "NumpadEnter" => Some(0x0D),
         s if s.starts_with("Key") && s.len() == 4 => {
             let c = s.chars().nth(3)?;
             if c.is_ascii_alphabetic() {
                 Some(0x41 + (c as u32).wrapping_sub(b'A' as u32))
-            } else { None }
+            } else {
+                None
+            }
         }
         s if s.starts_with("Digit") && s.len() == 6 => {
             let c = s.chars().nth(5)?;
             if c.is_ascii_digit() {
                 Some(c as u32)
-            } else { None }
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -152,7 +174,9 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
             cached.keys_enabled
         } else {
             let mut active_exe = String::new();
-            if let Ok(handle) = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
+            if let Ok(handle) =
+                unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) }
+            {
                 let mut buffer = [0u16; MAX_PATH as usize];
                 let len = unsafe { GetModuleFileNameExW(handle, None, &mut buffer) };
                 if len > 0 {
@@ -170,12 +194,15 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
             let a_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
             let k_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowKeys);
 
-            cache.insert(pid, ProcessCache {
-                exe_name: name.clone(),
-                snap_enabled: s_active,
-                hint_enabled: a_active,
-                keys_enabled: k_active,
-            });
+            cache.insert(
+                pid,
+                ProcessCache {
+                    exe_name: name.clone(),
+                    snap_enabled: s_active,
+                    hint_enabled: a_active,
+                    keys_enabled: k_active,
+                },
+            );
             k_active
         };
 
@@ -185,7 +212,9 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
     }
 
     for entry in table.iter() {
-        if !entry.enabled { continue; }
+        if !entry.enabled {
+            continue;
+        }
 
         // Check if source key matches
         let source_vk = match key_name_to_vk(&entry.source_key_id) {
@@ -193,7 +222,9 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
             None => continue,
         };
 
-        if vk_code != source_vk { continue; }
+        if vk_code != source_vk {
+            continue;
+        }
 
         // Parse source modifiers from source_key (e.g. "Ctrl+Alt+K")
         let source_parts: Vec<&str> = entry.source_key.split('+').collect();
@@ -212,14 +243,20 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
         }
 
         // Check modifier state
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        };
         let ctrl_down = (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0;
         let alt_down = (unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } as u16 & 0x8000) != 0;
         let shift_down = (unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000) != 0;
         let win_down = (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0
             || (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0;
 
-        if ctrl_down != need_ctrl || alt_down != need_alt || shift_down != need_shift || win_down != need_win {
+        if ctrl_down != need_ctrl
+            || alt_down != need_alt
+            || shift_down != need_shift
+            || win_down != need_win
+        {
             continue;
         }
 
@@ -240,7 +277,6 @@ fn check_key_remap(vk_code: u32, _scan_code: u32, is_key_down: bool) -> bool {
                     "Win" => target_win = true,
                     _ => {}
                 }
-
             }
 
             if let Some(tvk) = target_vk {
@@ -458,7 +494,10 @@ fn send_hint_event(event: HintEvent) {
 
 pub fn set_hint_tx_test_send() {
     send_hint_event(HintEvent::Show {
-        candidates: vec!["[诊断] git init".to_string(), "[诊断] git status".to_string()],
+        candidates: vec![
+            "[诊断] git init".to_string(),
+            "[诊断] git status".to_string(),
+        ],
         selected_index: 0,
         x: 300,
         y: 300,
@@ -473,14 +512,22 @@ pub fn accept_hint_by_index(index: usize) {
         if hs.is_active && index < hs.candidates.len() {
             let candidate = hs.candidates[index].clone();
             let prefix_len = hs.prefix_lens.get(index).copied().unwrap_or(0);
-            data_opt = Some((candidate, prefix_len, hs.source.clone(), hs.is_buffered, hs.snap_backspace_count));
+            data_opt = Some((
+                candidate,
+                prefix_len,
+                hs.source.clone(),
+                hs.is_buffered,
+                hs.snap_backspace_count,
+            ));
             hs.is_active = false;
         }
     }
 
     if let Some((candidate, prefix_len, source, is_buffered, bs_count)) = data_opt {
         send_hint_event(HintEvent::Hide);
-        if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+        if let Ok(mut buf) = KEY_BUFFER.lock() {
+            buf.clear();
+        }
 
         #[cfg(target_os = "windows")]
         std::thread::spawn(move || {
@@ -494,7 +541,7 @@ pub fn accept_hint_by_index(index: usize) {
                     std::thread::sleep(std::time::Duration::from_millis(30)); // allow focus sequence to finish
                 }
             }
-            
+
             if source == HintSource::FlowSnapMulti || is_buffered {
                 replace_text_with_snippet(&candidate, bs_count);
             } else {
@@ -518,32 +565,35 @@ pub fn dismiss_hint() {
 
 #[cfg(target_os = "windows")]
 unsafe fn get_caret_pos(hwnd: windows::Win32::Foundation::HWND) -> Option<(i32, i32)> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetGUIThreadInfo};
 
-    let thread_id = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, None) };
+    let thread_id =
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, None) };
     let mut gui_info = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
         ..Default::default()
     };
-    
+
     // 优先尝试获取文本光标位置
-    if unsafe { GetGUIThreadInfo(thread_id, &mut gui_info) }.is_ok()
-        && gui_info.hwndCaret.0 != 0 {
-            let mut pt = POINT { x: gui_info.rcCaret.left, y: gui_info.rcCaret.bottom };
-            if unsafe { ClientToScreen(gui_info.hwndCaret, &mut pt) }.as_bool() {
-                return Some((pt.x, pt.y));
-            }
+    if unsafe { GetGUIThreadInfo(thread_id, &mut gui_info) }.is_ok() && gui_info.hwndCaret.0 != 0 {
+        let mut pt = POINT {
+            x: gui_info.rcCaret.left,
+            y: gui_info.rcCaret.bottom,
+        };
+        if unsafe { ClientToScreen(gui_info.hwndCaret, &mut pt) }.as_bool() {
+            return Some((pt.x, pt.y));
         }
-    
+    }
+
     // 兜底：如果获取不到光标（如 VSCode/Chrome），则跟随物理鼠标指针
     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let mut pt = POINT::default();
     if unsafe { GetCursorPos(&mut pt) }.is_ok() {
         return Some((pt.x, pt.y));
     }
-    
+
     None
 }
 
@@ -574,12 +624,7 @@ pub fn start_global_hook() {
                 }
             };
 
-            let hook = match SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                Some(hook_callback),
-                hinstance,
-                0,
-            ) {
+            let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), hinstance, 0) {
                 Ok(h) => h,
                 Err(e) => {
                     error!("Failed to install global keyboard hook: {:?}", e);
@@ -624,7 +669,10 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                         // Window focus changed -> Reset key buffer to prevent cross-app triggers
                         if let Ok(mut buf) = KEY_BUFFER.try_lock() {
                             if !buf.is_empty() {
-                                log::info!("[FocusChange] Resetting key buffer. New HWND: 0x{:X}", hwnd.0);
+                                log::info!(
+                                    "[FocusChange] Resetting key buffer. New HWND: 0x{:X}",
+                                    hwnd.0
+                                );
                                 buf.clear();
                             }
                         }
@@ -635,7 +683,7 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 // Ignore our own windows for LAST_HWND tracking to ensure focus-restore works correctly
             }
         }
-        
+
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
 
@@ -655,7 +703,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 autofill_active = cached.hint_enabled;
             } else {
                 let mut active_exe = String::new();
-                if let Ok(handle) = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
+                if let Ok(handle) =
+                    unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) }
+                {
                     let mut buffer = [0u16; MAX_PATH as usize];
                     let len = unsafe { GetModuleFileNameExW(handle, None, &mut buffer) };
                     if len > 0 {
@@ -669,16 +719,22 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     .unwrap_or("")
                     .to_lowercase();
 
-                let s_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowSnap);
-                let a_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
-                let k_active = crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowKeys);
+                let s_active =
+                    crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowSnap);
+                let a_active =
+                    crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowHint);
+                let k_active =
+                    crate::rules::is_feature_enabled(&name, crate::rules::Feature::FlowKeys);
 
-                cache.insert(pid, ProcessCache {
-                    exe_name: name.clone(),
-                    snap_enabled: s_active,
-                    hint_enabled: a_active,
-                    keys_enabled: k_active,
-                });
+                cache.insert(
+                    pid,
+                    ProcessCache {
+                        exe_name: name.clone(),
+                        snap_enabled: s_active,
+                        hint_enabled: a_active,
+                        keys_enabled: k_active,
+                    },
+                );
 
                 exe_name = name;
                 snippets_active = s_active;
@@ -695,9 +751,16 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         let ime_wnd = unsafe { ImmGetDefaultIMEWnd(hwnd) };
         let is_ime_chinese_mode = if ime_wnd.0 != 0 {
             unsafe { SendMessageW(ime_wnd, WM_IME_CONTROL, WPARAM(0x005), LPARAM(0)) }.0 != 0
-        } else { false };
+        } else {
+            false
+        };
 
-        log::debug!("[FlowSnap-DBG] key=0x{:X} ime_cn={} exe={}", key_code, is_ime_chinese_mode, exe_name);
+        log::debug!(
+            "[FlowSnap-DBG] key=0x{:X} ime_cn={} exe={}",
+            key_code,
+            is_ime_chinese_mode,
+            exe_name
+        );
 
         // 2. Hint UI Logic (Using try_lock to be cross-thread safe)
         let hint_res = {
@@ -713,16 +776,19 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     if (accept_tab && key_code == 0x09) || (accept_right && key_code == 0x27) {
                         idx = hs.selected_index;
                         act = 1;
-                    } else if key_code == 0x1B { // ESC
+                    } else if key_code == 0x1B {
+                        // ESC
                         hs.is_active = false;
                         act = 2;
-                    } else if key_code == 0x26 { // Up
+                    } else if key_code == 0x26 {
+                        // Up
                         if hs.selected_index > 0 {
                             hs.selected_index -= 1;
                             idx = hs.selected_index;
                             act = 3;
                         }
-                    } else if key_code == 0x28 { // Down
+                    } else if key_code == 0x28 {
+                        // Down
                         if hs.selected_index + 1 < hs.candidates.len() {
                             hs.selected_index += 1;
                             idx = hs.selected_index;
@@ -733,16 +799,24 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
 
                 // Add action for Chinese Mode auto-hide
                 let mut ime_hide = false;
-                if hs.is_active && hs.source == HintSource::FlowHint && is_ime_chinese_mode && (0x41..=0x5A).contains(&key_code) {
+                if hs.is_active
+                    && hs.source == HintSource::FlowHint
+                    && is_ime_chinese_mode
+                    && (0x41..=0x5A).contains(&key_code)
+                {
                     hs.is_active = false;
                     ime_hide = true;
                 }
 
                 (act, idx, ime_hide)
-            } else { (0, 0, false) }
+            } else {
+                (0, 0, false)
+            }
         };
 
-        if hint_res.2 { send_hint_event(HintEvent::Hide); }
+        if hint_res.2 {
+            send_hint_event(HintEvent::Hide);
+        }
 
         match hint_res.0 {
             1 => {
@@ -751,7 +825,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             }
             2 => {
                 send_hint_event(HintEvent::Hide);
-                if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+                if let Ok(mut buf) = KEY_BUFFER.lock() {
+                    buf.clear();
+                }
                 return LRESULT(1);
             }
             3 | 4 => {
@@ -767,7 +843,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         };
 
         let is_ctrl_alt_win = {
-            use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN};
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+            };
             let ctrl = (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0;
             let alt = (unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } as u16 & 0x8000) != 0;
             let lwin = (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0;
@@ -776,7 +854,9 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         };
 
         if is_ctrl_alt_win {
-            if let Ok(mut buf) = KEY_BUFFER.lock() { buf.clear(); }
+            if let Ok(mut buf) = KEY_BUFFER.lock() {
+                buf.clear();
+            }
             if let Ok(mut hs) = CURRENT_HINT.lock() {
                 if hs.is_active {
                     hs.is_active = false;
@@ -789,18 +869,31 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
         if (0x41..=0x5A).contains(&key_code) {
             if let Some(ch) = std::char::from_u32(key_code + 32) {
                 if let Ok(mut buf) = KEY_BUFFER.lock() {
-                    buf.push(ch); if buf.len() > 50 { buf.remove(0); }
+                    buf.push(ch);
+                    if buf.len() > 50 {
+                        buf.remove(0);
+                    }
                     buf_changed = true;
                 }
             }
         } else if (0x30..=0x39).contains(&key_code) {
             let ch = if is_shift {
                 match key_code {
-                    0x31=>'!', 0x32=>'@', 0x33=>'#', 0x34=>'$', 0x35=>'%',
-                    0x36=>'^', 0x37=>'&', 0x38=>'*', 0x39=>'(', 0x30=>')',
+                    0x31 => '!',
+                    0x32 => '@',
+                    0x33 => '#',
+                    0x34 => '$',
+                    0x35 => '%',
+                    0x36 => '^',
+                    0x37 => '&',
+                    0x38 => '*',
+                    0x39 => '(',
+                    0x30 => ')',
                     _ => std::char::from_u32(key_code).unwrap_or(' '),
                 }
-            } else { std::char::from_u32(key_code).unwrap_or(' ') };
+            } else {
+                std::char::from_u32(key_code).unwrap_or(' ')
+            };
             if let Ok(mut buf) = KEY_BUFFER.lock() {
                 buf.push(ch);
                 buf_changed = true;
@@ -810,17 +903,26 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             if let Some(ch) = char::from_u32(0x30 + (key_code - 0x60)) {
                 if let Ok(mut buf) = KEY_BUFFER.lock() {
                     buf.push(ch);
-                    if buf.len() > 50 { buf.remove(0); }
+                    if buf.len() > 50 {
+                        buf.remove(0);
+                    }
                     buf_changed = true;
                 }
             }
-        } else if key_code == 0x08 { // Backspace
+        } else if key_code == 0x08 {
+            // Backspace
             if let Ok(mut buf) = KEY_BUFFER.lock() {
-                if buf.pop().is_some() { buf_changed = true; }
+                if buf.pop().is_some() {
+                    buf_changed = true;
+                }
             }
-        } else if key_code == 0x20 { // Space
+        } else if key_code == 0x20 {
+            // Space
             if let Ok(mut buf) = KEY_BUFFER.lock() {
-                buf.push(' '); if buf.len() > 50 { buf.remove(0); }
+                buf.push(' ');
+                if buf.len() > 50 {
+                    buf.remove(0);
+                }
                 buf_changed = true;
             }
         } else {
@@ -846,15 +948,26 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             });
             if let Some(c) = ch {
                 if let Ok(mut buf) = KEY_BUFFER.lock() {
-                    buf.push(c); if buf.len() > 50 { buf.remove(0); }
+                    buf.push(c);
+                    if buf.len() > 50 {
+                        buf.remove(0);
+                    }
                     buf_changed = true;
                 }
             }
         }
 
         if buf_changed {
-            let buf = if let Ok(b) = KEY_BUFFER.lock() { b.clone() } else { String::new() };
-            log::debug!("[FlowSnap-DBG] buffer='{}' snippets_active={}", buf, snippets_active);
+            let buf = if let Ok(b) = KEY_BUFFER.lock() {
+                b.clone()
+            } else {
+                String::new()
+            };
+            log::debug!(
+                "[FlowSnap-DBG] buffer='{}' snippets_active={}",
+                buf,
+                snippets_active
+            );
             let mut matched_trigger: Option<String> = None;
             let mut matched_replacements: Vec<String> = Vec::new();
             // FlowSnap: ALWAYS attempt matching regardless of IME state
@@ -863,7 +976,10 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                 let buf_lower = buf.to_lowercase();
                 for (trigger, replacements) in snap_table.iter() {
                     if buf_lower.ends_with(&trigger.to_lowercase()) {
-                        if matched_trigger.as_ref().map_or(true, |t| trigger.len() > t.len()) {
+                        if matched_trigger
+                            .as_ref()
+                            .map_or(true, |t| trigger.len() > t.len())
+                        {
                             matched_trigger = Some(trigger.clone());
                             matched_replacements = replacements.clone();
                         }
@@ -874,8 +990,10 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
             // 5. Apply FlowSnap
             if let Some(trigger) = matched_trigger {
                 if !matched_replacements.is_empty() {
-                    if let Ok(mut buf_lock) = KEY_BUFFER.lock() { buf_lock.clear(); }
-                    
+                    if let Ok(mut buf_lock) = KEY_BUFFER.lock() {
+                        buf_lock.clear();
+                    }
+
                     let trigger_len = trigger.chars().count();
                     let bs_actual = trigger_len.saturating_sub(1);
 
@@ -893,12 +1011,17 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                             hs.source = HintSource::FlowSnapMulti;
                             hs.snap_backspace_count = bs_actual;
                             hs.is_buffered = false;
-                            
+
                             let (mut cx, mut cy) = (0, 0);
-                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } { cx = px; cy = py; }
-                            send_hint_event(HintEvent::Show { 
-                                candidates: matched_replacements.clone(), 
-                                selected_index: 0, x: cx, y: cy 
+                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } {
+                                cx = px;
+                                cy = py;
+                            }
+                            send_hint_event(HintEvent::Show {
+                                candidates: matched_replacements.clone(),
+                                selected_index: 0,
+                                x: cx,
+                                y: cy,
                             });
                         }
                         return LRESULT(1);
@@ -911,19 +1034,35 @@ unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPAR
                     let dict_ids = crate::rules::get_app_flowhint_dicts(&exe_name);
                     let cands_with_len = crate::dictionary::search_candidates_tail(&dict_ids, &buf);
                     if !cands_with_len.is_empty() {
-                        let cands: Vec<String> = cands_with_len.iter().map(|(c, _)| c.clone()).collect();
-                        let prefix_lens: Vec<usize> = cands_with_len.iter().map(|(_, l)| *l).collect();
+                        let cands: Vec<String> =
+                            cands_with_len.iter().map(|(c, _)| c.clone()).collect();
+                        let prefix_lens: Vec<usize> =
+                            cands_with_len.iter().map(|(_, l)| *l).collect();
                         if let Ok(mut hs) = CURRENT_HINT.lock() {
-                            hs.is_active = true; hs.candidates = cands.clone();
-                            hs.selected_index = 0; hs.prefix_lens = prefix_lens;
-                            hs.source = HintSource::FlowHint; hs.is_buffered = false;
+                            hs.is_active = true;
+                            hs.candidates = cands.clone();
+                            hs.selected_index = 0;
+                            hs.prefix_lens = prefix_lens;
+                            hs.source = HintSource::FlowHint;
+                            hs.is_buffered = false;
                             let (mut cx, mut cy) = (0, 0);
-                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } { cx = px; cy = py; }
-                            send_hint_event(HintEvent::Show { candidates: cands, selected_index: 0, x: cx, y: cy });
+                            if let Some((px, py)) = unsafe { get_caret_pos(hwnd) } {
+                                cx = px;
+                                cy = py;
+                            }
+                            send_hint_event(HintEvent::Show {
+                                candidates: cands,
+                                selected_index: 0,
+                                x: cx,
+                                y: cy,
+                            });
                         }
                     } else {
                         if let Ok(mut hs) = CURRENT_HINT.lock() {
-                            if hs.is_active { hs.is_active = false; send_hint_event(HintEvent::Hide); }
+                            if hs.is_active {
+                                hs.is_active = false;
+                                send_hint_event(HintEvent::Hide);
+                            }
                         }
                     }
                 }
@@ -939,7 +1078,7 @@ pub fn paste_text_only(text: &str) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBDINPUT, KEYEVENTF_UNICODE};
 
     std::thread::sleep(Duration::from_millis(15));
-    
+
     // Use Unicode input for maximum compatibility (bypasses clipboard issues in terminals)
     let utf16: Vec<u16> = text.encode_utf16().collect();
     let mut inputs: Vec<INPUT> = Vec::with_capacity(utf16.len() * 2);
@@ -988,7 +1127,10 @@ pub fn paste_to_last_focused_window(text: String) {
 
     std::thread::spawn(move || {
         if hwnd_val != 0 {
-            log::info!("[FocusRestore] Attempting to restore focus to HWND: 0x{:X}", hwnd_val);
+            log::info!(
+                "[FocusRestore] Attempting to restore focus to HWND: 0x{:X}",
+                hwnd_val
+            );
             let hwnd = windows::Win32::Foundation::HWND(hwnd_val as _);
             unsafe {
                 windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
@@ -1005,7 +1147,7 @@ pub fn paste_to_last_focused_window(text: String) {
 #[cfg(target_os = "windows")]
 fn replace_text_with_snippet(target: &str, backspace_count: usize) {
     use std::time::Duration;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_CONTROL, VIRTUAL_KEY};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_BACK, VK_CONTROL};
 
     std::thread::sleep(Duration::from_millis(30));
     unsafe {
@@ -1040,7 +1182,7 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
             let old_text_opt = clipboard.get_text().ok();
             // Drop the clipboard instance immediately after reading old content
             drop(clipboard);
-            
+
             // Update global cache before setting, to prevent sync loop
             if let Ok(mut last) = crate::clipboard::LAST_TEXT.lock() {
                 *last = target.to_string();
@@ -1063,7 +1205,7 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
                 log::error!("[ShadowClipboard] Failed to set clipboard text after retries.");
                 return;
             }
-            
+
             // Execute Ctrl+V paste
             std::thread::sleep(Duration::from_millis(20));
             let vk_v = VIRTUAL_KEY(0x56);
@@ -1102,9 +1244,13 @@ fn replace_text_with_snippet(target: &str, backspace_count: usize) {
                                         *last = old_text.clone();
                                     }
                                     let _ = cb.set_text(old_text);
-                                    log::info!("[ShadowClipboard] Context restored successfully (no sync loop).");
+                                    log::info!(
+                                        "[ShadowClipboard] Context restored successfully (no sync loop)."
+                                    );
                                 } else {
-                                    log::warn!("[ShadowClipboard] User copied new content, skipping restoration.");
+                                    log::warn!(
+                                        "[ShadowClipboard] User copied new content, skipping restoration."
+                                    );
                                 }
                             }
                             break;

@@ -4,6 +4,11 @@
         reverse_proxy yiboflow_api:8080
     }
 
+    # NAS 外链下载入口
+    handle /share/* {
+        reverse_proxy yiboflow_api:8080
+    }
+
     # 兜底处理 (防止误访问其他路径)
     handle {
         respond "YiboFlow Sync Gateway is Active" 200

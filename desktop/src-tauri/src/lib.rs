@@ -1,5 +1,6 @@
 use log::{info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
@@ -23,7 +24,7 @@ fn refresh_hint_window_cfg() {
     );
 }
 
-use yiboflow_core::api::{ApiClient, LoginRequest, LoginFailData, RegisterRequest};
+use yiboflow_core::api::{ApiClient, LoginFailData, LoginRequest, RegisterRequest};
 use yiboflow_core::clipboard::ClipboardMonitor;
 use yiboflow_core::crypto::MasterKey;
 use yiboflow_core::ws::WsClient;
@@ -52,6 +53,12 @@ struct FlowSyncRuntimeState {
 
 #[derive(serde::Serialize)]
 struct FlowSyncDiagnostics {
+    build_id: String,
+    build_git_commit: String,
+    build_git_dirty: bool,
+    build_unix_ts: String,
+    build_profile: String,
+    build_target_dir: String,
     exe_path: String,
     global_dir: String,
     active_user_dir: String,
@@ -64,24 +71,106 @@ struct FlowSyncDiagnostics {
     remote_device_id: Option<u32>,
     persistent_device_fingerprint: String,
     runtime_device_fingerprint: String,
+    activity_total_entries: Option<i64>,
+    activity_sample_query_count: Option<usize>,
+    activity_query_error: Option<String>,
+}
+
+const FLOWSYNC_STAGE_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+
+async fn resolve_runtime_device_name(state: &tauri::State<'_, AppState>) -> String {
+    if let Some(device_name) = state.runtime_device_name.lock().await.clone() {
+        let trimmed = device_name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Ok(instance_tag) = std::env::var("YIBOFLOW_INSTANCE_TAG") {
+        let trimmed = instance_tag.trim();
+        if !trimmed.is_empty() {
+            return format!("YiboFlow-{trimmed}");
+        }
+    }
+
+    "YiboFlow Desktop Native".to_string()
 }
 
 fn resolve_runtime_device_fingerprint(base_fingerprint: &str) -> String {
     let instance_tag = std::env::var("YIBOFLOW_INSTANCE_TAG")
         .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::current_exe().ok().map(|exe| {
-                let mut hasher = DefaultHasher::new();
-                exe.to_string_lossy().hash(&mut hasher);
-                format!("exe-{:x}", hasher.finish())
-            })
-        });
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     match instance_tag {
         Some(tag) => format!("{base_fingerprint}::{tag}"),
         None => base_fingerprint.to_string(),
     }
+}
+
+async fn require_runtime_server_auth(
+    state: &tauri::State<'_, AppState>,
+) -> Result<(String, String), String> {
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
+        .ok_or("Not authenticated".to_string())?;
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
+        .ok_or("Not connected to server".to_string())?;
+    Ok((server_url, token))
+}
+
+fn sanitize_stage_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            _ => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "flowsync-object".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn unique_path(root: &Path, preferred_name: &str) -> PathBuf {
+    let candidate = root.join(preferred_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let stem = Path::new(preferred_name)
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .unwrap_or("flowsync-object");
+    let ext = Path::new(preferred_name)
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("");
+    for idx in 2..1000 {
+        let name = if ext.is_empty() {
+            format!("{stem} ({idx})")
+        } else {
+            format!("{stem} ({idx}).{ext}")
+        };
+        let next = root.join(name);
+        if !next.exists() {
+            return next;
+        }
+    }
+    root.join(format!("{stem}-{}", uuid::Uuid::new_v4()))
+}
+
+fn stage_expire_at_ms(ttl_seconds: i32) -> i64 {
+    current_unix_ms() + (ttl_seconds.max(0) as i64 * 1000)
 }
 
 fn normalize_main_window_size(window: &tauri::WebviewWindow) {
@@ -100,8 +189,8 @@ fn normalize_main_window_size(window: &tauri::WebviewWindow) {
 
         let current_width = size.width as f64;
         let current_height = size.height as f64;
-        let needs_resize =
-            current_width < MAIN_WINDOW_DEFAULT_WIDTH || current_height < MAIN_WINDOW_DEFAULT_HEIGHT;
+        let needs_resize = current_width < MAIN_WINDOW_DEFAULT_WIDTH
+            || current_height < MAIN_WINDOW_DEFAULT_HEIGHT;
 
         if !needs_resize {
             return;
@@ -126,8 +215,6 @@ fn normalize_main_window_size(window: &tauri::WebviewWindow) {
         let _ = window.center();
     });
 }
-
-
 
 #[tauri::command]
 async fn register_engine(
@@ -183,22 +270,21 @@ async fn connect_engine(
     password: String,
     device_name: String,
 ) -> Result<ConnectResult, String> {
-    {
-        let connected_flag = state.is_connected.lock().await;
-        if *connected_flag {
-             info!("Already connected. Bypassing engine setup to prevent duplicate monitors.");
-             let role = state.runtime_role.lock().await.clone().unwrap_or_else(|| "user".to_string());
-             return Ok(ConnectResult { success: true, role });
-        }
-    }
+    let already_connected = *state.is_connected.lock().await;
+    let mut ui_tx = None;
 
-    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::channel(100);
-    let app_clone = app.clone();
-    tokio::spawn(async move {
-        while let Some(evt) = ui_rx.recv().await {
-            let _ = app_clone.emit("clipboard-event", evt);
-        }
-    });
+    if !already_connected {
+        let (tx, mut ui_rx) = tokio::sync::mpsc::channel(100);
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            while let Some(evt) = ui_rx.recv().await {
+                let _ = app_clone.emit("clipboard-event", evt);
+            }
+        });
+        ui_tx = Some(tx);
+    } else {
+        info!("Already connected. Re-authenticating to refresh runtime server token.");
+    }
 
     info!(
         "Tauri Command Received: connect_engine -> Server: {}, User: {}, Device: {}",
@@ -207,7 +293,10 @@ async fn connect_engine(
 
     if server_url == "local" {
         yiboflow_core::local_auth::login_local_user(&username, &password)?;
-        return Ok(ConnectResult { success: true, role: "user".to_string() });
+        return Ok(ConnectResult {
+            success: true,
+            role: "user".to_string(),
+        });
     }
 
     let config_fingerprint = {
@@ -243,26 +332,64 @@ async fn connect_engine(
             }
             if res.code == 401 {
                 // Extract fail data (attempts + password_hint) and propagate to frontend
-                let fail_data: LoginFailData = res.data
+                let fail_data: LoginFailData = res
+                    .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok())
                     .unwrap_or_default();
                 if fail_data.password_hint.is_empty() {
                     return Err(format!("Auth Failed: {}", res.msg));
                 } else {
-                    return Err(format!("LOGIN_HINT:{}:{}", fail_data.attempts, fail_data.password_hint));
+                    return Err(format!(
+                        "LOGIN_HINT:{}:{}",
+                        fail_data.attempts, fail_data.password_hint
+                    ));
                 }
             }
             if res.code == 200 {
                 let d = res.data.as_ref().unwrap();
-                let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let login_device_id = d.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let login_role = d.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string();
+                let access_token = d
+                    .get("access_token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let kdf_salt = d
+                    .get("kdf_salt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let login_device_id =
+                    d.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let login_role = d
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("user")
+                    .to_string();
                 info!(
                     "Logged in from GUI! Received Token: {}...",
                     &access_token[0..10]
                 );
+
+                if already_connected {
+                    let mut runtime_server_url = state.runtime_server_url.lock().await;
+                    *runtime_server_url = Some(server_url.clone());
+                    let mut runtime_username = state.runtime_username.lock().await;
+                    *runtime_username = Some(username.clone());
+                    let mut runtime_device_name = state.runtime_device_name.lock().await;
+                    *runtime_device_name = Some(device_name.clone());
+                    let mut runtime_remote_device_id =
+                        state.runtime_remote_device_id.lock().await;
+                    *runtime_remote_device_id = Some(login_device_id);
+                    let mut runtime_access_token = state.runtime_access_token.lock().await;
+                    *runtime_access_token = Some(access_token.clone());
+                    let mut runtime_role = state.runtime_role.lock().await;
+                    *runtime_role = Some(login_role.clone());
+
+                    return Ok(ConnectResult {
+                        success: true,
+                        role: login_role,
+                    });
+                }
 
                 let pwd = password.clone();
                 let salt_b64 = kdf_salt.clone();
@@ -297,8 +424,11 @@ async fn connect_engine(
                 };
 
                 // In offline mode we never reach here, this is only for remote login:
-                let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
-                let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
+                let sandbox_root = yiboflow_core::backup::get_data_dir()
+                    .join("users")
+                    .join(&username);
+                let packager =
+                    yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
 
                 match yiboflow_core::sync::transport::compute_merge_plan(&client, &packager).await {
                     Ok(plan) => {
@@ -311,7 +441,14 @@ async fn connect_engine(
                             }
                         } else if !plan.auto_pull.is_empty() || !plan.auto_push.is_empty() {
                             info!("Applying automatic non-conflicting sync plan...");
-                            if let Ok(new_ts) = yiboflow_core::sync::transport::execute_merge_plan(&client, &packager, &plan, std::collections::HashMap::new()).await {
+                            if let Ok(new_ts) = yiboflow_core::sync::transport::execute_merge_plan(
+                                &client,
+                                &packager,
+                                &plan,
+                                std::collections::HashMap::new(),
+                            )
+                            .await
+                            {
                                 let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
                                 cfg.sync_meta.global_updated_at = new_ts;
                                 let _ = cfg.save();
@@ -362,7 +499,7 @@ async fn connect_engine(
                             access_token.clone(),
                             arc_mk,
                             ws_client.tx.clone(),
-                            Some(ui_tx),
+                            ui_tx,
                             device_name.clone(),
                         );
                         cb_monitor.start_monitoring();
@@ -378,13 +515,17 @@ async fn connect_engine(
                         *runtime_username = Some(username.clone());
                         let mut runtime_device_name = state.runtime_device_name.lock().await;
                         *runtime_device_name = Some(device_name.clone());
-                        let mut runtime_remote_device_id = state.runtime_remote_device_id.lock().await;
+                        let mut runtime_remote_device_id =
+                            state.runtime_remote_device_id.lock().await;
                         *runtime_remote_device_id = Some(login_device_id);
                         let mut runtime_access_token = state.runtime_access_token.lock().await;
                         *runtime_access_token = Some(access_token.clone());
                         let mut runtime_role = state.runtime_role.lock().await;
                         *runtime_role = Some(login_role.clone());
-                        return Ok(ConnectResult { success: true, role: login_role });
+                        return Ok(ConnectResult {
+                            success: true,
+                            role: login_role,
+                        });
                     }
                     Err(e) => return Err(format!("WebSocket Connection Failed: {}", e)),
                 }
@@ -451,7 +592,7 @@ async fn connect_engine(
                 "none".to_string(),
                 arc_mk,
                 dummy_ws_tx,
-                Some(ui_tx),
+                ui_tx,
                 device_name.clone(),
             );
             cb_monitor.start_monitoring();
@@ -461,7 +602,10 @@ async fn connect_engine(
             *connected_flag = true;
 
             info!("Running in Pure Offline Mode! Snippets engine active.");
-            return Ok(ConnectResult { success: true, role: "user".to_string() });
+            return Ok(ConnectResult {
+                success: true,
+                role: "user".to_string(),
+            });
         } else {
             return Err(format!(
                 "Network Error: {}. Offline login also failed (Wrong password or Uncached).",
@@ -476,12 +620,20 @@ async fn connect_engine(
 #[derive(serde::Serialize)]
 struct SettingsPayload {
     is_sync_enabled: bool,
+    auto_sync_text: bool,
+    auto_sync_image: bool,
     flowhint_min_chars: usize,
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
     debug_mode: bool,
     dictionary_order: Vec<String>,
     image_transport_format: String,
+}
+
+#[derive(serde::Serialize)]
+struct FlowSyncAutoSyncPayload {
+    auto_sync_text: bool,
+    auto_sync_image: bool,
 }
 
 #[tauri::command]
@@ -500,7 +652,9 @@ async fn probe_ai_target(target: probe::ProbeTargetPayload) -> Result<probe::Pro
 }
 
 #[tauri::command]
-async fn list_probe_target_models(target: probe::ProbeTargetPayload) -> Result<Vec<String>, String> {
+async fn list_probe_target_models(
+    target: probe::ProbeTargetPayload,
+) -> Result<Vec<String>, String> {
     probe::list_probe_target_models(target).await
 }
 
@@ -514,6 +668,8 @@ fn get_settings() -> Result<SettingsPayload, String> {
     let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
     Ok(SettingsPayload {
         is_sync_enabled: cfg.is_sync_enabled,
+        auto_sync_text: cfg.auto_sync_text,
+        auto_sync_image: cfg.auto_sync_image,
         flowhint_min_chars: cfg.flowhint_min_chars,
         flowhint_accept_tab: cfg.flowhint_accept_tab,
         flowhint_accept_right: cfg.flowhint_accept_right,
@@ -524,16 +680,620 @@ fn get_settings() -> Result<SettingsPayload, String> {
 }
 
 #[tauri::command]
+fn get_flowsync_auto_sync_prefs() -> Result<FlowSyncAutoSyncPayload, String> {
+    let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+    Ok(FlowSyncAutoSyncPayload {
+        auto_sync_text: cfg.auto_sync_text,
+        auto_sync_image: cfg.auto_sync_image,
+    })
+}
+
+#[tauri::command]
+fn set_flowsync_auto_sync_prefs(
+    app: tauri::AppHandle,
+    auto_sync_text: bool,
+    auto_sync_image: bool,
+) -> Result<(), String> {
+    yiboflow_core::config::set_flowsync_auto_sync_prefs(auto_sync_text, auto_sync_image)?;
+    let _ = app.emit("config-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_flowsync_entry_from_path(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    yiboflow_core::cache::init_cache_and_history()?;
+    let created_at = current_unix_ms();
+    let (id, record) = {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        let id = flow_store.create_local_path_entry(
+            std::path::Path::new(&path),
+            "manual_pick",
+            created_at,
+        )?;
+        let record = flow_store
+            .get_history_record_compat(id)?
+            .ok_or("FlowSync entry was created but could not be reloaded")?;
+        (id, record)
+    };
+
+    let sync_enabled = {
+        let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
+        cfg.is_sync_enabled
+    };
+    if sync_enabled {
+        let device_label = resolve_runtime_device_name(&state).await;
+        let ws_tx = state.ws_tx.lock().await.clone();
+        if let Some(tx) = ws_tx {
+            yiboflow_core::clipboard::ClipboardMonitor::send_flow_entry_offer(
+                &record,
+                &tx,
+                &device_label,
+            )
+            .await;
+        }
+    }
+    Ok(serde_json::json!({ "id": id }))
+}
+
+#[tauri::command]
+fn get_flowsync_entry_transfer_state(
+    entry_id: i64,
+) -> Result<Option<yiboflow_core::flow_store::FlowEntryTransferState>, String> {
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    let flow_store = flow_store_lock
+        .as_ref()
+        .ok_or("FlowSync store not initialized")?;
+    flow_store.get_entry_transfer_state(entry_id)
+}
+
+#[tauri::command]
+async fn list_flowsync_online_devices(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ClusterDevice>, String> {
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
+        .ok_or("FlowSync is not connected to a remote server")?;
+    let access_token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
+        .ok_or("FlowSync access token is unavailable")?;
+    let local_device_id = *state.runtime_remote_device_id.lock().await;
+
+    let client = ApiClient::new(server_url);
+    let devices = client
+        .get_devices(&access_token)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(devices
+        .into_iter()
+        .map(|device| ClusterDevice {
+            id: device.id.to_string(),
+            name: device.name,
+            is_online: device.is_online,
+            is_local: Some(device.id) == local_device_id,
+            device_type: device.r#type,
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn download_flowsync_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: i64,
+) -> Result<serde_json::Value, String> {
+    let (record, transfer_state) = {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        let record = flow_store
+            .get_history_record_compat(entry_id)?
+            .ok_or(format!("FlowSync entry {} not found", entry_id))?;
+        let transfer_state = flow_store
+            .get_entry_transfer_state(entry_id)?
+            .ok_or(format!(
+                "FlowSync transfer state for entry {} not found",
+                entry_id
+            ))?;
+        (record, transfer_state)
+    };
+
+    if !matches!(record.entry.entry_type.as_str(), "file" | "bundle") {
+        return Err("Only file or folder entries support on-demand download".to_string());
+    }
+    if transfer_state.has_local_content {
+        return Ok(serde_json::json!({ "transfer_id": null, "status": "completed" }));
+    }
+
+    if let Ok((server_url, access_token)) = require_runtime_server_auth(&state).await {
+        let client = ApiClient::new(server_url);
+        if let Some(stage) = client
+            .lookup_flowsync_staged_object(
+                &access_token,
+                &record.entry.entry_type,
+                &record.entry.hash,
+            )
+            .await?
+        {
+            let transfer_id = uuid::Uuid::new_v4().to_string();
+            let device_label = resolve_runtime_device_name(&state).await;
+            {
+                let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+                    .read()
+                    .unwrap();
+                let flow_store = flow_store_lock
+                    .as_ref()
+                    .ok_or("FlowSync store not initialized")?;
+                flow_store.upsert_transfer_session(
+                    entry_id,
+                    &transfer_id,
+                    "inbound",
+                    "transferring",
+                    Some("NAS 暂存"),
+                    Some(&device_label),
+                    record.entry.size,
+                    0,
+                    current_unix_ms(),
+                )?;
+            }
+
+            let bytes = client
+                .download_flowsync_staged_object(&access_token, &stage.id)
+                .await?;
+            let (final_path, manifest_json) = {
+                let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+                    .read()
+                    .unwrap();
+                let flow_store = flow_store_lock
+                    .as_ref()
+                    .ok_or("FlowSync store not initialized")?;
+                let download_root = flow_store.root_dir().join("downloads");
+                std::fs::create_dir_all(&download_root)
+                    .map_err(|e| format!("Failed to create FlowSync downloads dir: {}", e))?;
+                let title = if stage.title.trim().is_empty() {
+                    record
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| "flowsync-object".to_string())
+                } else {
+                    stage.title.clone()
+                };
+                if record.entry.entry_type == "bundle" {
+                    let archive_path = unique_path(
+                        &download_root,
+                        &format!("{}.zip", sanitize_stage_name(&title)),
+                    );
+                    std::fs::write(&archive_path, &bytes)
+                        .map_err(|e| format!("Failed to write staged bundle archive: {}", e))?;
+                    let extract_dir = unique_path(&download_root, &sanitize_stage_name(&title));
+                    yiboflow_core::p2p::extract_bundle_archive(&archive_path, &extract_dir)?;
+                    let manifest = yiboflow_core::flow_store::build_bundle_manifest(&extract_dir)?;
+                    let manifest_json = serde_json::to_string_pretty(&manifest)
+                        .map_err(|e| format!("Failed to encode staged bundle manifest: {}", e))?;
+                    let verified_hash = blake3::hash(manifest_json.as_bytes()).to_hex().to_string();
+                    if verified_hash != record.entry.hash {
+                        return Err("Downloaded NAS bundle hash verification failed".to_string());
+                    }
+                    let _ = std::fs::remove_file(&archive_path);
+                    (extract_dir, Some(manifest_json))
+                } else {
+                    let file_name = sanitize_stage_name(&title);
+                    let final_path = unique_path(&download_root, &file_name);
+                    std::fs::write(&final_path, &bytes)
+                        .map_err(|e| format!("Failed to write staged file: {}", e))?;
+                    let verified_hash =
+                        yiboflow_core::flow_store::compute_file_blake3(&final_path)?;
+                    if verified_hash != record.entry.hash {
+                        return Err("Downloaded NAS file hash verification failed".to_string());
+                    }
+                    (final_path, None)
+                }
+            };
+
+            {
+                let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+                    .read()
+                    .unwrap();
+                let flow_store = flow_store_lock
+                    .as_ref()
+                    .ok_or("FlowSync store not initialized")?;
+                flow_store.finalize_downloaded_entry(
+                    entry_id,
+                    &final_path,
+                    manifest_json.as_deref(),
+                    &transfer_id,
+                    current_unix_ms(),
+                )?;
+            }
+
+            return Ok(serde_json::json!({
+                "transfer_id": transfer_id,
+                "status": "completed",
+                "source": "nas_staged",
+                "stage_object_id": stage.id,
+            }));
+        }
+    }
+
+    let source_device_id = transfer_state
+        .source_device_id
+        .as_deref()
+        .ok_or("This FlowSync entry does not know which device owns the content")?
+        .parse::<u32>()
+        .map_err(|_| "Invalid source device id for FlowSync entry".to_string())?;
+    if source_device_id == 0 {
+        return Err("FlowSync entry source device id is invalid".to_string());
+    }
+
+    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let device_label = resolve_runtime_device_name(&state).await;
+    {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        flow_store.upsert_transfer_session(
+            entry_id,
+            &transfer_id,
+            "inbound",
+            "accepted",
+            transfer_state.source_device_name.as_deref(),
+            Some(&device_label),
+            record.entry.size,
+            0,
+            current_unix_ms(),
+        )?;
+    }
+
+    let tx = state
+        .ws_tx
+        .lock()
+        .await
+        .clone()
+        .ok_or("FlowSync websocket is not connected")?;
+    tx.send(yiboflow_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![source_device_id],
+        r#type: "flow_entry_accept".to_string(),
+        payload: serde_json::json!({
+            "transfer_id": transfer_id,
+            "kind": record.entry.entry_type,
+            "root_hash": record.entry.hash,
+            "title": record.title,
+            "requester_device_name": device_label,
+        }),
+    })
+    .await
+    .map_err(|e| format!("Failed to request FlowSync download: {}", e))?;
+
+    Ok(serde_json::json!({ "transfer_id": transfer_id, "status": "accepted" }))
+}
+
+#[tauri::command]
+async fn push_flowsync_entry_to_device(
+    state: tauri::State<'_, AppState>,
+    entry_id: i64,
+    target_device: u32,
+    target_device_name: String,
+) -> Result<serde_json::Value, String> {
+    let record = {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        let record = flow_store
+            .get_history_record_compat(entry_id)?
+            .ok_or(format!("FlowSync entry {} not found", entry_id))?;
+        if !matches!(record.entry.entry_type.as_str(), "file" | "bundle") {
+            return Err("Only file or folder entries support device push".to_string());
+        }
+        if record.local_storage_path.is_none() {
+            return Err("This FlowSync entry has no local content to push".to_string());
+        }
+        record
+    };
+
+    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let device_label = resolve_runtime_device_name(&state).await;
+    {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        flow_store.upsert_transfer_session(
+            entry_id,
+            &transfer_id,
+            "outbound",
+            "offered",
+            Some(&device_label),
+            Some(&target_device_name),
+            record.entry.size,
+            0,
+            current_unix_ms(),
+        )?;
+    }
+
+    let tx = state
+        .ws_tx
+        .lock()
+        .await
+        .clone()
+        .ok_or("FlowSync websocket is not connected")?;
+    yiboflow_core::clipboard::ClipboardMonitor::send_flow_entry_offer_to(
+        &record,
+        &tx,
+        &device_label,
+        vec![target_device],
+        true,
+    )
+    .await;
+
+    Ok(serde_json::json!({ "transfer_id": transfer_id, "status": "offered" }))
+}
+
+#[tauri::command]
+async fn upload_flowsync_entry_to_nas(
+    state: tauri::State<'_, AppState>,
+    entry_id: i64,
+    ttl_seconds: Option<i32>,
+) -> Result<serde_json::Value, String> {
+    let (record, local_path) = {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        let record = flow_store
+            .get_history_record_compat(entry_id)?
+            .ok_or(format!("FlowSync entry {} not found", entry_id))?;
+        if !matches!(record.entry.entry_type.as_str(), "file" | "bundle") {
+            return Err("Only file or folder entries support NAS staging".to_string());
+        }
+        let local_path = record
+            .local_storage_path
+            .clone()
+            .ok_or("This FlowSync entry has no local content to stage")?;
+        (record, PathBuf::from(local_path))
+    };
+
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+
+    let (send_path, cleanup_path) = if record.entry.entry_type == "bundle" {
+        let archive_path =
+            std::env::temp_dir().join(format!("yiboflow-stage-{}.zip", uuid::Uuid::new_v4()));
+        yiboflow_core::p2p::package_bundle_archive(&local_path, &archive_path)?;
+        (archive_path.clone(), Some(archive_path))
+    } else {
+        (local_path.clone(), None)
+    };
+
+    let size_bytes = std::fs::metadata(&send_path)
+        .map_err(|e| {
+            format!(
+                "Failed to stat staging payload {}: {}",
+                send_path.display(),
+                e
+            )
+        })?
+        .len() as i64;
+    let chunk_count = ((size_bytes.max(1) as usize + FLOWSYNC_STAGE_CHUNK_BYTES - 1)
+        / FLOWSYNC_STAGE_CHUNK_BYTES) as i32;
+    let title = record.title.clone().unwrap_or_else(|| {
+        local_path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("flowsync-object")
+            .to_string()
+    });
+    let manifest_json = record.manifest_json.clone().unwrap_or_default();
+    let stage = client
+        .create_flowsync_staged_object(
+            &access_token,
+            &yiboflow_core::api::FlowSyncCreateStageRequest {
+                kind: record.entry.entry_type.clone(),
+                root_hash: record.entry.hash.clone(),
+                title,
+                manifest_json,
+                size_bytes,
+                chunk_count,
+                ttl_seconds: ttl_seconds.unwrap_or(0),
+            },
+        )
+        .await?;
+
+    let payload = std::fs::read(&send_path).map_err(|e| {
+        format!(
+            "Failed to read staging payload {}: {}",
+            send_path.display(),
+            e
+        )
+    })?;
+    for (idx, chunk) in payload.chunks(FLOWSYNC_STAGE_CHUNK_BYTES).enumerate() {
+        client
+            .upload_flowsync_staged_chunk(&access_token, &stage.id, idx as i32, chunk.to_vec())
+            .await?;
+    }
+    let completed = client
+        .complete_flowsync_staged_object(&access_token, &stage.id)
+        .await?;
+    if let Some(path) = cleanup_path {
+        let _ = std::fs::remove_file(path);
+    }
+
+    {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
+        let flow_store = flow_store_lock
+            .as_ref()
+            .ok_or("FlowSync store not initialized")?;
+        flow_store.mark_entry_nas_staged(
+            entry_id,
+            &completed.id,
+            stage_expire_at_ms(completed.ttl_seconds),
+            current_unix_ms(),
+        )?;
+    }
+
+    Ok(serde_json::json!({
+        "stage_object_id": completed.id,
+        "availability": "nas_staged",
+        "ttl_seconds": completed.ttl_seconds,
+    }))
+}
+
+#[tauri::command]
+async fn list_my_flowsync_staged_objects(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<yiboflow_core::api::FlowSyncStagedObjectInfo>, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client.list_flowsync_staged_objects(&access_token).await
+}
+
+#[tauri::command]
+async fn delete_my_flowsync_staged_object(
+    state: tauri::State<'_, AppState>,
+    stage_object_id: String,
+) -> Result<(), String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client
+        .delete_flowsync_staged_object(&access_token, &stage_object_id)
+        .await?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    let flow_store = flow_store_lock
+        .as_ref()
+        .ok_or("FlowSync store not initialized")?;
+    flow_store.clear_stage_object(&stage_object_id, current_unix_ms())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_my_flowsync_share_links(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<yiboflow_core::api::FlowSyncShareLinkInfo>, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client.list_flowsync_share_links(&access_token).await
+}
+
+#[tauri::command]
+async fn create_flowsync_share_link(
+    state: tauri::State<'_, AppState>,
+    stage_object_id: String,
+    ttl_seconds: i32,
+    max_downloads: i32,
+) -> Result<yiboflow_core::api::FlowSyncShareLinkInfo, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client
+        .create_flowsync_share_link(
+            &access_token,
+            &yiboflow_core::api::FlowSyncCreateShareLinkRequest {
+                stage_object_id,
+                ttl_seconds,
+                max_downloads,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+async fn disable_my_flowsync_share_link(
+    state: tauri::State<'_, AppState>,
+    share_link_id: u32,
+) -> Result<yiboflow_core::api::FlowSyncShareLinkInfo, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client
+        .disable_flowsync_share_link(&access_token, share_link_id)
+        .await
+}
+
+#[tauri::command]
+async fn get_flowsync_staging_preferences(
+    state: tauri::State<'_, AppState>,
+) -> Result<yiboflow_core::api::FlowSyncStagingPreference, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client.get_flowsync_staging_preferences(&access_token).await
+}
+
+#[tauri::command]
+async fn set_flowsync_staging_preferences(
+    state: tauri::State<'_, AppState>,
+    default_ttl_seconds: i32,
+) -> Result<yiboflow_core::api::FlowSyncStagingPreference, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client
+        .update_flowsync_staging_preferences(&access_token, default_ttl_seconds)
+        .await
+}
+
+#[tauri::command]
+async fn admin_get_flowsync_staging_policy(
+    state: tauri::State<'_, AppState>,
+) -> Result<yiboflow_core::api::FlowSyncStagingPolicy, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client.get_flowsync_staging_policy(&access_token).await
+}
+
+#[tauri::command]
+async fn admin_update_flowsync_staging_policy(
+    state: tauri::State<'_, AppState>,
+    policy: yiboflow_core::api::FlowSyncStagingPolicy,
+) -> Result<yiboflow_core::api::FlowSyncStagingPolicy, String> {
+    let (server_url, access_token) = require_runtime_server_auth(&state).await?;
+    let client = ApiClient::new(server_url);
+    client
+        .update_flowsync_staging_policy(&access_token, &policy)
+        .await
+}
+
+#[tauri::command]
 fn update_settings(
     app: tauri::AppHandle,
-    is_sync_enabled: bool, 
+    is_sync_enabled: bool,
     flowhint_min_chars: usize,
     flowhint_accept_tab: bool,
     flowhint_accept_right: bool,
     debug_mode: bool,
     image_transport_format: String,
 ) -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG
+        .write()
+        .map_err(|e| e.to_string())?;
     cfg.is_sync_enabled = is_sync_enabled;
     cfg.flowhint_min_chars = flowhint_min_chars;
     cfg.flowhint_accept_tab = flowhint_accept_tab;
@@ -550,8 +1310,6 @@ fn update_settings(
     Ok(())
 }
 
-
-
 #[tauri::command]
 fn get_app_config() -> Result<yiboflow_core::config::AppConfig, String> {
     Ok(yiboflow_core::config::GLOBAL_CONFIG.read().unwrap().clone())
@@ -563,7 +1321,9 @@ async fn change_local_password(new_password: String) -> Result<(), String> {
     let salt_clone = salt.clone();
     let hash_result = tokio::task::spawn_blocking(move || {
         yiboflow_core::crypto::hash_local_password(&new_password, &salt_clone)
-    }).await.map_err(|e| format!("Task join error: {}", e))?;
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
 
     match hash_result {
         Ok(hash_str) => {
@@ -581,21 +1341,6 @@ async fn change_local_password(new_password: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn send_file_p2p(
-    state: tauri::State<'_, AppState>,
-    file_path: String,
-    target_device: u32,
-) -> Result<(), String> {
-    let ws_tx_guard = state.ws_tx.lock().await;
-    if let Some(ws_tx) = ws_tx_guard.as_ref() {
-        let path = std::path::PathBuf::from(file_path);
-        yiboflow_core::p2p::start_file_send(path, target_device, ws_tx.clone()).await
-    } else {
-        Err("Core Engine not connected yet.".to_string())
-    }
-}
-
-#[tauri::command]
 fn rename_local_account(old_username: String, new_username: String) -> Result<bool, String> {
     yiboflow_core::local_auth::rename_local_user(&old_username, &new_username)
 }
@@ -607,26 +1352,36 @@ async fn force_override_remote(_server_url: String, _username: String) -> Result
 }
 
 #[tauri::command]
-async fn manual_vault_compaction(_server_url: String, username: String, _password: String) -> Result<bool, String> {
+async fn manual_vault_compaction(
+    _server_url: String,
+    username: String,
+    _password: String,
+) -> Result<bool, String> {
     info!("Triggering manual Vault Compaction for user: {}", username);
-    
-    // In Phase 3 architecture, compaction involves: 
+
+    // In Phase 3 architecture, compaction involves:
     // 1. Fetching base segments + deltas
     // 2. Merging JSON delta trees locally
     // 3. Re-encrypting into a single new generation base.enc
     // 4. Overwriting remote via api.upload_vault_file
-    
+
     // Mock sleep to simulate heavy local AES and merge ops
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    
+
     info!("Vault Compaction complete. Deleted 0 redundant delta logs, repacked 0 base segments.");
-    
+
     // In actual implementation, we'd trigger a push_local right after.
     Ok(true)
 }
 
 #[tauri::command]
-async fn resolve_sync_conflict(action: String, server_url: String, username: String, password: String) -> Result<bool, String> {
+async fn resolve_sync_conflict(
+    state: tauri::State<'_, AppState>,
+    action: String,
+    server_url: String,
+    username: String,
+    password: String,
+) -> Result<bool, String> {
     info!("Resolving sync conflict with action: {}", action);
 
     // 1. We must login again to grab tokens and salt for key derivation
@@ -635,23 +1390,34 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
         cfg.device_fingerprint.clone()
     };
     let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+    let runtime_device_name = resolve_runtime_device_name(&state).await;
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
-        device_name: "YiboFlow Desktop Native".to_string(),
+        device_name: runtime_device_name,
         device_type: "windows".to_string(),
         device_fingerprint: runtime_fingerprint,
     };
 
-    let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
-    
+    let login_result = client
+        .login(login_payload)
+        .await
+        .map_err(|e| e.to_string())?;
+
     if login_result.code != 200 || login_result.data.is_none() {
-        return Err(format!("Login failed during sync resolve: {}", login_result.msg));
+        return Err(format!(
+            "Login failed during sync resolve: {}",
+            login_result.msg
+        ));
     }
     let d = login_result.data.as_ref().unwrap();
-    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let resp_kdf_salt = d
+        .get("kdf_salt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let vk_pwd = password.clone();
     let vk_salt = resp_kdf_salt.clone();
@@ -662,61 +1428,78 @@ async fn resolve_sync_conflict(action: String, server_url: String, username: Str
     .map_err(|e| e.to_string())??;
 
     // Sandbox root is currently fixed, but in real architecture it will dynamically include the username
-    let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
+    let sandbox_root = yiboflow_core::backup::get_data_dir()
+        .join("users")
+        .join(&username);
 
     if action == "pull_remote" {
         // Vault Pull Phase
-        yiboflow_core::sync::transport::pull_and_replay_vault(&client, &vault_key, &sandbox_root).await?;
-        
+        yiboflow_core::sync::transport::pull_and_replay_vault(&client, &vault_key, &sandbox_root)
+            .await?;
+
         // Let's force load new Config into RAM
         yiboflow_core::config::AppConfig::reload();
-
     } else if action == "push_local" {
         // Vault Push Phase
         let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
         let new_ts = yiboflow_core::sync::transport::push_full_vault(&client, &packager).await?;
-        
+
         {
             let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
             cfg.sync_meta.global_updated_at = new_ts;
             let _ = cfg.save();
         }
     }
-    
+
     Ok(true)
 }
 
 #[tauri::command]
 async fn resolve_file_conflicts(
+    state: tauri::State<'_, AppState>,
     resolutions: std::collections::HashMap<String, String>,
     server_url: String,
     username: String,
     password: String,
 ) -> Result<bool, String> {
-    info!("Resolving file-level sync conflicts for {} files", resolutions.len());
+    info!(
+        "Resolving file-level sync conflicts for {} files",
+        resolutions.len()
+    );
 
     let config_fingerprint = {
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.device_fingerprint.clone()
     };
     let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+    let runtime_device_name = resolve_runtime_device_name(&state).await;
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
-        device_name: "YiboFlow Desktop Native".to_string(),
+        device_name: runtime_device_name,
         device_type: "windows".to_string(),
         device_fingerprint: runtime_fingerprint,
     };
 
-    let login_result = client.login(login_payload).await.map_err(|e| e.to_string())?;
-    
+    let login_result = client
+        .login(login_payload)
+        .await
+        .map_err(|e| e.to_string())?;
+
     if login_result.code != 200 || login_result.data.is_none() {
-        return Err(format!("Login failed during sync resolve: {}", login_result.msg));
+        return Err(format!(
+            "Login failed during sync resolve: {}",
+            login_result.msg
+        ));
     }
     let d = login_result.data.as_ref().unwrap();
-    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let resp_kdf_salt = d
+        .get("kdf_salt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let vk_pwd = password.clone();
     let vk_salt = resp_kdf_salt;
@@ -726,12 +1509,16 @@ async fn resolve_file_conflicts(
     .await
     .map_err(|e| e.to_string())??;
 
-    let sandbox_root = yiboflow_core::backup::get_data_dir().join("users").join(&username);
+    let sandbox_root = yiboflow_core::backup::get_data_dir()
+        .join("users")
+        .join(&username);
     let packager = yiboflow_core::sync::packager::VaultPackager::new(vault_key, sandbox_root);
 
     let plan = yiboflow_core::sync::transport::compute_merge_plan(&client, &packager).await?;
 
-    let new_ts = yiboflow_core::sync::transport::execute_merge_plan(&client, &packager, &plan, resolutions).await?;
+    let new_ts =
+        yiboflow_core::sync::transport::execute_merge_plan(&client, &packager, &plan, resolutions)
+            .await?;
 
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().unwrap();
     cfg.sync_meta.global_updated_at = new_ts;
@@ -752,7 +1539,12 @@ struct VaultSyncStatus {
 }
 
 #[tauri::command]
-async fn get_vault_sync_status(server_url: String, username: String, password: String) -> Result<VaultSyncStatus, String> {
+async fn get_vault_sync_status(
+    state: tauri::State<'_, AppState>,
+    server_url: String,
+    username: String,
+    password: String,
+) -> Result<VaultSyncStatus, String> {
     let local_updated_at = {
         let cfg = yiboflow_core::config::GLOBAL_CONFIG.read().unwrap();
         cfg.sync_meta.global_updated_at
@@ -774,30 +1566,43 @@ async fn get_vault_sync_status(server_url: String, username: String, password: S
         cfg.device_fingerprint.clone()
     };
     let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+    let runtime_device_name = resolve_runtime_device_name(&state).await;
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
-        device_name: "YiboFlow Desktop Native".to_string(),
+        device_name: runtime_device_name,
         device_type: "windows".to_string(),
         device_fingerprint: runtime_fingerprint,
     };
 
-    let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
+    let login_result = client
+        .login(login_payload)
+        .await
+        .map_err(|e| format!("Network Connection Error: {}", e))?;
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Auth Failed: {}", login_result.msg));
     }
     let d = login_result.data.as_ref().unwrap();
-    let resp_kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let resp_kdf_salt = d
+        .get("kdf_salt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let vk_pwd = password.clone();
     let vk_salt = resp_kdf_salt;
     let vault_key = tokio::task::spawn_blocking(move || {
         yiboflow_core::sync::crypto::derive_vault_key(&vk_pwd, &vk_salt)
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
-    let remote_manifest = yiboflow_core::sync::transport::fetch_remote_manifest(&client, &vault_key).await.map_err(|e| e.to_string())?;
+    let remote_manifest =
+        yiboflow_core::sync::transport::fetch_remote_manifest(&client, &vault_key)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let mut remote_date = None;
     let mut remote_size = 0;
@@ -836,7 +1641,12 @@ pub struct ClusterDevice {
 }
 
 #[tauri::command]
-async fn get_cluster_devices(server_url: String, username: String, password: String) -> Result<Vec<ClusterDevice>, String> {
+async fn get_cluster_devices(
+    state: tauri::State<'_, AppState>,
+    server_url: String,
+    username: String,
+    password: String,
+) -> Result<Vec<ClusterDevice>, String> {
     if server_url.is_empty() || server_url == "local" || username.is_empty() {
         return Ok(vec![ClusterDevice {
             id: "local_win".to_string(),
@@ -852,36 +1662,47 @@ async fn get_cluster_devices(server_url: String, username: String, password: Str
         cfg.device_fingerprint.clone()
     };
     let runtime_fingerprint = resolve_runtime_device_fingerprint(&config_fingerprint);
+    let runtime_device_name = resolve_runtime_device_name(&state).await;
 
     let mut client = ApiClient::new(server_url.clone());
     let login_payload = LoginRequest {
         username: username.clone(),
         password: password.clone(),
-        device_name: "YiboFlow Desktop Native".to_string(),
+        device_name: runtime_device_name,
         device_type: "windows".to_string(),
         device_fingerprint: runtime_fingerprint,
     };
 
-    let login_result = client.login(login_payload).await.map_err(|e| format!("Network Connection Error: {}", e))?;
+    let login_result = client
+        .login(login_payload)
+        .await
+        .map_err(|e| format!("Network Connection Error: {}", e))?;
     if login_result.code != 200 || login_result.data.is_none() {
         return Err(format!("Auth Failed: {}", login_result.msg));
     }
     let d = login_result.data.as_ref().unwrap();
-    let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let access_token = d
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let resp_device_id = d.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     // Query /api/v1/sync/devices
-    let devices_res = client.get_devices(&access_token).await.map_err(|e| e.to_string())?;
+    let devices_res = client
+        .get_devices(&access_token)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut out = Vec::new();
     for dev in devices_res {
         let is_local = dev.id == resp_device_id;
-        
+
         out.push(ClusterDevice {
             id: format!("{}", dev.id),
             name: dev.name,
             is_online: dev.is_online,
-            is_local, 
+            is_local,
             device_type: dev.r#type,
         });
     }
@@ -1011,7 +1832,6 @@ fn delete_dictionary(id: String) -> Result<(), String> {
 fn get_window_under_cursor() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     unsafe {
-
         use windows::Win32::Foundation::{MAX_PATH, POINT};
         use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
         use windows::Win32::System::Threading::{
@@ -1049,13 +1869,16 @@ fn get_window_under_cursor() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) -> Result<(), String> {
+async fn start_app_picker(
+    app: tauri::AppHandle,
+    _window: tauri::WebviewWindow,
+) -> Result<(), String> {
     let app_handle = app.clone();
 
     tokio::task::spawn_blocking(move || {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
         use std::thread::sleep;
         use std::time::Duration;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 
         // 1. Wait for current mouse button release
         while (unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0 {
@@ -1066,7 +1889,7 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
         loop {
             let is_click = (unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0;
             let is_esc = (unsafe { GetAsyncKeyState(0x1B) } as u16 & 0x8000) != 0;
-            
+
             if is_click {
                 if let Ok(exe) = get_window_under_cursor() {
                     let _ = app_handle.emit("app-picked", Some(exe));
@@ -1092,7 +1915,7 @@ async fn start_app_picker(app: tauri::AppHandle, _window: tauri::WebviewWindow) 
 #[tauri::command]
 async fn read_clipboard_content() -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(|| {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
 
         if let Ok(mut cb) = arboard::Clipboard::new() {
             if let Ok(text) = cb.get_text() {
@@ -1109,7 +1932,9 @@ async fn read_clipboard_content() -> Result<serde_json::Value, String> {
             if let Ok(img) = cb.get_image() {
                 let width = img.width as u32;
                 let height = img.height as u32;
-                if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, img.bytes.into_owned()) {
+                if let Some(img_buffer) =
+                    image::RgbaImage::from_raw(width, height, img.bytes.into_owned())
+                {
                     let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
                     let mut buf = std::io::Cursor::new(Vec::new());
                     if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
@@ -1126,7 +1951,9 @@ async fn read_clipboard_content() -> Result<serde_json::Value, String> {
         }
 
         Ok(serde_json::json!({ "type": "empty" }))
-    }).await.map_err(|e| format!("Task join error: {}", e))?
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
@@ -1141,16 +1968,14 @@ async fn write_to_clipboard(content: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         for attempt in 0..10 {
             match arboard::Clipboard::new() {
-                Ok(mut cb) => {
-                    match cb.set_text(&content) {
-                        Ok(()) => return Ok(()),
-                        Err(e) if attempt < 9 => {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            continue;
-                        }
-                        Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                Ok(mut cb) => match cb.set_text(&content) {
+                    Ok(()) => return Ok(()),
+                    Err(e) if attempt < 9 => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
                     }
-                }
+                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                },
                 Err(e) if attempt < 9 => {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
@@ -1159,13 +1984,15 @@ async fn write_to_clipboard(content: String) -> Result<(), String> {
             }
         }
         Err("Clipboard write failed after retries".into())
-    }).await.map_err(|e| format!("Task join error: {}", e))?
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
 async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
 
         let data_uri = image_base64.trim();
         let b64_str = if data_uri.starts_with("data:image/") {
@@ -1174,8 +2001,11 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
             data_uri
         };
 
-        let bytes = STANDARD.decode(b64_str).map_err(|e| format!("Base64 decode failed: {}", e))?;
-        let img = image::load_from_memory(&bytes).map_err(|e| format!("Image parse failed: {}", e))?;
+        let bytes = STANDARD
+            .decode(b64_str)
+            .map_err(|e| format!("Base64 decode failed: {}", e))?;
+        let img =
+            image::load_from_memory(&bytes).map_err(|e| format!("Image parse failed: {}", e))?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
 
@@ -1196,7 +2026,7 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
             let sample_len = 1024;
             if raw_bytes.len() > sample_len * 2 {
                 raw_bytes[..sample_len].hash(&mut hasher);
-                raw_bytes[raw_bytes.len()-sample_len..].hash(&mut hasher);
+                raw_bytes[raw_bytes.len() - sample_len..].hash(&mut hasher);
             } else {
                 raw_bytes.hash(&mut hasher);
             }
@@ -1208,16 +2038,14 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
 
         for attempt in 0..10 {
             match arboard::Clipboard::new() {
-                Ok(mut cb) => {
-                    match cb.set_image(img_data.clone()) {
-                        Ok(()) => return Ok(()),
-                        Err(e) if attempt < 9 => {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            continue;
-                        }
-                        Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                Ok(mut cb) => match cb.set_image(img_data.clone()) {
+                    Ok(()) => return Ok(()),
+                    Err(e) if attempt < 9 => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
                     }
-                }
+                    Err(e) => return Err(format!("Clipboard write failed: {}", e)),
+                },
                 Err(e) if attempt < 9 => {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
@@ -1226,7 +2054,9 @@ async fn write_image_to_clipboard(image_base64: String) -> Result<(), String> {
             }
         }
         Err("Clipboard write failed after retries".into())
-    }).await.map_err(|e| format!("Task join error: {}", e))?
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
@@ -1246,6 +2076,12 @@ fn set_flowsync_receive_only_mode(enabled: bool) -> Result<bool, String> {
 async fn get_flowsync_diagnostics(
     state: tauri::State<'_, AppState>,
 ) -> Result<FlowSyncDiagnostics, String> {
+    let build_id = env!("YIBOFLOW_BUILD_ID").to_string();
+    let build_git_commit = env!("YIBOFLOW_BUILD_GIT_COMMIT").to_string();
+    let build_git_dirty = env!("YIBOFLOW_BUILD_GIT_DIRTY") == "1";
+    let build_unix_ts = env!("YIBOFLOW_BUILD_UNIX_TS").to_string();
+    let build_profile = env!("YIBOFLOW_BUILD_PROFILE").to_string();
+    let build_target_dir = env!("YIBOFLOW_BUILD_TARGET_DIR").to_string();
     let exe_path = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
@@ -1255,7 +2091,10 @@ async fn get_flowsync_diagnostics(
     let active_user_dir = yiboflow_core::local_auth::get_active_user_dir()
         .display()
         .to_string();
-    let active_user = yiboflow_core::local_auth::ACTIVE_USER.read().unwrap().clone();
+    let active_user = yiboflow_core::local_auth::ACTIVE_USER
+        .read()
+        .unwrap()
+        .clone();
     let is_connected = *state.is_connected.lock().await;
     let receive_only_mode = yiboflow_core::clipboard::is_receive_only_mode();
     let server_url = state.runtime_server_url.lock().await.clone();
@@ -1279,8 +2118,29 @@ async fn get_flowsync_diagnostics(
         .await
         .clone()
         .unwrap_or_else(|| resolve_runtime_device_fingerprint(&config_fingerprint));
+    let (activity_total_entries, activity_sample_query_count, activity_query_error) = {
+        let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+        if let Some(flow_store) = flow_store_lock.as_ref() {
+            let total_entries = flow_store.history_stats_compat().map(|(total, _, _)| total);
+            let sample_count =
+                flow_store.query_history_compat(None, None, None, None, 5, 0).map(|entries| entries.len());
+            match (total_entries, sample_count) {
+                (Ok(total), Ok(sample)) => (Some(total), Some(sample), None),
+                (Err(err), _) => (None, None, Some(err)),
+                (_, Err(err)) => (None, None, Some(err)),
+            }
+        } else {
+            (None, None, Some("FlowSync store not initialized".to_string()))
+        }
+    };
 
     Ok(FlowSyncDiagnostics {
+        build_id,
+        build_git_commit,
+        build_git_dirty,
+        build_unix_ts,
+        build_profile,
+        build_target_dir,
         exe_path,
         global_dir,
         active_user_dir,
@@ -1293,14 +2153,184 @@ async fn get_flowsync_diagnostics(
         remote_device_id,
         persistent_device_fingerprint,
         runtime_device_fingerprint,
+        activity_total_entries,
+        activity_sample_query_count,
+        activity_query_error,
     })
 }
 
 // ─── Clipboard History Tauri Commands ───
 
+fn current_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn ensure_history_runtime_ready() -> Result<(), String> {
+    let flow_store_ready = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap()
+        .is_some();
+    let history_ready = yiboflow_core::cache::HISTORY_MANAGER
+        .read()
+        .unwrap()
+        .is_some();
+    if flow_store_ready || history_ready {
+        return Ok(());
+    }
+    yiboflow_core::cache::init_cache_and_history()
+}
+
+fn format_size_bytes(size_bytes: i64) -> String {
+    let size = size_bytes.max(0) as f64;
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    if size >= GB {
+        format!("{:.2} GB", size / GB)
+    } else if size >= MB {
+        format!("{:.2} MB", size / MB)
+    } else if size >= KB {
+        format!("{:.2} KB", size / KB)
+    } else {
+        format!("{} B", size as i64)
+    }
+}
+
+fn build_flow_object_preview(
+    record: &yiboflow_core::flow_store::FlowHistoryEntryRecord,
+) -> Result<serde_json::Value, String> {
+    match record.entry.entry_type.as_str() {
+        "text" => {
+            let local_storage_path = record
+                .local_storage_path
+                .clone()
+                .ok_or("Local content path missing")?;
+            let content = std::fs::read_to_string(&local_storage_path)
+                .map_err(|e| format!("Failed to read text content: {}", e))?;
+            Ok(serde_json::json!({
+                "type": "text",
+                "content": content,
+            }))
+        }
+        "image" => {
+            let local_storage_path = record
+                .local_storage_path
+                .clone()
+                .ok_or("Local content path missing")?;
+            let data = std::fs::read(&local_storage_path)
+                .map_err(|e| format!("Failed to read image content: {}", e))?;
+            if data.len() < 16 {
+                return Err("Invalid image cache data".into());
+            }
+            let w = u64::from_le_bytes(data[0..8].try_into().unwrap()) as u32;
+            let h = u64::from_le_bytes(data[8..16].try_into().unwrap()) as u32;
+            let img_bytes = &data[16..];
+
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            if let Some(img_buffer) = image::RgbaImage::from_raw(w, h, img_bytes.to_vec()) {
+                let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
+                let mut buf = std::io::Cursor::new(Vec::new());
+                if dyn_img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                    let encoded = STANDARD.encode(buf.into_inner());
+                    return Ok(serde_json::json!({
+                        "type": "image",
+                        "content": format!("data:image/png;base64,{}", encoded),
+                        "width": w,
+                        "height": h,
+                    }));
+                }
+            }
+            Err("Failed to decode image".into())
+        }
+        "file" => {
+            let path_display = record.local_storage_path.clone().unwrap_or_default();
+            let title = record
+                .title
+                .clone()
+                .or_else(|| {
+                    std::path::Path::new(&path_display)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                })
+                .unwrap_or_else(|| "未命名文件".to_string());
+            let content = format!(
+                "文件名：{}\n大小：{}\nRoot Hash：{}\n来源：{}\n本地路径：{}",
+                title,
+                format_size_bytes(record.entry.size),
+                record.entry.hash,
+                record.entry.source,
+                if path_display.is_empty() {
+                    "<missing>"
+                } else {
+                    &path_display
+                },
+            );
+            Ok(serde_json::json!({
+                "type": "file",
+                "content": content,
+            }))
+        }
+        "bundle" => {
+            let path_display = record.local_storage_path.clone().unwrap_or_default();
+            let title = record
+                .title
+                .clone()
+                .unwrap_or_else(|| "未命名文件夹".to_string());
+            let mut lines = vec![
+                format!("文件夹：{}", title),
+                format!("大小：{}", format_size_bytes(record.entry.size)),
+                format!("Root Hash：{}", record.entry.hash),
+                format!("来源：{}", record.entry.source),
+                format!(
+                    "本地路径：{}",
+                    if path_display.is_empty() {
+                        "<missing>"
+                    } else {
+                        &path_display
+                    }
+                ),
+            ];
+
+            if let Some(manifest_json) = record.manifest_json.as_deref() {
+                if let Ok(manifest) = serde_json::from_str::<
+                    yiboflow_core::flow_store::FlowBundleManifest,
+                >(manifest_json)
+                {
+                    lines.push(format!(
+                        "条目：{} 项（文件 {} / 目录 {}）",
+                        manifest.item_count, manifest.file_count, manifest.dir_count,
+                    ));
+                    lines.push(String::new());
+                    lines.push("目录树预览：".to_string());
+                    for entry in manifest.entries.iter().take(20) {
+                        let prefix = if entry.kind == "dir" {
+                            "[目录]"
+                        } else {
+                            "[文件]"
+                        };
+                        lines.push(format!("{} {}", prefix, entry.relative_path));
+                    }
+                    if manifest.entries.len() > 20 {
+                        lines.push(format!("... 其余 {} 项已省略", manifest.entries.len() - 20));
+                    }
+                }
+            }
+
+            Ok(serde_json::json!({
+                "type": "bundle",
+                "content": lines.join("\n"),
+            }))
+        }
+        other => Err(format!("Unsupported FlowSync preview type: {}", other)),
+    }
+}
+
 #[tauri::command]
 fn init_clipboard_history() -> Result<bool, String> {
-    yiboflow_core::cache::init_cache_and_history()?;
+    ensure_history_runtime_ready()?;
     Ok(true)
 }
 
@@ -1313,6 +2343,25 @@ fn query_history(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let entries = flow_store.query_history_compat(
+            type_filter.as_deref(),
+            time_from,
+            time_to,
+            source_filter.as_deref(),
+            limit.unwrap_or(200),
+            offset.unwrap_or(0),
+        )?;
+        return Ok(entries
+            .iter()
+            .map(|e| serde_json::to_value(e).unwrap())
+            .collect());
+    }
+
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
     let entries = history.query(
@@ -1323,25 +2372,98 @@ fn query_history(
         limit.unwrap_or(100),
         offset.unwrap_or(0),
     )?;
-    Ok(entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect())
+    Ok(entries
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect())
 }
 
 #[tauri::command]
 fn search_history(query: String, limit: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let entries = flow_store.search_history_compat(&query, limit.unwrap_or(50))?;
+        return Ok(entries
+            .iter()
+            .map(|e| serde_json::to_value(e).unwrap())
+            .collect());
+    }
+
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
     let entries = history.search(&query, limit.unwrap_or(50))?;
-    Ok(entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect())
+    Ok(entries
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect())
 }
 
 #[tauri::command]
 fn copy_history_to_clipboard(id: i64) -> Result<(), String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let record = flow_store
+            .get_history_record_compat(id)?
+            .ok_or(format!("Entry {} not found", id))?;
+        if record.entry.entry_type == "text" {
+            let local_storage_path = record
+                .local_storage_path
+                .clone()
+                .ok_or("Local content path missing")?;
+            let content = std::fs::read_to_string(&local_storage_path)
+                .map_err(|e| format!("Failed to read text content: {}", e))?;
+            *yiboflow_core::clipboard::LAST_TEXT.lock().unwrap() = content.clone();
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                cb.set_text(content.clone()).map_err(|e| e.to_string())?;
+            }
+        } else if record.entry.entry_type == "image" {
+            let local_storage_path = record
+                .local_storage_path
+                .clone()
+                .ok_or("Local content path missing")?;
+            let data = std::fs::read(&local_storage_path)
+                .map_err(|e| format!("Failed to read image content: {}", e))?;
+            if data.len() < 16 {
+                return Err("Invalid image cache data".into());
+            }
+            let w = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
+            let h = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
+            let img_bytes = data[16..].to_vec();
+            {
+                let mut last_hash = yiboflow_core::clipboard::LAST_IMAGE_HASH.lock().unwrap();
+                let mut hasher = DefaultHasher::new();
+                img_bytes.hash(&mut hasher);
+                *last_hash = hasher.finish();
+            }
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                cb.set_image(arboard::ImageData {
+                    width: w,
+                    height: h,
+                    bytes: std::borrow::Cow::Owned(img_bytes),
+                })
+                .map_err(|e| e.to_string())?;
+            }
+        } else {
+            return Err("文件或文件夹条目暂不支持回写到系统剪贴板".to_string());
+        }
+        let now = current_unix_ms();
+        flow_store.touch_history_compat(id, now)?;
+        return Ok(());
+    }
+
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
 
-    let entry = history.get_by_id(id)?
+    let entry = history
+        .get_by_id(id)?
         .ok_or(format!("Entry {} not found", id))?;
 
     let now = std::time::SystemTime::now()
@@ -1391,7 +2513,7 @@ fn copy_history_to_clipboard(id: i64) -> Result<(), String> {
             let sample_len = 1024;
             if raw.len() > sample_len * 2 {
                 raw[..sample_len].hash(&mut hasher);
-                raw[raw.len()-sample_len..].hash(&mut hasher);
+                raw[raw.len() - sample_len..].hash(&mut hasher);
             } else {
                 raw.hash(&mut hasher);
             }
@@ -1418,14 +2540,60 @@ fn copy_history_to_clipboard(id: i64) -> Result<(), String> {
 
 #[tauri::command]
 fn delete_history(ids: Vec<i64>) -> Result<u32, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let entries: Vec<(String, String, Option<String>)> = ids
+            .iter()
+            .filter_map(|&id| {
+                flow_store
+                    .get_history_record_compat(id)
+                    .ok()
+                    .flatten()
+                    .map(|record| {
+                        (
+                            record.entry.entry_type,
+                            record.entry.hash,
+                            record.local_storage_path,
+                        )
+                    })
+            })
+            .collect();
+
+        let count = flow_store.delete_history_compat(&ids)?;
+        for (entry_type, hash, local_storage_path) in entries {
+            if matches!(entry_type.as_str(), "file" | "bundle") {
+                continue;
+            }
+            if let Some(path) = local_storage_path {
+                let _ = std::fs::remove_file(&path);
+            } else {
+                let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
+                if let Some(cache) = cache_lock.as_ref() {
+                    let _ = cache.delete_file(&entry_type, &hash);
+                }
+            }
+        }
+        return Ok(count);
+    }
+
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
 
-    let entries: Vec<(String, String)> = ids.iter().filter_map(|&id| {
-        history.get_by_id(id).ok().flatten().map(|e| (e.entry_type, e.hash))
-    }).collect();
+    let entries: Vec<(String, String)> = ids
+        .iter()
+        .filter_map(|&id| {
+            history
+                .get_by_id(id)
+                .ok()
+                .flatten()
+                .map(|e| (e.entry_type, e.hash))
+        })
+        .collect();
 
     let count = history.delete_by_ids(&ids)?;
     for (entry_type, hash) in entries {
@@ -1436,6 +2604,49 @@ fn delete_history(ids: Vec<i64>) -> Result<u32, String> {
 
 #[tauri::command]
 fn clear_history(before_days: Option<u32>) -> Result<u32, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let before_ts = match before_days {
+            Some(days) if days > 0 => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+                now - (days as i64) * 24 * 60 * 60 * 1000
+            }
+            _ => i64::MAX,
+        };
+        let entries = if before_days.unwrap_or(0) > 0 {
+            flow_store.query_history_compat(None, None, Some(before_ts), None, 10000, 0)?
+        } else {
+            flow_store.query_history_compat(None, None, None, None, 10000, 0)?
+        };
+        let deletable: Vec<_> = entries
+            .iter()
+            .filter(|entry| !entry.pinned)
+            .filter_map(|entry| {
+                flow_store
+                    .get_history_record_compat(entry.id)
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+        let ids: Vec<i64> = deletable.iter().map(|entry| entry.entry.id).collect();
+        let count = flow_store.delete_history_compat(&ids)?;
+        for entry in deletable {
+            if matches!(entry.entry.entry_type.as_str(), "file" | "bundle") {
+                continue;
+            }
+            if let Some(path) = entry.local_storage_path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return Ok(count);
+    }
+
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
@@ -1463,6 +2674,14 @@ fn clear_history(before_days: Option<u32>) -> Result<u32, String> {
 
 #[tauri::command]
 fn toggle_history_pin(id: i64) -> Result<bool, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        return flow_store.toggle_history_pin_compat(id);
+    }
+
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
     history.toggle_pin(id)
@@ -1472,10 +2691,16 @@ fn toggle_history_pin(id: i64) -> Result<bool, String> {
 fn get_cache_stats() -> Result<serde_json::Value, String> {
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
-    let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
-    let history = history_lock.as_ref().ok_or("History not initialized")?;
-
-    let (total, text_count, image_count) = history.get_stats()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    let (total, text_count, image_count) = if let Some(flow_store) = flow_store_lock.as_ref() {
+        flow_store.history_stats_compat()?
+    } else {
+        let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
+        let history = history_lock.as_ref().ok_or("History not initialized")?;
+        history.get_stats()?
+    };
     let total_size = cache.compute_total_size();
     let (text_files, image_files) = cache.compute_file_count();
 
@@ -1495,8 +2720,7 @@ fn get_cache_stats() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn set_cache_dir(path: String) -> Result<(), String> {
     let mut cache_lock = yiboflow_core::cache::CACHE_MANAGER.write().unwrap();
-    let cache = cache_lock.as_mut()
-        .ok_or("Cache not initialized")?;
+    let cache = cache_lock.as_mut().ok_or("Cache not initialized")?;
     let new_dir = std::path::PathBuf::from(&path);
     cache.migrate_to(new_dir)?;
     if let Ok(mut cfg) = yiboflow_core::config::GLOBAL_CONFIG.write() {
@@ -1522,12 +2746,24 @@ fn set_cache_max_size(mb: u64) -> Result<(), String> {
 
 #[tauri::command]
 fn get_history_content(id: i64) -> Result<serde_json::Value, String> {
+    ensure_history_runtime_ready()?;
+    let flow_store_lock = yiboflow_core::flow_store::FLOW_STORE_MANAGER
+        .read()
+        .unwrap();
+    if let Some(flow_store) = flow_store_lock.as_ref() {
+        let record = flow_store
+            .get_history_record_compat(id)?
+            .ok_or(format!("Entry {} not found", id))?;
+        return build_flow_object_preview(&record);
+    }
+
     let cache_lock = yiboflow_core::cache::CACHE_MANAGER.read().unwrap();
     let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
     let history_lock = yiboflow_core::cache::HISTORY_MANAGER.read().unwrap();
     let history = history_lock.as_ref().ok_or("History not initialized")?;
 
-    let entry = history.get_by_id(id)?
+    let entry = history
+        .get_by_id(id)?
         .ok_or(format!("Entry {} not found", id))?;
 
     if entry.entry_type == "text" {
@@ -1545,7 +2781,7 @@ fn get_history_content(id: i64) -> Result<serde_json::Value, String> {
         let h = u64::from_le_bytes(data[8..16].try_into().unwrap()) as u32;
         let img_bytes = &data[16..];
 
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         if let Some(img_buffer) = image::RgbaImage::from_raw(w, h, img_bytes.to_vec()) {
             let dyn_img = image::DynamicImage::ImageRgba8(img_buffer);
             let mut buf = std::io::Cursor::new(Vec::new());
@@ -1566,7 +2802,8 @@ fn get_history_content(id: i64) -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn pull_today_history(state: tauri::State<'_, AppState>) -> Result<u32, String> {
     let ws_tx_lock = state.ws_tx.lock().await;
-    let tx = ws_tx_lock.as_ref()
+    let tx = ws_tx_lock
+        .as_ref()
         .ok_or("Not connected to any device. Please connect first.")?
         .clone();
     drop(ws_tx_lock);
@@ -1582,14 +2819,17 @@ async fn pull_today_history(state: tauri::State<'_, AppState>) -> Result<u32, St
         }),
     };
 
-    tx.send(request).await
+    tx.send(request)
+        .await
         .map_err(|e| format!("Failed to send history_request: {}", e))?;
 
     Ok(0)
 }
 
 #[tauri::command]
-fn update_key_mappings(mappings: Vec<yiboflow_core::hook_manager::KeyRemapEntry>) -> Result<(), String> {
+fn update_key_mappings(
+    mappings: Vec<yiboflow_core::hook_manager::KeyRemapEntry>,
+) -> Result<(), String> {
     yiboflow_core::hook_manager::update_key_remap_table(mappings);
     Ok(())
 }
@@ -1601,28 +2841,44 @@ fn diagnose_flowhint() -> Result<String, String> {
     report.push_str("--- LingSi (FlowHint) Diagnostic Report ---\n\n");
     report.push_str(&format!("Loaded Dictionaries: {}\n", dicts.len()));
     for d in &dicts {
-        report.push_str(&format!("  - {} (ID: {}, Entries: {})\n", d.name, d.id, d.entries.len()));
+        report.push_str(&format!(
+            "  - {} (ID: {}, Entries: {})\n",
+            d.name,
+            d.id,
+            d.entries.len()
+        ));
     }
-    
+
     let default_rules = yiboflow_core::rules::get_rules().default;
-    report.push_str(&format!("\nDefault FlowHint Enabled: {}\n", default_rules.flowhint));
-    
+    report.push_str(&format!(
+        "\nDefault FlowHint Enabled: {}\n",
+        default_rules.flowhint
+    ));
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(hint) = yiboflow_core::hook_manager::CURRENT_HINT.lock() {
             report.push_str(&format!("Hook Status: Active={}\n", hint.is_active));
-            report.push_str(&format!("Current Buffer Matches: {}\n", hint.candidates.len()));
+            report.push_str(&format!(
+                "Current Buffer Matches: {}\n",
+                hint.candidates.len()
+            ));
         }
     }
-    
+
     // 6. HINT_TX status
-    let tx_set = yiboflow_core::hook_manager::HINT_TX.lock().map(|tx| tx.is_some()).unwrap_or(false);
+    let tx_set = yiboflow_core::hook_manager::HINT_TX
+        .lock()
+        .map(|tx| tx.is_some())
+        .unwrap_or(false);
     report.push_str(&format!("[Channel] HINT_TX is_set={}\n", tx_set));
 
     // 7. Try actually sending a test event
     if tx_set {
         yiboflow_core::hook_manager::set_hint_tx_test_send();
-        report.push_str("[Channel] Sent test HintEvent::Show (Event loop will handle SW_SHOWNOACTIVATE)\n");
+        report.push_str(
+            "[Channel] Sent test HintEvent::Show (Event loop will handle SW_SHOWNOACTIVATE)\n",
+        );
     }
 
     report.push_str("\nEngine: Ready\n");
@@ -1700,7 +2956,10 @@ fn reset_hint_position(app: tauri::AppHandle) -> Result<(), String> {
 
     if target_x != 0 || target_y != 0 {
         if let Some(tx) = &*yiboflow_core::hook_manager::HINT_TX.lock().unwrap() {
-            let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow { x: target_x, y: target_y });
+            let _ = tx.send(yiboflow_core::hook_manager::HintEvent::MoveWindow {
+                x: target_x,
+                y: target_y,
+            });
         }
     }
 
@@ -1710,7 +2969,9 @@ fn reset_hint_position(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn set_hint_window_mode(app: tauri::AppHandle, pos_type: i32) -> Result<(), String> {
-    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    let mut cfg = yiboflow_core::config::GLOBAL_CONFIG
+        .write()
+        .map_err(|e| e.to_string())?;
     if pos_type == 1 && cfg.hint_window.fixed_x == -1 {
         // Switching to Fixed mode for the first time: snapshot last anchor as fixed position
         if let Ok(anchor) = LAST_HINT_ANCHOR.lock() {
@@ -1723,7 +2984,10 @@ fn set_hint_window_mode(app: tauri::AppHandle, pos_type: i32) -> Result<(), Stri
     cfg.hint_window.pos_type = pos_type;
     cfg.save();
     drop(cfg);
-    info!("Hint window mode set to: {}", if pos_type == 0 { "Follow" } else { "Fixed" });
+    info!(
+        "Hint window mode set to: {}",
+        if pos_type == 0 { "Follow" } else { "Fixed" }
+    );
     let _ = app.emit("config-updated", ());
     Ok(())
 }
@@ -1744,7 +3008,12 @@ fn regenerate_device_fingerprint() -> Result<String, String> {
 
 #[tauri::command]
 async fn get_user_role(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let role = state.runtime_role.lock().await.clone().unwrap_or_else(|| "user".to_string());
+    let role = state
+        .runtime_role
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| "user".to_string());
     Ok(role)
 }
 
@@ -1764,10 +3033,20 @@ async fn logout_engine(state: tauri::State<'_, AppState>) -> Result<bool, String
 }
 
 #[tauri::command]
-async fn admin_list_users(state: tauri::State<'_, AppState>) -> Result<Vec<yiboflow_core::api::AdminUserInfo>, String> {
-    let token = state.runtime_access_token.lock().await.clone()
+async fn admin_list_users(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<yiboflow_core::api::AdminUserInfo>, String> {
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
     client.admin_list_users(&token).await
@@ -1779,22 +3058,37 @@ async fn admin_update_user_status(
     uid: u32,
     new_status: String,
 ) -> Result<(), String> {
-    let token = state.runtime_access_token.lock().await.clone()
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
-    client.admin_update_user_status(&token, uid, &new_status).await
+    client
+        .admin_update_user_status(&token, uid, &new_status)
+        .await
 }
 
 #[tauri::command]
-async fn admin_delete_user(
-    state: tauri::State<'_, AppState>,
-    uid: u32,
-) -> Result<(), String> {
-    let token = state.runtime_access_token.lock().await.clone()
+async fn admin_delete_user(state: tauri::State<'_, AppState>, uid: u32) -> Result<(), String> {
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
     client.admin_delete_user(&token, uid).await
@@ -1807,19 +3101,39 @@ async fn admin_reset_password(
     new_password: String,
     new_password_hint: String,
 ) -> Result<(), String> {
-    let token = state.runtime_access_token.lock().await.clone()
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
-    client.admin_reset_password(&token, uid, &new_password, &new_password_hint).await
+    client
+        .admin_reset_password(&token, uid, &new_password, &new_password_hint)
+        .await
 }
 
 #[tauri::command]
-async fn admin_list_devices(state: tauri::State<'_, AppState>) -> Result<Vec<yiboflow_core::api::AdminDeviceInfo>, String> {
-    let token = state.runtime_access_token.lock().await.clone()
+async fn admin_list_devices(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<yiboflow_core::api::AdminDeviceInfo>, String> {
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
     client.admin_list_devices(&token).await
@@ -1830,9 +3144,17 @@ async fn admin_kick_device(
     state: tauri::State<'_, AppState>,
     device_id: u32,
 ) -> Result<(), String> {
-    let token = state.runtime_access_token.lock().await.clone()
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
     client.admin_kick_device(&token, device_id).await
@@ -1843,9 +3165,17 @@ async fn admin_delete_user_vault(
     state: tauri::State<'_, AppState>,
     uid: u32,
 ) -> Result<(), String> {
-    let token = state.runtime_access_token.lock().await.clone()
+    let token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
         .ok_or("Not authenticated".to_string())?;
-    let server_url = state.runtime_server_url.lock().await.clone()
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
         .ok_or("Not connected to server".to_string())?;
     let client = yiboflow_core::api::ApiClient::new(server_url);
     client.admin_delete_user_vault(&token, uid).await
@@ -1873,7 +3203,8 @@ pub fn run() {
         .unwrap_or(false);
     let allow_multi_instance = std::env::var("YIBOFLOW_ALLOW_MULTI_INSTANCE")
         .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false) || debug_mode_enabled;
+        .unwrap_or(false)
+        || debug_mode_enabled;
     let data_dir = std::env::var("YIBOFLOW_DATA_DIR").unwrap_or_else(|_| "<default>".to_string());
     info!(
         "[Startup] allow_multi_instance={}, debug_mode={}, data_dir={}",
@@ -1884,9 +3215,12 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&["hint"])
-                .build()
+                .build(),
         )
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(AppState {
             is_connected: Mutex::new(false),
             ws_tx: Mutex::new(None),
@@ -1913,7 +3247,8 @@ pub fn run() {
         }))
     };
 
-    builder.setup(|app| {
+    builder
+        .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             // Removed: use tauri::Manager; // Redundant with top-level import
@@ -1963,7 +3298,9 @@ pub fn run() {
             main_window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                    let _ = window_clone.app_handle().save_window_state(StateFlags::all());
+                    let _ = window_clone
+                        .app_handle()
+                        .save_window_state(StateFlags::all());
                     window_clone.hide().unwrap();
                     api.prevent_close();
                 }
@@ -1990,7 +3327,9 @@ pub fn run() {
             // Get Win32 HWND for direct window management (no focus stealing)
             #[cfg(target_os = "windows")]
             let hint_hwnd = {
-                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE};
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetWindowLongW, SetWindowLongW, GWL_EXSTYLE,
+                };
                 let raw_hwnd = hint_win.hwnd().unwrap();
                 let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0 as *mut _);
                 unsafe {
@@ -1999,8 +3338,19 @@ pub fn run() {
                     // IMPORTANT: Explicitly REMOVE WS_EX_TRANSPARENT (0x20) to ensure clicks are caught!
                     let new_style = (ex_style | 0x08000000i32 | 0x00000080i32) & !0x00000020i32;
                     SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
-                    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED};
-                    let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                        SWP_NOZORDER,
+                    };
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                    );
                 }
                 hwnd
             };
@@ -2020,13 +3370,16 @@ pub fn run() {
                     let _ = app_handle.run_on_main_thread(move || {
                         #[cfg(target_os = "windows")]
                         {
-                            let hint_hwnd = windows::Win32::Foundation::HWND(hint_hwnd_raw as *mut _);
+                            let hint_hwnd =
+                                windows::Win32::Foundation::HWND(hint_hwnd_raw as *mut _);
                             use windows::Win32::UI::WindowsAndMessaging::{
-                                ShowWindow, SetWindowPos, SW_SHOWNOACTIVATE, SW_HIDE,
-                                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SWP_NOZORDER, SWP_NOSIZE,
+                                SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+                                SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
                             };
                             match &ev_clone {
-                                HintEvent::Show { candidates, x, y, .. } => {
+                                HintEvent::Show {
+                                    candidates, x, y, ..
+                                } => {
                                     let visible_count = candidates.len().min(8) as i32;
 
                                     let (cfg_pos_type, cfg_x, cfg_y, cfg_ox, cfg_oy) = {
@@ -2040,7 +3393,10 @@ pub fn run() {
                                     let mut pos_x = *x;
                                     let mut pos_y = *y;
 
-                                    let is_diag = candidates.get(0).map(|s| s.contains("[诊断]")).unwrap_or(false);
+                                    let is_diag = candidates
+                                        .get(0)
+                                        .map(|s| s.contains("[诊断]"))
+                                        .unwrap_or(false);
                                     if is_diag {
                                         pos_x = 400;
                                         pos_y = 400;
@@ -2048,14 +3404,22 @@ pub fn run() {
                                         *LAST_HINT_ANCHOR.lock().unwrap() = (pos_x, pos_y);
                                         pos_x += cfg_ox;
                                         pos_y += cfg_oy;
-                                        if cfg_oy == 0 { pos_y += 20; }
+                                        if cfg_oy == 0 {
+                                            pos_y += 20;
+                                        }
                                     } else {
-                                        if cfg_x != -1 { pos_x = cfg_x; }
-                                        if cfg_y != -1 { pos_y = cfg_y; }
+                                        if cfg_x != -1 {
+                                            pos_x = cfg_x;
+                                        }
+                                        if cfg_y != -1 {
+                                            pos_y = cfg_y;
+                                        }
                                     }
 
                                     // Safety clamp
-                                    if let Ok(Some(monitor)) = app_handle_inner.monitor_from_point(pos_x as f64, pos_y as f64) {
+                                    if let Ok(Some(monitor)) = app_handle_inner
+                                        .monitor_from_point(pos_x as f64, pos_y as f64)
+                                    {
                                         let screen_x = monitor.position().x;
                                         let screen_y = monitor.position().y;
                                         let screen_w = monitor.size().width as i32;
@@ -2063,11 +3427,15 @@ pub fn run() {
                                         if pos_x + outer_width > screen_x + screen_w {
                                             pos_x = screen_x + screen_w - outer_width - 10;
                                         }
-                                        if pos_x < screen_x { pos_x = screen_x + 10; }
+                                        if pos_x < screen_x {
+                                            pos_x = screen_x + 10;
+                                        }
                                         if pos_y + outer_height > screen_y + screen_h {
                                             pos_y = screen_y + screen_h - outer_height - 10;
                                         }
-                                        if pos_y < screen_y { pos_y = screen_y + 20; }
+                                        if pos_y < screen_y {
+                                            pos_y = screen_y + 20;
+                                        }
                                     }
 
                                     unsafe {
@@ -2075,29 +3443,29 @@ pub fn run() {
                                         let _ = SetWindowPos(
                                             hint_hwnd,
                                             Some(HWND_TOPMOST),
-                                            pos_x, pos_y,
-                                            outer_width, outer_height,
+                                            pos_x,
+                                            pos_y,
+                                            outer_width,
+                                            outer_height,
                                             SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                         );
                                         let _ = ShowWindow(hint_hwnd, SW_SHOWNOACTIVATE);
                                     }
                                 }
-                                HintEvent::Hide => {
-                                    unsafe {
-                                        let _ = ShowWindow(hint_hwnd, SW_HIDE);
-                                    }
-                                }
-                                HintEvent::MoveWindow { x, y } => {
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            hint_hwnd,
-                                            None,
-                                            *x, *y,
-                                            0, 0,
-                                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-                                        );
-                                    }
-                                }
+                                HintEvent::Hide => unsafe {
+                                    let _ = ShowWindow(hint_hwnd, SW_HIDE);
+                                },
+                                HintEvent::MoveWindow { x, y } => unsafe {
+                                    let _ = SetWindowPos(
+                                        hint_hwnd,
+                                        None,
+                                        *x,
+                                        *y,
+                                        0,
+                                        0,
+                                        SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                                    );
+                                },
                                 _ => {}
                             }
                         }
@@ -2121,8 +3489,9 @@ pub fn run() {
             get_app_config,
             get_settings,
             update_settings,
+            get_flowsync_auto_sync_prefs,
+            set_flowsync_auto_sync_prefs,
             set_dictionary_order,
-            send_file_p2p,
             get_window_under_cursor,
             start_app_picker,
             change_local_password,
@@ -2144,6 +3513,7 @@ pub fn run() {
             get_flowsync_runtime_state,
             get_flowsync_diagnostics,
             get_cluster_devices,
+            list_flowsync_online_devices,
             resolve_file_conflicts,
             regenerate_device_fingerprint,
             diagnose_flowhint,
@@ -2158,6 +3528,7 @@ pub fn run() {
             write_to_clipboard,
             write_image_to_clipboard,
             set_flowsync_receive_only_mode,
+            create_flowsync_entry_from_path,
             init_clipboard_history,
             query_history,
             search_history,
@@ -2169,6 +3540,17 @@ pub fn run() {
             set_cache_dir,
             set_cache_max_size,
             get_history_content,
+            get_flowsync_entry_transfer_state,
+            download_flowsync_entry,
+            upload_flowsync_entry_to_nas,
+            list_my_flowsync_staged_objects,
+            delete_my_flowsync_staged_object,
+            list_my_flowsync_share_links,
+            create_flowsync_share_link,
+            disable_my_flowsync_share_link,
+            get_flowsync_staging_preferences,
+            set_flowsync_staging_preferences,
+            push_flowsync_entry_to_device,
             pull_today_history,
             get_user_role,
             logout_engine,
@@ -2179,6 +3561,8 @@ pub fn run() {
             admin_list_devices,
             admin_kick_device,
             admin_delete_user_vault,
+            admin_get_flowsync_staging_policy,
+            admin_update_flowsync_staging_policy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

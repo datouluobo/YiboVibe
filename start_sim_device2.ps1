@@ -4,6 +4,24 @@
 $SimName = "Sim-PC-2"
 $DataDir = Join-Path $env:LOCALAPPDATA "YiboFlow_Sim_2"
 $CargoTargetDir = "F:\Download\GitHub\YiboFlow\target-sim2"
+$NodeExe = $null
+if ($env:NVM_SYMLINK) {
+    $NodeExe = Join-Path $env:NVM_SYMLINK "node.exe"
+}
+if (-not $NodeExe -and (Test-Path "D:\Program\nodejs\node.exe")) {
+    $NodeExe = "D:\Program\nodejs\node.exe"
+}
+$TauriCliJs = "F:\Download\GitHub\YiboFlow\desktop\node_modules\@tauri-apps\cli\tauri.js"
+
+if (-not $NodeExe) {
+    Write-Error "未找到 node.exe。已检查 NVM_SYMLINK 和 D:\Program\nodejs\node.exe"
+    exit 1
+}
+
+if (-not (Test-Path $TauriCliJs)) {
+    Write-Error "未找到 tauri.js: $TauriCliJs"
+    exit 1
+}
 
 if (-not (Test-Path $DataDir)) {
     New-Item -ItemType Directory -Path $DataDir | Out-Null
@@ -29,12 +47,15 @@ $env:YIBOFLOW_DATA_DIR = $DataDir
 # 2. 关闭第二实例的单实例防护
 $env:YIBOFLOW_ALLOW_MULTI_INSTANCE = "1"
 
-# 3. 让 HMR 也使用独立端口，避免连接回主实例 dev server
+# 3. 给第二实例固定 runtime device tag，避免与主实例共用设备指纹
+$env:YIBOFLOW_INSTANCE_TAG = "sim2"
+
+# 4. 让 HMR 也使用独立端口，避免连接回主实例 dev server
 $env:TAURI_HMR_PORT = 1421
 
-# 4. 使用独立 Cargo target，避免与主实例争用 target\debug\tauri-app.exe
+# 5. 使用独立 Cargo target，避免与主实例争用 target\debug\tauri-app.exe
 $env:CARGO_TARGET_DIR = $CargoTargetDir
 
-# 5. 使用第二套 Tauri 配置，显式指定 identifier 和 devUrl
+# 6. 使用第二套 Tauri 配置，显式指定 identifier 和 devUrl
 Set-Location "f:\Download\GitHub\YiboFlow\desktop"
-npx tauri dev --config src-tauri/tauri.sim2.conf.json
+& $NodeExe $TauriCliJs dev --config src-tauri/tauri.sim2.conf.json

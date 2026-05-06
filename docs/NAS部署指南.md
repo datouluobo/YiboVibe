@@ -1,103 +1,226 @@
 # YiboFlow NAS / 服务端私有化部署指南
 
-YiboFlow 的服务端模块（Backend Engine）被设计为一套纯净、超轻量且具有军工级安全隔离的 Docker 架构。
-你可以花不到 3 分钟的时间，将它一键部署在你的群晖（Synology）、绿联、极空间、树莓派或任何支持 Docker 的 Linux 云主机上。
+更新时间：2026-05-05
 
----
+## 1. 环境准备
 
-## 🧩 1. 环境准备
-确保你的服务器或 NAS 上已经正确安装了以下组件：
-1. **Docker** (负责隔离运行容器)
-2. **Docker Compose** (至少为 v2 版本，负责编排与多容器网络组织)
-3. 开放对应的内部测试或公网端口（默认 `8080`），并在防火墙/路由器处放行。
+确保服务器或 NAS 已安装：
 
----
+1. Docker
+2. Docker Compose v2
+3. 可用对外端口，默认 `11434`
 
-## 📦 2. 获取部署文件
-你不需要下载和编译 YiboFlow 海量的源码。服务端运行只需要 `server` 目录下的核心文件。
-你可以通过以下两种方式之一获取：
+建议先验证：
 
-**方式一：通过 Git 克隆 (推荐服务器使用)**
+```bash
+docker --version
+docker compose version
+```
+
+## 2. 获取部署文件
+
+推荐直接使用仓库里的 `server/` 目录：
+
 ```bash
 git clone https://github.com/datouluobo/YiboFlow.git
 cd YiboFlow/server
 ```
 
-**方式二：直接下载部署包包**
-从 GitHub Releases 页面下载最新的 `yiboflow-server-docker.zip`，解压后通过 NAS 面板或 SFTP (如 FinalShell) 将文件夹上传至你的 NAS 目录（如 `/volume1/docker/yiboflow`），并使用终端 `cd` 进入该目录。
+如果是上传部署包，也应保证最终目录里至少包含：
 
----
+- `docker-compose.yml`
+- `.env.example`
+- `Caddyfile`
+- `Dockerfile`
 
-## 🔐 3. 配置安全密钥 (极度重要)
-为了防范勒索病毒和网络扫描，YiboFlow 绝不会把数据库 (Postgres) 和 缓存 (Redis) 的端口暴露到公网。同时，你需要为它们设置你自己的极强密码。
+## 3. 配置运行环境
 
-1. 在 `server` 目录下，找到 `.env.example` 文件。
-2. 将其复制或重命名为 **`.env`** (注意前面有一个点，它是隐藏环境文件)。
-3. 使用文本编辑器（或 `nano .env` / `vim .env`）打开它，配置如下关键信息：
+先复制模板：
 
-```ini
-# ================= 1. PostgreSQL 核心数据库设置 ================= 
+```bash
+cp .env.example .env
+```
+
+然后修改 `.env`，至少确认这些项：
+
+```env
 POSTGRES_USER=yibo_admin
-# 【务必修改】修改为一个极长极安全的大小写+符号组合密码
-POSTGRES_PASSWORD=your_super_strong_db_password
+POSTGRES_PASSWORD=change_me_postgres_password
 POSTGRES_DB=yiboflow
-
-# ================= 2. Redis 内存缓存层设置 ================= 
-# 【务必修改】Redis没有密码在公网裸奔等于立刻中招，请设置强密码
-REDIS_PASSWORD=your_super_strong_redis_password
-
-# ================= 3. YiboFlow 守护进程设置 ================= 
-# 对外暴露通信的端口，默认为 8080
-PORT=8080
+REDIS_PASSWORD=change_me_redis_password
 GIN_MODE=release
+GATE_PORT=11434
+YIBOFLOW_API_IMAGE=datouluobo/yiboflow-server:latest
 ```
 
----
+必须修改：
 
-## 🚀 4. 一键构建与启动
-在确保终端位于存有 `docker-compose.yml` 和 `.env` 的目录下，输入以下组装启动指令：
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+
+按需修改：
+
+- `GATE_PORT`
+- `YIBOFLOW_API_IMAGE`
+
+## 4. 启动服务
+
+当前公开 Compose 默认走已发布镜像，直接执行：
 
 ```bash
-# --build 参数会让 Docker 在本地自动拉取超轻量的 Alpine 基础环境
-# 并在几秒钟内纯净安全地编译出专属你的后端二进制黑盒引擎
-docker-compose up -d --build
+docker compose up -d
 ```
 
-**启动成功后的验证机制：**
-你可以输入 `docker-compose ps` 来查看服务状态，当看到如下绿色的 `Healthy` 与 `Up` 标志，说明安全防线与系统已全面就绪：
+启动后应有 4 个容器：
+
+- `yiboflow_api`
+- `yiboflow_ai_gate`
+- `yiboflow_db`
+- `yiboflow_redis`
+
+查看状态：
+
+```bash
+docker compose ps
+```
+
+## 5. 当前网关与入口
+
+默认对外入口端口：
+
+- `11434`
+
+当前网关必须放行：
+
+- `/api/*`
+- `/share/*`
+
+这两条都应转发到：
+
+- `yiboflow_api:8080`
+
+如果 `Caddyfile` 没有 `/share/*`，`FlowSync` 外链会生成成功，但别人无法通过分享链接下载。
+
+## 6. 首次部署后验证
+
+先验证网关存活：
+
+```bash
+curl http://127.0.0.1:11434/
+```
+
+预期返回：
+
 ```text
-NAME             IMAGE                 STATUS
-yiboflow_db      postgres:15-alpine    Up (healthy) 
-yiboflow_redis   redis:7-alpine        Up (healthy)
-yiboflow_api     yiboflow_api          Up 
+YiboFlow Sync Gateway is Active
 ```
 
----
+再验证 API：
 
-## 🔌 5. 客户端连接与后续维护
-
-### 桌面端 / 移动端连接设置
-现在，你可以打开您自己的 `YiboFlow Desktop` 或移动端 App。
-在 **"Server URL"** 一栏中，填入您的 NAS/服务器地址：
-* **局域网使用**：`http://192.168.x.x:8080` (取决于您 NAS 在家里的 IP)
-* **公网域名穿透**：`https://yibo.yourdomain.com` (需要您自行通过 Nginx/反向代理配置证书，并将请求转发至 8080 端口)
-
-### 如何安全停机与备份？
-如果您需要重启 NAS、对服务器进行常规维护，或者想要升级 YiboFlow 版本：
-
-**停止系统 (但保留所有数据)**：
 ```bash
-docker-compose stop
+curl http://127.0.0.1:11434/api/v1/ping
 ```
 
-**更新为最新版本** (假定你使用 git)：
-```bash
-git pull origin main
-docker-compose up -d --build
+预期返回包含：
+
+```json
+{"message":"pong","version":"v1.5"}
 ```
 
-**彻底删库移除系统 (警告：抹除所有剪切板和帐号关联)**：
+## 7. 更新到新版本
+
+### 7.1 使用已发布镜像更新
+
 ```bash
-# 慎用：将彻底摧毁 yiboflow_net 隔离网络与相关的 pgdata / redisdata 数据卷
-docker-compose down -v
+docker compose pull
+docker compose up -d
 ```
+
+### 7.2 使用本地源码构建更新
+
+如果你不是等 Docker Hub 新镜像，而是要直接部署当前仓库里的最新 `server/` 代码：
+
+```bash
+docker build -t yiboflow-server:local-2026-05-05 .
+YIBOFLOW_API_IMAGE=yiboflow-server:local-2026-05-05 docker compose up -d api
+```
+
+这条路径适合：
+
+- 本地刚修完服务端问题
+- 需要先在 NAS 验证
+- 尚未推送正式镜像标签
+
+## 8. 本次重构后的重点验证项
+
+除登录与配置同步外，至少再检查：
+
+1. `FlowSync` NAS 暂存对象可创建
+2. 外链策略可启用
+3. 外链可生成
+4. 外链第一次下载成功
+5. 如果设置了 `max_downloads=1`，第二次下载应失败
+
+## 9. 已知兼容性注意项
+
+如果你部署的是包含 `FlowSync` NAS 暂存的新版本服务端，需确认仓库代码里：
+
+- [server/internal/model/staging.go](/F:/Download/GitHub/YiboFlow/server/internal/model/staging.go:30)
+
+当前应为：
+
+```go
+ManifestJSON string `gorm:"type:text" json:"manifest_json"`
+```
+
+如果仍是 `longtext`，PostgreSQL 启动建表会失败，并报：
+
+```text
+ERROR: type "longtext" does not exist (SQLSTATE 42704)
+```
+
+## 10. 日志与排障
+
+常用命令：
+
+```bash
+docker compose logs -f api
+docker compose logs -f ai_gateway
+docker compose logs -f db
+docker compose logs -f redis
+```
+
+## 11. 安全停机与回滚
+
+停止但保留数据：
+
+```bash
+docker compose stop
+```
+
+恢复上一版镜像：
+
+1. 把 `.env` 中 `YIBOFLOW_API_IMAGE` 改回上一版
+2. 执行：
+
+```bash
+docker compose up -d
+```
+
+不要默认执行：
+
+```bash
+docker compose down -v
+```
+
+这会删除：
+
+- PostgreSQL 数据卷
+- Redis 数据卷
+- Vault 数据卷
+
+## 12. 相关文档
+
+- [docs/server-update-guide.md](/F:/Download/GitHub/YiboFlow/docs/server-update-guide.md)
+- [docs/nas-server-fixed-workflow.md](/F:/Download/GitHub/YiboFlow/docs/nas-server-fixed-workflow.md)
+- [docs/specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md)

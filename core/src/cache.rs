@@ -10,16 +10,16 @@ pub struct CacheManager {
 
 impl CacheManager {
     pub fn new(base_dir: PathBuf, max_size_mb: u64) -> Self {
-        let dirs = vec![
-            base_dir.join("text"),
-            base_dir.join("image"),
-        ];
+        let dirs = vec![base_dir.join("text"), base_dir.join("image")];
         for d in &dirs {
             if let Err(e) = fs::create_dir_all(d) {
                 error!("Failed to create cache dir {:?}: {}", d, e);
             }
         }
-        info!("CacheManager initialized at {:?}, max {}MB", base_dir, max_size_mb);
+        info!(
+            "CacheManager initialized at {:?}, max {}MB",
+            base_dir, max_size_mb
+        );
         Self {
             base_dir: Mutex::new(base_dir),
             max_size_mb: Mutex::new(max_size_mb),
@@ -43,11 +43,19 @@ impl CacheManager {
     }
 
     pub fn text_path(&self, hash: &str) -> PathBuf {
-        self.base_dir.lock().unwrap().join("text").join(format!("{}.txt", hash))
+        self.base_dir
+            .lock()
+            .unwrap()
+            .join("text")
+            .join(format!("{}.txt", hash))
     }
 
     pub fn image_path(&self, hash: &str) -> PathBuf {
-        self.base_dir.lock().unwrap().join("image").join(format!("{}.png", hash))
+        self.base_dir
+            .lock()
+            .unwrap()
+            .join("image")
+            .join(format!("{}.png", hash))
     }
 
     pub fn write_text(&self, hash: &str, content: &str) -> Result<(), String> {
@@ -120,8 +128,10 @@ impl CacheManager {
 
         let new_text = new_dir.join("text");
         let new_image = new_dir.join("image");
-        fs::create_dir_all(&new_text).map_err(|e| format!("Failed to create new text dir: {}", e))?;
-        fs::create_dir_all(&new_image).map_err(|e| format!("Failed to create new image dir: {}", e))?;
+        fs::create_dir_all(&new_text)
+            .map_err(|e| format!("Failed to create new text dir: {}", e))?;
+        fs::create_dir_all(&new_image)
+            .map_err(|e| format!("Failed to create new image dir: {}", e))?;
 
         move_all_files(&old_dir.join("text"), &new_text)?;
         move_all_files(&old_dir.join("image"), &new_image)?;
@@ -152,13 +162,20 @@ impl CacheManager {
             let ids: Vec<i64> = candidates.iter().map(|(id, _, _)| *id).collect();
             for (_id, entry_type, hash) in &candidates {
                 if let Err(err) = self.delete_file(entry_type, hash) {
-                    log::warn!("Failed to delete cache file during eviction for {}:{}: {}", entry_type, hash, err);
+                    log::warn!(
+                        "Failed to delete cache file during eviction for {}:{}: {}",
+                        entry_type,
+                        hash,
+                        err
+                    );
                 }
             }
             if !ids.is_empty() {
                 match history.delete_by_ids(&ids) {
                     Ok(_) => log::info!("Cache eviction: removed {} entries", ids.len()),
-                    Err(err) => log::error!("Cache eviction failed to delete history rows: {}", err),
+                    Err(err) => {
+                        log::error!("Cache eviction failed to delete history rows: {}", err)
+                    }
                 }
             }
         }
@@ -166,7 +183,9 @@ impl CacheManager {
 }
 
 fn count_files(dir: &Path) -> usize {
-    fs::read_dir(dir).map(|entries| entries.count()).unwrap_or(0)
+    fs::read_dir(dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0)
 }
 
 fn move_all_files(src: &Path, dst: &Path) -> Result<(), String> {
@@ -215,11 +234,24 @@ pub fn init_cache_and_history() -> Result<(), String> {
     let cache = CacheManager::new(cache_dir, max_size);
     let db_path = cache.db_path();
     let history = crate::history::HistoryManager::new(db_path)?;
+    let flow_store_root = crate::local_auth::get_active_user_dir().join("flowsync");
+    let flow_store = crate::flow_store::FlowStoreManager::new(flow_store_root)?;
+    let migration_report = crate::flow_migration::FlowMigrationManager::backfill_legacy_history(
+        &flow_store,
+        &cache.db_path(),
+        &cache.base_dir(),
+    )?;
 
     *CACHE_MANAGER.write().unwrap() = Some(cache);
     *HISTORY_MANAGER.write().unwrap() = Some(history);
+    *crate::flow_store::FLOW_STORE_MANAGER.write().unwrap() = Some(flow_store);
 
-    log::info!("Cache and History managers initialized");
+    log::info!(
+        "Cache, History, and FlowSync store initialized (legacy backfill: scanned={}, inserted={}, skipped={})",
+        migration_report.scanned,
+        migration_report.inserted,
+        migration_report.skipped_existing
+    );
     Ok(())
 }
 
@@ -240,10 +272,22 @@ pub fn record_clipboard_text(content: &str, source: &str) {
 
     let cache_lock = CACHE_MANAGER.read().unwrap();
     let history_lock = HISTORY_MANAGER.read().unwrap();
+    let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
     if let (Some(cache), Some(history)) = (cache_lock.as_ref(), history_lock.as_ref()) {
         if history.exists_by_hash(&hash) {
             let _ = history.touch_by_hash(&hash, now);
             let _ = history.update_source_by_hash(&hash, source);
+            if let Some(flow_store) = flow_store_lock.as_ref() {
+                let _ = flow_store.upsert_clipboard_entry(
+                    "text",
+                    &hash,
+                    content.len() as i64,
+                    Some(content),
+                    source,
+                    Some(&cache.text_path(&hash)),
+                    now,
+                );
+            }
             return;
         }
         let preview = if content.chars().count() > 200 {
@@ -258,6 +302,19 @@ pub fn record_clipboard_text(content: &str, source: &str) {
         }
         if let Err(e) = history.insert(now, "text", &hash, size, Some(&preview), source) {
             log::error!("Failed to insert history: {}", e);
+        }
+        if let Some(flow_store) = flow_store_lock.as_ref() {
+            if let Err(e) = flow_store.upsert_clipboard_entry(
+                "text",
+                &hash,
+                size,
+                Some(&preview),
+                source,
+                Some(&cache.text_path(&hash)),
+                now,
+            ) {
+                log::error!("Failed to upsert FlowSync text entry: {}", e);
+            }
         }
         cache.enforce_size_limit(history);
     }
@@ -275,10 +332,22 @@ pub fn record_clipboard_image(data: &[u8], source: &str, content_id: Option<&str
 
     let cache_lock = CACHE_MANAGER.read().unwrap();
     let history_lock = HISTORY_MANAGER.read().unwrap();
+    let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
     if let (Some(cache), Some(history)) = (cache_lock.as_ref(), history_lock.as_ref()) {
         if history.exists_by_hash(&hash) {
             let _ = history.touch_by_hash(&hash, now);
             let _ = history.update_source_by_hash(&hash, source);
+            if let Some(flow_store) = flow_store_lock.as_ref() {
+                let _ = flow_store.upsert_clipboard_entry(
+                    "image",
+                    &hash,
+                    data.len() as i64,
+                    generate_image_thumbnail(data).as_deref(),
+                    source,
+                    Some(&cache.image_path(&hash)),
+                    now,
+                );
+            }
             return;
         }
         let size = data.len() as i64;
@@ -290,8 +359,33 @@ pub fn record_clipboard_image(data: &[u8], source: &str, content_id: Option<&str
         if let Err(e) = history.insert(now, "image", &hash, size, preview.as_deref(), source) {
             log::error!("Failed to insert image history: {}", e);
         }
+        if let Some(flow_store) = flow_store_lock.as_ref() {
+            if let Err(e) = flow_store.upsert_clipboard_entry(
+                "image",
+                &hash,
+                size,
+                preview.as_deref(),
+                source,
+                Some(&cache.image_path(&hash)),
+                now,
+            ) {
+                log::error!("Failed to upsert FlowSync image entry: {}", e);
+            }
+        }
         cache.enforce_size_limit(history);
     }
+}
+
+pub fn record_local_path_entry(path: &Path, entry_source: &str) -> Result<i64, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let flow_store_lock = crate::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+    let flow_store = flow_store_lock
+        .as_ref()
+        .ok_or("FlowSync store not initialized")?;
+    flow_store.create_local_path_entry(path, entry_source, now)
 }
 
 /// Longest edge in pixels. FlowSync list cards render much smaller than the full image, so
@@ -312,7 +406,9 @@ fn downscale_for_preview(dyn_img: image::DynamicImage) -> image::DynamicImage {
 
 fn generate_image_thumbnail(data: &[u8]) -> Option<String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
-    if data.len() < 16 { return None; }
+    if data.len() < 16 {
+        return None;
+    }
     let w = u64::from_le_bytes(data[0..8].try_into().ok()?) as u32;
     let h = u64::from_le_bytes(data[8..16].try_into().ok()?) as u32;
     let pixels = &data[16..];
