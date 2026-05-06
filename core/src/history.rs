@@ -1,5 +1,5 @@
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -38,8 +38,8 @@ impl HistoryManager {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create db parent dir: {}", e))?;
         }
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open history db: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open history db: {}", e))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("Failed to set pragmas: {}", e))?;
@@ -67,8 +67,9 @@ impl HistoryManager {
 
             CREATE INDEX IF NOT EXISTS idx_history_time ON history(timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_history_type ON history(type, timestamp DESC);
-            "
-        ).map_err(|e| format!("Failed to create tables: {}", e))?;
+            ",
+        )
+        .map_err(|e| format!("Failed to create tables: {}", e))?;
 
         let fts_exists: bool = conn
             .query_row(
@@ -170,13 +171,12 @@ impl HistoryManager {
 
     pub fn get_by_id(&self, id: i64) -> Result<Option<HistoryEntry>, String> {
         let conn = self.conn.lock().unwrap();
-        let result: Option<HistoryEntry> = match conn
-            .query_row(
-                "SELECT id, timestamp, type, hash, size, preview, pinned, source
+        let result: Option<HistoryEntry> = match conn.query_row(
+            "SELECT id, timestamp, type, hash, size, preview, pinned, source
                  FROM history WHERE id = ?1",
-                params![id],
-                |row| self::row_to_entry(row),
-            ) {
+            params![id],
+            |row| self::row_to_entry(row),
+        ) {
             Ok(entry) => Some(entry),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => return Err(format!("Query failed: {}", e)),
@@ -211,7 +211,9 @@ impl HistoryManager {
         }
         sql.push_str(" ORDER BY timestamp DESC LIMIT ? OFFSET ?");
 
-        let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare failed: {}", e))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Prepare failed: {}", e))?;
 
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -230,7 +232,8 @@ impl HistoryManager {
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
 
         let entries = stmt
             .query_map(param_refs.as_slice(), |row| self::row_to_entry(row))
@@ -254,7 +257,9 @@ impl HistoryManager {
             fts_query, limit
         );
 
-        let mut stmt = conn.prepare(&sql).map_err(|e| format!("Search prepare failed: {}", e))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Search prepare failed: {}", e))?;
         let entries = stmt
             .query_map([], |row| self::row_to_entry(row))
             .map_err(|e| format!("Search failed: {}", e))?
@@ -271,9 +276,12 @@ impl HistoryManager {
             "DELETE FROM history WHERE id IN ({})",
             placeholders.join(",")
         );
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            ids.iter().map(|&id| Box::new(id) as Box<dyn rusqlite::types::ToSql>).collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+            .iter()
+            .map(|&id| Box::new(id) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let count = conn
             .execute(&sql, param_refs.as_slice())
             .map_err(|e| format!("Delete failed: {}", e))?;
@@ -326,18 +334,28 @@ impl HistoryManager {
             .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))
             .unwrap_or(0);
         let text_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM history WHERE type='text'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM history WHERE type='text'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
         let image_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM history WHERE type='image'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM history WHERE type='image'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
         Ok((total, text_count, image_count))
     }
 
     pub fn get_total_size(&self) -> i64 {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT COALESCE(SUM(size), 0) FROM history", [], |row| row.get::<_, i64>(0))
-            .unwrap_or(0)
+        conn.query_row("SELECT COALESCE(SUM(size), 0) FROM history", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
     }
 
     pub fn get_lru_unpinned(&self, excess_bytes: u64) -> Vec<(i64, String, String)> {
@@ -388,6 +406,10 @@ impl HistoryManager {
             .collect();
 
         Ok(entries)
+    }
+
+    pub fn db_path_exists(db_path: &std::path::Path) -> bool {
+        db_path.exists()
     }
 }
 

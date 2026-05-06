@@ -19,6 +19,8 @@
 - 认证
 - 配置保存
 - 配置同步
+- `FlowSync` NAS 暂存
+- `FlowSync` 外链下载
 
 `FlowProbe` 是本机直连 AI API 测试工具，不经过本服务端。
 
@@ -150,6 +152,7 @@ docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 网关只转发：
 
 - `/api/*` -> `yiboflow_api:8080`
+- `/share/*` -> `yiboflow_api:8080`
 
 其它路径会返回：
 
@@ -586,6 +589,13 @@ docker compose pull
 docker compose up -d
 ```
 
+If you want to deploy the latest local source before publishing a new Docker Hub tag:
+
+```bash
+docker build -t yiboflow-server:local-2026-05-05 .
+YIBOFLOW_API_IMAGE=yiboflow-server:local-2026-05-05 docker compose up -d api
+```
+
 ## 7. View Logs
 
 Show all service logs:
@@ -758,6 +768,18 @@ curl -X POST http://127.0.0.1:11434/api/v1/user/login -H "Content-Type: applicat
 ```
 
 If `/` returns `200` and login returns `400`, the gateway-to-API chain is alive.
+
+### The share link opens but download fails
+
+Check whether `Caddyfile` contains:
+
+```caddy
+handle /share/* {
+    reverse_proxy yiboflow_api:8080
+}
+```
+
+Without this route, `FlowSync` share URLs can be created but external downloads will not reach the Go API.
 
 ### Synology Container Manager shows stale container entries
 

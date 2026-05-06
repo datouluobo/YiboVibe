@@ -11,7 +11,6 @@ lazy_static::lazy_static! {
     pub static ref FREQ_CACHE: RwLock<HashMap<String, u32>> = RwLock::new(HashMap::new());
 }
 
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SmartEntry {
     pub trigger_key: Option<String>,
@@ -36,7 +35,9 @@ pub struct SmartDictionary {
     pub dict_type: String, // "builtin" | "custom"
 }
 
-fn default_type_custom() -> String { "custom".to_string() }
+fn default_type_custom() -> String {
+    "custom".to_string()
+}
 
 fn default_min_trigger() -> usize {
     3
@@ -63,12 +64,13 @@ pub fn load_freq_cache() {
     let path = get_freq_path();
     if path.exists()
         && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(map) = serde_json::from_str::<HashMap<String, u32>>(&content) {
-                let mut cache = FREQ_CACHE.write().unwrap();
-                *cache = map;
-                info!("Loaded {} frequency entries.", cache.len());
-                return;
-            }
+        && let Ok(map) = serde_json::from_str::<HashMap<String, u32>>(&content)
+    {
+        let mut cache = FREQ_CACHE.write().unwrap();
+        *cache = map;
+        info!("Loaded {} frequency entries.", cache.len());
+        return;
+    }
     info!("No freq cache found, starting fresh.");
 }
 
@@ -101,8 +103,6 @@ pub fn get_freq(content: &str) -> u32 {
     cache.get(content).copied().unwrap_or(0)
 }
 
-
-
 /// 首次初始化并加载所有词库
 pub fn init_and_load_dictionaries() {
     let base_dir = get_dict_dir();
@@ -131,7 +131,14 @@ pub fn init_and_load_dictionaries() {
                 "ipconfig".to_string(),
                 "ipconfig /all".to_string(),
                 "ipconfig /flushdns".to_string(),
-            ].into_iter().map(|s| SmartEntry { trigger_key: None, keyword: None, content: s }).collect(),
+            ]
+            .into_iter()
+            .map(|s| SmartEntry {
+                trigger_key: None,
+                keyword: None,
+                content: s,
+            })
+            .collect(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&cmd_dict) {
             let _ = fs::write(cmd_dict_path, json);
@@ -155,7 +162,14 @@ pub fn init_and_load_dictionaries() {
                 "git checkout".to_string(),
                 "git push origin dev".to_string(),
                 "git pull".to_string(),
-            ].into_iter().map(|s| SmartEntry { trigger_key: None, keyword: None, content: s }).collect(),
+            ]
+            .into_iter()
+            .map(|s| SmartEntry {
+                trigger_key: None,
+                keyword: None,
+                content: s,
+            })
+            .collect(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&git_dict) {
             let _ = fs::write(git_dict_path, json);
@@ -179,9 +193,18 @@ pub fn init_and_load_dictionaries() {
                 "npm run dev".to_string(),
                 "npm run build".to_string(),
                 "pnpm dev".to_string(),
-            ].into_iter().map(|s| SmartEntry { trigger_key: None, keyword: None, content: s }).collect(),
+            ]
+            .into_iter()
+            .map(|s| SmartEntry {
+                trigger_key: None,
+                keyword: None,
+                content: s,
+            })
+            .collect(),
         };
-        if let Ok(json) = serde_json::to_string_pretty(&npm_dict) { let _ = fs::write(npm_dict_path, json); }
+        if let Ok(json) = serde_json::to_string_pretty(&npm_dict) {
+            let _ = fs::write(npm_dict_path, json);
+        }
     }
 
     let html_dict_path = builtin_dir.join("html.json");
@@ -200,9 +223,18 @@ pub fn init_and_load_dictionaries() {
                 "<div>\n</div>".to_string(),
                 "<div class=\"\">".to_string(),
                 "<span></span>".to_string(),
-            ].into_iter().map(|s| SmartEntry { trigger_key: None, keyword: None, content: s }).collect(),
+            ]
+            .into_iter()
+            .map(|s| SmartEntry {
+                trigger_key: None,
+                keyword: None,
+                content: s,
+            })
+            .collect(),
         };
-        if let Ok(json) = serde_json::to_string_pretty(&html_dict) { let _ = fs::write(html_dict_path, json); }
+        if let Ok(json) = serde_json::to_string_pretty(&html_dict) {
+            let _ = fs::write(html_dict_path, json);
+        }
     }
 
     let docker_dict_path = builtin_dir.join("docker.json");
@@ -220,9 +252,18 @@ pub fn init_and_load_dictionaries() {
                 "docker ps -a".to_string(),
                 "docker-compose up -d".to_string(),
                 "docker-compose down".to_string(),
-            ].into_iter().map(|s| SmartEntry { trigger_key: None, keyword: None, content: s }).collect(),
+            ]
+            .into_iter()
+            .map(|s| SmartEntry {
+                trigger_key: None,
+                keyword: None,
+                content: s,
+            })
+            .collect(),
         };
-        if let Ok(json) = serde_json::to_string_pretty(&docker_dict) { let _ = fs::write(docker_dict_path, json); }
+        if let Ok(json) = serde_json::to_string_pretty(&docker_dict) {
+            let _ = fs::write(docker_dict_path, json);
+        }
     }
 
     // 3. Load all JSONs into memory
@@ -233,10 +274,14 @@ pub fn init_and_load_dictionaries() {
 struct LegacyDictionary {
     pub id: String,
     pub name: String,
-    #[serde(default)] pub description: String,
-    #[serde(default)] pub version: String,
-    #[serde(default)] pub author: String,
-    #[serde(default = "default_min_trigger")] pub min_trigger_chars: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default = "default_min_trigger")]
+    pub min_trigger_chars: usize,
     pub entries: Vec<String>,
 }
 
@@ -246,31 +291,37 @@ pub fn reload_all_dictionaries() {
 
     for entry in WalkDir::new(&base_dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json")
-            && let Ok(content) = fs::read_to_string(path) {
-                if let Ok(dict) = serde_json::from_str::<SmartDictionary>(&content) {
-                    loaded_map.insert(dict.id.clone(), dict);
-                } else if let Ok(legacy) = serde_json::from_str::<LegacyDictionary>(&content) {
-                    let mut entries = Vec::new();
-                    for s in legacy.entries {
-                        entries.push(SmartEntry { trigger_key: None, keyword: None, content: s });
-                    }
-                    let dict = SmartDictionary {
-                        id: legacy.id,
-                        name: legacy.name,
-                        description: legacy.description,
-                        version: legacy.version,
-                        author: legacy.author,
-                        min_trigger_chars: legacy.min_trigger_chars,
-                        entries,
-                        dict_type: "custom".to_string(), // mark migrated legacy as custom
-                    };
-                    loaded_map.insert(dict.id.clone(), dict.clone());
-                    let _ = save_dictionary(dict);
-                } else {
-                    warn!("Failed to parse dict JSON: {:?}", path);
+        if path.is_file()
+            && path.extension().and_then(|s| s.to_str()) == Some("json")
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            if let Ok(dict) = serde_json::from_str::<SmartDictionary>(&content) {
+                loaded_map.insert(dict.id.clone(), dict);
+            } else if let Ok(legacy) = serde_json::from_str::<LegacyDictionary>(&content) {
+                let mut entries = Vec::new();
+                for s in legacy.entries {
+                    entries.push(SmartEntry {
+                        trigger_key: None,
+                        keyword: None,
+                        content: s,
+                    });
                 }
+                let dict = SmartDictionary {
+                    id: legacy.id,
+                    name: legacy.name,
+                    description: legacy.description,
+                    version: legacy.version,
+                    author: legacy.author,
+                    min_trigger_chars: legacy.min_trigger_chars,
+                    entries,
+                    dict_type: "custom".to_string(), // mark migrated legacy as custom
+                };
+                loaded_map.insert(dict.id.clone(), dict.clone());
+                let _ = save_dictionary(dict);
+            } else {
+                warn!("Failed to parse dict JSON: {:?}", path);
             }
+        }
     }
 
     let count = loaded_map.len();
@@ -299,10 +350,9 @@ pub fn search_candidates(dict_ids: &[String], buffer: &str) -> Vec<String> {
                 let cand_lower = cand.to_lowercase();
                 if buf_lower.chars().count() >= dict.min_trigger_chars {
                     // search_candidates in new design: you can keep it matching cand_lower startswith buf_lower
-                    if cand_lower.starts_with(&buf_lower)
-                        && !results.contains(cand) {
-                            results.push(cand.clone());
-                        }
+                    if cand_lower.starts_with(&buf_lower) && !results.contains(cand) {
+                        results.push(cand.clone());
+                    }
                 }
             }
         }
@@ -341,10 +391,9 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<(String,
 
                     if buf_tail == cand_head {
                         // Don't suggest if user already typed the full candidate
-                        if tail_len < cand_chars.len()
-                            && !results.iter().any(|(_, c)| c == cand) {
-                                results.push((tail_len, cand.clone()));
-                            }
+                        if tail_len < cand_chars.len() && !results.iter().any(|(_, c)| c == cand) {
+                            results.push((tail_len, cand.clone()));
+                        }
                         break; // found best match for this candidate
                     }
                 }
@@ -358,7 +407,7 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<(String,
         let freq_b = get_freq(&b.1);
         freq_b.cmp(&freq_a).then_with(|| b.0.cmp(&a.0))
     });
-    
+
     let mut out = Vec::new();
     for r in results.into_iter().take(15) {
         // Return (candidate_string, match_length)
@@ -366,8 +415,6 @@ pub fn search_candidates_tail(dict_ids: &[String], buffer: &str) -> Vec<(String,
     }
     out
 }
-
-
 
 // ---------------------------------------------------------------------------
 // CRUD APIS (For Tauri)
@@ -380,11 +427,11 @@ pub fn get_all_dictionaries() -> Vec<SmartDictionary> {
 
 pub fn save_dictionary(dict: SmartDictionary) -> Result<(), String> {
     let base_dir = get_dict_dir();
-    
+
     // determine path: check if it exists in builtin, otherwise custom
     let builtin_path = base_dir.join("builtin").join(format!("{}.json", dict.id));
     let mut save_path = base_dir.join("custom").join(format!("{}.json", dict.id));
-    
+
     if builtin_path.exists() {
         save_path = builtin_path;
     }
@@ -392,16 +439,16 @@ pub fn save_dictionary(dict: SmartDictionary) -> Result<(), String> {
     if let Some(parent) = save_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    
+
     let json = serde_json::to_string_pretty(&dict).map_err(|e| e.to_string())?;
     fs::write(save_path, json).map_err(|e| e.to_string())?;
-    
+
     // Update memory cache
     {
         let mut cache = DICT_CACHE.write().unwrap();
         cache.insert(dict.id.clone(), dict);
     }
-    
+
     Ok(())
 }
 

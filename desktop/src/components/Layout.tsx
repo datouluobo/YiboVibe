@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
     LayoutDashboard, Sparkles,
-    Flame, Truck, Activity, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield
+    Flame, Activity, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield
 } from "lucide-react";
 
 interface NavItem {
@@ -27,7 +27,6 @@ const NAV_ITEMS: NavItem[] = [
     { id: "flowkeys", path: "/app/flowkeys", icon: Keyboard, labelKey: "nav.flowkeys", tooltipKey: "nav.tooltip_flowkeys" },
 
     // Group 3: Tools
-    { id: "flowdrop", path: "/app/flowdrop", icon: Truck, labelKey: "nav.flowdrop", tooltipKey: "nav.tooltip_flowdrop" },
     { id: "flowprobe", path: "/app/flowprobe", icon: Activity, labelKey: "nav.flowprobe", tooltipKey: "nav.tooltip_flowprobe" },
 
     // Group 4: System

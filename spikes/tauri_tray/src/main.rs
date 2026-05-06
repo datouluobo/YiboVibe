@@ -4,7 +4,7 @@
 
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::{
-    menu::{Menu, MenuItem, MenuEvent},
+    menu::{Menu, MenuEvent, MenuItem},
     Icon, TrayIconBuilder,
 };
 

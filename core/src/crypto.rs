@@ -172,7 +172,9 @@ impl DataKey {
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ciphertext_bytes = STANDARD.decode(&encrypted_data.ciphertext)?;
 
-        cipher.decrypt(nonce, ciphertext_bytes.as_ref()).map_err(|e| CryptoError::AesGcm(e.to_string()))
+        cipher
+            .decrypt(nonce, ciphertext_bytes.as_ref())
+            .map_err(|e| CryptoError::AesGcm(e.to_string()))
     }
 }
 

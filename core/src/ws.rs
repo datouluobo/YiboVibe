@@ -1,14 +1,13 @@
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
+use native_tls::TlsConnector;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
-    Connector,
+    Connector, connect_async_tls_with_config,
     tungstenite::{client::IntoClientRequest, protocol::Message as TungsteniteMessage},
 };
-use native_tls::TlsConnector;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsMessage {
@@ -48,12 +47,8 @@ impl WsClient {
         builder.danger_accept_invalid_certs(true);
         let connector = Connector::NativeTls(builder.build().unwrap());
 
-        let (ws_stream, response) = connect_async_tls_with_config(
-            request,
-            None,
-            false,
-            Some(connector),
-        ).await?;
+        let (ws_stream, response) =
+            connect_async_tls_with_config(request, None, false, Some(connector)).await?;
         info!(
             "WebSocket connected with HTTP status: {}",
             response.status()
@@ -104,10 +99,10 @@ impl WsClient {
                     && let Err(e) = ws_write
                         .send(TungsteniteMessage::Text(json_str.into()))
                         .await
-                    {
-                        error!("WebSocket write error: {}", e);
-                        break;
-                    }
+                {
+                    error!("WebSocket write error: {}", e);
+                    break;
+                }
             }
             info!("WebSocket write daemon terminated.");
         });

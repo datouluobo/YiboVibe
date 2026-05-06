@@ -1,9 +1,10 @@
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref SNAP_TABLE_CACHE: RwLock<Option<Arc<HashMap<String, Vec<String>>>>> = RwLock::new(None);
+    static ref SNAP_TABLE_CACHE: RwLock<Option<Arc<HashMap<String, Vec<String>>>>> =
+        RwLock::new(None);
 }
 
 /// Invalidates the snap table cache (call this when dictionaries change)
@@ -30,7 +31,10 @@ pub fn build_snap_table() -> Arc<HashMap<String, Vec<String>>> {
             if let (Some(tk), Some(kw)) = (&entry.trigger_key, &entry.keyword) {
                 if !tk.is_empty() && !kw.is_empty() {
                     let full_trigger = format!("{}{}", tk, kw);
-                    table.entry(full_trigger).or_default().push(entry.content.clone());
+                    table
+                        .entry(full_trigger)
+                        .or_default()
+                        .push(entry.content.clone());
                 }
             }
         }

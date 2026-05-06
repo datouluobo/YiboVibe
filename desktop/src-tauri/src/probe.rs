@@ -78,7 +78,11 @@ pub fn get_probe_targets() -> Result<Vec<ProbeTargetPayload>, String> {
         .targets
         .into_iter()
         .map(|target| ProbeTargetPayload {
-            api_key: secrets.api_keys.get(&target.id).cloned().unwrap_or_default(),
+            api_key: secrets
+                .api_keys
+                .get(&target.id)
+                .cloned()
+                .unwrap_or_default(),
             id: target.id,
             name: target.name,
             protocol: target.protocol,
@@ -132,7 +136,9 @@ pub async fn probe_target(target: ProbeTargetPayload) -> Result<ProbeResult, Str
     let result = match target.protocol {
         ProbeProtocol::Ollama => probe_ollama(&client, &target, start).await,
         ProbeProtocol::OpenAiCompatible => probe_openai_compatible(&client, &target, start).await,
-        ProbeProtocol::GeminiOpenAiCompatible => probe_openai_compatible(&client, &target, start).await,
+        ProbeProtocol::GeminiOpenAiCompatible => {
+            probe_openai_compatible(&client, &target, start).await
+        }
         ProbeProtocol::Anthropic => probe_anthropic(&client, &target, start).await,
         ProbeProtocol::Custom => probe_custom(&client, &target, start).await,
     };
@@ -189,13 +195,15 @@ fn load_probe_secrets() -> Result<ProbeSecretsFile, String> {
         return Ok(ProbeSecretsFile::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read probe secrets: {e}"))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read probe secrets: {e}"))?;
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse probe secrets: {e}"))
 }
 
 fn save_probe_secrets(secrets: &ProbeSecretsFile) -> Result<(), String> {
     let path = probe_secrets_path();
-    let json = serde_json::to_string_pretty(secrets).map_err(|e| format!("Failed to serialize probe secrets: {e}"))?;
+    let json = serde_json::to_string_pretty(secrets)
+        .map_err(|e| format!("Failed to serialize probe secrets: {e}"))?;
     fs::write(path, json).map_err(|e| format!("Failed to save probe secrets: {e}"))
 }
 
@@ -234,7 +242,10 @@ async fn probe_ollama(client: &Client, target: &ProbeTargetPayload, start: Insta
                 Ok(models) => success_result(
                     "OK_MODELS_FOUND",
                     "Ollama endpoint is reachable",
-                    format!("Connected directly to Ollama and found {} model(s).", models.len()),
+                    format!(
+                        "Connected directly to Ollama and found {} model(s).",
+                        models.len()
+                    ),
                     start,
                     Some("ollama"),
                     "not_required",
@@ -251,12 +262,18 @@ async fn probe_ollama(client: &Client, target: &ProbeTargetPayload, start: Insta
                 ),
             }
         }
-        Ok(response) => http_failure_result(response.status(), start, Some("ollama"), "not_required"),
+        Ok(response) => {
+            http_failure_result(response.status(), start, Some("ollama"), "not_required")
+        }
         Err(err) => network_failure_result(err.to_string(), start, Some("ollama")),
     }
 }
 
-async fn probe_openai_compatible(client: &Client, target: &ProbeTargetPayload, start: Instant) -> ProbeResult {
+async fn probe_openai_compatible(
+    client: &Client,
+    target: &ProbeTargetPayload,
+    start: Instant,
+) -> ProbeResult {
     let url = openai_models_url(&target.base_url);
     let mut request = client.get(url);
     if !target.api_key.trim().is_empty() {
@@ -290,13 +307,21 @@ async fn probe_openai_compatible(client: &Client, target: &ProbeTargetPayload, s
             response.status(),
             start,
             Some("openai_compatible"),
-            if target.api_key.trim().is_empty() { "not_provided" } else { "provided" },
+            if target.api_key.trim().is_empty() {
+                "not_provided"
+            } else {
+                "provided"
+            },
         ),
         Err(err) => network_failure_result(err.to_string(), start, Some("openai_compatible")),
     }
 }
 
-async fn probe_anthropic(client: &Client, target: &ProbeTargetPayload, start: Instant) -> ProbeResult {
+async fn probe_anthropic(
+    client: &Client,
+    target: &ProbeTargetPayload,
+    start: Instant,
+) -> ProbeResult {
     let url = anthropic_models_url(&target.base_url);
     match client
         .get(url)
@@ -330,13 +355,20 @@ async fn probe_anthropic(client: &Client, target: &ProbeTargetPayload, start: In
             response.status(),
             start,
             Some("anthropic"),
-            if target.api_key.trim().is_empty() { "not_provided" } else { "provided" },
+            if target.api_key.trim().is_empty() {
+                "not_provided"
+            } else {
+                "provided"
+            },
         ),
         Err(err) => network_failure_result(err.to_string(), start, Some("anthropic")),
     }
 }
 
-async fn fetch_ollama_models(client: &Client, target: &ProbeTargetPayload) -> Result<Vec<String>, String> {
+async fn fetch_ollama_models(
+    client: &Client,
+    target: &ProbeTargetPayload,
+) -> Result<Vec<String>, String> {
     let response = client
         .get(ollama_models_url(&target.base_url))
         .send()
@@ -346,28 +378,45 @@ async fn fetch_ollama_models(client: &Client, target: &ProbeTargetPayload) -> Re
     if !status.is_success() {
         return Err(format!("HTTP {status}"));
     }
-    let text = response.text().await.map_err(|e| format!("Failed to read response body: {e}"))?;
-    let payload: OllamaModelsResponse = serde_json::from_str(&text).map_err(|e| format!("Failed to parse Ollama response: {e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let payload: OllamaModelsResponse =
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse Ollama response: {e}"))?;
     Ok(payload.models.into_iter().map(|model| model.name).collect())
 }
 
-async fn fetch_openai_models(client: &Client, target: &ProbeTargetPayload) -> Result<Vec<String>, String> {
+async fn fetch_openai_models(
+    client: &Client,
+    target: &ProbeTargetPayload,
+) -> Result<Vec<String>, String> {
     let mut request = client.get(openai_models_url(&target.base_url));
     if !target.api_key.trim().is_empty() {
         request = request.header(AUTHORIZATION, format!("Bearer {}", target.api_key.trim()));
     }
 
-    let response = request.send().await.map_err(|e| format!("Network error: {e}"))?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!("HTTP {status}"));
     }
-    let text = response.text().await.map_err(|e| format!("Failed to read response body: {e}"))?;
-    let payload: OpenAiModelsResponse = serde_json::from_str(&text).map_err(|e| format!("Failed to parse OpenAI-compatible response: {e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let payload: OpenAiModelsResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse OpenAI-compatible response: {e}"))?;
     Ok(payload.data.into_iter().map(|model| model.id).collect())
 }
 
-async fn fetch_anthropic_models(client: &Client, target: &ProbeTargetPayload) -> Result<Vec<String>, String> {
+async fn fetch_anthropic_models(
+    client: &Client,
+    target: &ProbeTargetPayload,
+) -> Result<Vec<String>, String> {
     let response = client
         .get(anthropic_models_url(&target.base_url))
         .headers(anthropic_headers(&target.api_key))
@@ -378,14 +427,21 @@ async fn fetch_anthropic_models(client: &Client, target: &ProbeTargetPayload) ->
     if !status.is_success() {
         return Err(format!("HTTP {status}"));
     }
-    let text = response.text().await.map_err(|e| format!("Failed to read response body: {e}"))?;
-    let payload: AnthropicModelsResponse = serde_json::from_str(&text).map_err(|e| format!("Failed to parse Anthropic response: {e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let payload: AnthropicModelsResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse Anthropic response: {e}"))?;
     Ok(payload.data.into_iter().map(|model| model.id).collect())
 }
 
 fn anthropic_headers(api_key: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert("anthropic-version", HeaderValue::from_static(ANTHROPIC_VERSION));
+    headers.insert(
+        "anthropic-version",
+        HeaderValue::from_static(ANTHROPIC_VERSION),
+    );
     if !api_key.trim().is_empty() {
         if let Ok(value) = HeaderValue::from_str(api_key.trim()) {
             headers.insert("x-api-key", value);
@@ -408,7 +464,10 @@ fn ollama_models_url(base_url: &str) -> String {
     if base.ends_with("/api/tags") {
         return base.to_string();
     }
-    let stripped = base.strip_suffix("/v1").unwrap_or(base).trim_end_matches('/');
+    let stripped = base
+        .strip_suffix("/v1")
+        .unwrap_or(base)
+        .trim_end_matches('/');
     format!("{stripped}/api/tags")
 }
 
@@ -417,7 +476,10 @@ fn ollama_version_url(base_url: &str) -> String {
     if base.ends_with("/api/version") {
         return base.to_string();
     }
-    let stripped = base.strip_suffix("/v1").unwrap_or(base).trim_end_matches('/');
+    let stripped = base
+        .strip_suffix("/v1")
+        .unwrap_or(base)
+        .trim_end_matches('/');
     format!("{stripped}/api/version")
 }
 
@@ -511,7 +573,11 @@ fn http_failure_result(
     }
 }
 
-fn network_failure_result(error: String, start: Instant, detected_protocol: Option<&str>) -> ProbeResult {
+fn network_failure_result(
+    error: String,
+    start: Instant,
+    detected_protocol: Option<&str>,
+) -> ProbeResult {
     let code = if error.to_lowercase().contains("timed out") {
         "ERR_TIMEOUT"
     } else {

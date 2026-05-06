@@ -79,13 +79,11 @@ impl AppRule {
 }
 
 /// 完整 FlowRules 配置
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct FlowRulesConfig {
     pub default: DefaultRules,
     pub app_overrides: Vec<AppRule>,
 }
-
 
 // ---------------------------------------------------------------------------
 // Runtime Cache — 热路径查询 O(1)
@@ -116,7 +114,8 @@ impl RulesCache {
 // ---------------------------------------------------------------------------
 
 lazy_static! {
-    static ref RULES_CONFIG: RwLock<FlowRulesConfig> = RwLock::new(FlowRulesConfig::load_or_default());
+    static ref RULES_CONFIG: RwLock<FlowRulesConfig> =
+        RwLock::new(FlowRulesConfig::load_or_default());
     static ref RULES_CACHE: RwLock<RulesCache> = {
         let cfg = RULES_CONFIG.read().unwrap();
         RwLock::new(RulesCache::from_config(&cfg))
@@ -206,10 +205,10 @@ pub fn is_all_disabled(process_name: &str) -> bool {
     let cache = RULES_CACHE.read().unwrap();
     let d = &cache.default;
     if let Some(rule) = cache.app_map.get(process_name) {
-        !rule.resolve_enabled(Feature::FlowSnap, d.flowsnap) 
-        && !rule.resolve_enabled(Feature::FlowHint, d.flowhint) 
-        && !rule.resolve_enabled(Feature::FlowSync, d.flowsync)
-        && !rule.resolve_enabled(Feature::FlowKeys, d.flowkeys)
+        !rule.resolve_enabled(Feature::FlowSnap, d.flowsnap)
+            && !rule.resolve_enabled(Feature::FlowHint, d.flowhint)
+            && !rule.resolve_enabled(Feature::FlowSync, d.flowsync)
+            && !rule.resolve_enabled(Feature::FlowKeys, d.flowkeys)
     } else {
         !d.flowsnap && !d.flowhint && !d.flowsync && !d.flowkeys
     }
@@ -255,7 +254,11 @@ pub fn set_default_rules(default: DefaultRules) -> Result<(), String> {
 pub fn upsert_app_rule(rule: AppRule) -> Result<(), String> {
     let mut cfg = RULES_CONFIG.write().map_err(|e| e.to_string())?;
     let key = rule.process.trim().to_lowercase();
-    if let Some(existing) = cfg.app_overrides.iter_mut().find(|r| r.process.trim().to_lowercase() == key) {
+    if let Some(existing) = cfg
+        .app_overrides
+        .iter_mut()
+        .find(|r| r.process.trim().to_lowercase() == key)
+    {
         *existing = rule;
     } else {
         cfg.app_overrides.push(rule);
@@ -271,9 +274,13 @@ pub fn remove_app_rule(process: String) -> Result<(), String> {
     let mut cfg = RULES_CONFIG.write().map_err(|e| e.to_string())?;
     let key = process.trim().to_lowercase();
     let before = cfg.app_overrides.len();
-    cfg.app_overrides.retain(|r| r.process.trim().to_lowercase() != key);
+    cfg.app_overrides
+        .retain(|r| r.process.trim().to_lowercase() != key);
     if cfg.app_overrides.len() == before {
-        warn!("remove_app_rule: process '{}' not found in overrides.", process);
+        warn!(
+            "remove_app_rule: process '{}' not found in overrides.",
+            process
+        );
     }
     drop(cfg);
     persist_and_rebuild();
@@ -285,7 +292,11 @@ pub fn remove_app_rule(process: String) -> Result<(), String> {
 pub fn toggle_app_feature(process: String, feature: Feature) -> Result<(), String> {
     let mut cfg = RULES_CONFIG.write().map_err(|e| e.to_string())?;
     let key = process.trim().to_lowercase();
-    if let Some(rule) = cfg.app_overrides.iter_mut().find(|r| r.process.trim().to_lowercase() == key) {
+    if let Some(rule) = cfg
+        .app_overrides
+        .iter_mut()
+        .find(|r| r.process.trim().to_lowercase() == key)
+    {
         let (current, next) = match feature {
             Feature::FlowSnap => (rule.flowsnap, &mut rule.flowsnap),
             Feature::FlowHint => (rule.flowhint, &mut rule.flowhint),
@@ -318,8 +329,6 @@ pub fn toggle_default_feature(feature: Feature) -> Result<(), String> {
     persist_and_rebuild();
     Ok(())
 }
-
-
 
 /// 重新从磁盘加载配置，覆盖当前内存（用于导入备份后刷新）
 pub fn force_reload_from_disk() {

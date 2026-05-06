@@ -1,7 +1,7 @@
-pub mod vault;
 pub mod crypto;
 pub mod packager;
 pub mod transport;
+pub mod vault;
 
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,7 @@ pub async fn check_remote_conflicts(
         }
 
         if remote_updated_at > local_updated_at {
-            // Further inspection could detect diverged branches based on Delta chunks, 
+            // Further inspection could detect diverged branches based on Delta chunks,
             // but simplified here for generic timestamp diffing.
             return Ok(SyncConflictState::RemoteIsNewer);
         } else if remote_updated_at < local_updated_at {
