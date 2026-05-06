@@ -20,8 +20,10 @@ fn main() {
 
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        
-        if let Ok(process_handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
+
+        if let Ok(process_handle) =
+            OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
+        {
             let mut buf = [0u16; MAX_PATH as usize];
             let len = GetModuleFileNameExW(process_handle, None, &mut buf);
             if len > 0 {

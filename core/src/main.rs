@@ -11,7 +11,7 @@ use yiboflow_core::{api, clipboard, crypto, dictionary, hook_manager, ws};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     info!("Starting YiboFlow Core Engine...");
-    
+
     // 初始化本地词库引擎
     dictionary::init_and_load_dictionaries();
 
@@ -74,8 +74,16 @@ async fn run_mock_api_test() {
         Ok(res) => {
             if res.code == 200 && res.data.is_some() {
                 let d = res.data.unwrap();
-                let access_token = d.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let kdf_salt = d.get("kdf_salt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let access_token = d
+                    .get("access_token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let kdf_salt = d
+                    .get("kdf_salt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 info!("Logged in! Received Token: {}...", &access_token[0..10]);
 
                 let mk = crypto::MasterKey::derive("my_strong_password", &kdf_salt).unwrap();
@@ -109,8 +117,14 @@ async fn run_mock_api_test() {
 
                         // --- NEW: Start Clipboard Listener ---
                         let arc_mk = std::sync::Arc::new(mk);
-                        let cb_monitor =
-    clipboard::ClipboardMonitor::new("http://localhost:8080".to_string(), access_token, arc_mk, ws_client.tx.clone(), None, "Mocked Desktop Agent".to_string());
+                        let cb_monitor = clipboard::ClipboardMonitor::new(
+                            "http://localhost:8080".to_string(),
+                            access_token,
+                            arc_mk,
+                            ws_client.tx.clone(),
+                            None,
+                            "Mocked Desktop Agent".to_string(),
+                        );
                         cb_monitor.start_monitoring();
                         cb_monitor.start_receiving(ws_rx);
 

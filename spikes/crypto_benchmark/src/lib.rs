@@ -61,9 +61,8 @@ pub struct WrappedDataKey {
 impl MasterKey {
     /// Derive a Master Key from a password and generic salt.
     pub fn derive(password: &str, salt_b64: &str) -> Result<Self, CryptoError> {
-        let salt = SaltString::from_b64(salt_b64)
-            .map_err(|_| CryptoError::InvalidData)?;
-        
+        let salt = SaltString::from_b64(salt_b64).map_err(|_| CryptoError::InvalidData)?;
+
         let argon2 = Argon2::new(
             argon2::Algorithm::Argon2id,
             argon2::Version::V0x13,
@@ -71,7 +70,12 @@ impl MasterKey {
         );
 
         let mut key_bytes = [0u8; 32];
-        argon2.hash_password_into(password.as_bytes(), salt.as_str().as_bytes(), &mut key_bytes)
+        argon2
+            .hash_password_into(
+                password.as_bytes(),
+                salt.as_str().as_bytes(),
+                &mut key_bytes,
+            )
             .map_err(|e| CryptoError::Argon2(e.to_string()))?;
 
         Ok(Self {
@@ -82,7 +86,7 @@ impl MasterKey {
     /// Wrap (encrypt) a freshly generated Data Key with the Master Key.
     pub fn wrap_dk(&self, dk: &DataKey) -> Result<WrappedDataKey, CryptoError> {
         let cipher = Aes256Gcm::new(&self.key);
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng); 
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let ciphertext = cipher.encrypt(&nonce, dk.key.as_slice())?;
 
         Ok(WrappedDataKey {
@@ -126,7 +130,7 @@ impl DataKey {
     /// Encrypt a payload text (e.g. clipboard text) using the Data Key.
     pub fn encrypt_payload(&self, plaintext: &str) -> Result<EncryptedData, CryptoError> {
         let cipher = Aes256Gcm::new(&self.key);
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng); 
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let ciphertext = cipher.encrypt(&nonce, plaintext.as_bytes())?;
 
         Ok(EncryptedData {

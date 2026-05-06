@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use crypto_prototype::{generate_salt, MasterKey, DataKey};
+use crypto_prototype::{generate_salt, DataKey, MasterKey};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let password = "MySuperSecretPassword123!";

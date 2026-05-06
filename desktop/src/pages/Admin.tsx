@@ -35,6 +35,22 @@ interface AdminDevice {
   last_seen_at: string;
 }
 
+interface FlowSyncDiagnostics {
+  remote_device_id: number | null;
+}
+
+interface FlowSyncStagingPolicy {
+  id: number;
+  staging_enabled: boolean;
+  default_ttl_seconds: number;
+  max_ttl_seconds: number;
+  max_object_size_bytes: number;
+  user_quota_bytes: number;
+  external_links_enabled: boolean;
+  external_link_max_ttl_seconds: number;
+  gc_interval_seconds: number;
+}
+
 type Tab = "users" | "devices";
 type DeviceSortKey = "id" | "device_name" | "username" | "device_type" | "last_seen_at";
 type SortDirection = "asc" | "desc";
@@ -47,6 +63,7 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState<Tab>("users");
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [devices, setDevices] = useState<AdminDevice[]>([]);
+  const [currentRemoteDeviceId, setCurrentRemoteDeviceId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -71,6 +88,8 @@ export default function Admin() {
     id: 0,
     label: "",
   });
+  const [stagingPolicyDraft, setStagingPolicyDraft] = useState<FlowSyncStagingPolicy | null>(null);
+  const [stagingPolicyLoading, setStagingPolicyLoading] = useState(false);
 
   const tryRestoreAdminSession = useCallback(async () => {
     const serverUrl = localStorage.getItem("yiboflow_server_url") || "";
@@ -132,6 +151,12 @@ export default function Admin() {
     setLoading(true);
     setLoadError("");
     try {
+      const diagnostics = await invoke<FlowSyncDiagnostics>("get_flowsync_diagnostics");
+      setCurrentRemoteDeviceId(diagnostics.remote_device_id);
+      setStagingPolicyLoading(true);
+      const policy = await invokeAdminAction<FlowSyncStagingPolicy>("admin_get_flowsync_staging_policy");
+      setStagingPolicyDraft(policy);
+
       if (activeTab === "users") {
         const data: AdminUser[] = await invoke("admin_list_users");
         setUsers(data);
@@ -155,6 +180,7 @@ export default function Admin() {
 
       setLoadError(message);
     } finally {
+      setStagingPolicyLoading(false);
       setLoading(false);
     }
   }, [activeTab, tryRestoreAdminSession]);
@@ -360,6 +386,31 @@ export default function Admin() {
     );
   };
 
+  const handleSaveStagingPolicy = async () => {
+    if (!stagingPolicyDraft) return;
+    setActionLoading("staging-policy");
+    setLoadError("");
+    try {
+      const saved = await invokeAdminAction<FlowSyncStagingPolicy>(
+        "admin_update_flowsync_staging_policy",
+        { policy: stagingPolicyDraft }
+      );
+      setStagingPolicyDraft(saved);
+    } catch (error) {
+      console.error("Failed to update staging policy:", error);
+      setLoadError(String(error));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const updateStagingDraft = <K extends keyof FlowSyncStagingPolicy>(
+    key: K,
+    value: FlowSyncStagingPolicy[K]
+  ) => {
+    setStagingPolicyDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+  };
+
   return (
     <div className="page-container">
       {/* Page Header */}
@@ -453,6 +504,107 @@ export default function Admin() {
       </div>
 
       {/* Search and Refresh */}
+      <div
+        className="glass-panel"
+        style={{
+          marginBottom: "16px",
+          padding: "16px",
+          borderRadius: "var(--radius-lg)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "14px",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--color-text-main)" }}>
+              FlowSync NAS 暂存策略
+            </div>
+            <div style={{ marginTop: "4px", fontSize: "12px", color: "var(--color-text-dim)" }}>
+              管理是否允许上传暂存、TTL 上限、对象大小和用户配额。
+            </div>
+          </div>
+          <button
+            onClick={() => void handleSaveStagingPolicy()}
+            className="btn-primary"
+            disabled={!stagingPolicyDraft || actionLoading === "staging-policy"}
+            style={{ padding: "9px 16px", fontSize: "13px" }}
+          >
+            {actionLoading === "staging-policy" ? "保存中..." : "保存策略"}
+          </button>
+        </div>
+        {stagingPolicyLoading || !stagingPolicyDraft ? (
+          <div style={{ fontSize: "12px", color: "var(--color-text-dim)" }}>正在加载暂存策略...</div>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px", color: "var(--color-text-dim)" }}>
+              全局暂存开关
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => updateStagingDraft("staging_enabled", !stagingPolicyDraft.staging_enabled)}
+                style={{ justifyContent: "flex-start", padding: "10px 12px", fontSize: "13px", gap: "8px" }}
+              >
+                {stagingPolicyDraft.staging_enabled ? <CheckCircle2 size={14} color="#22c55e" /> : <XCircle size={14} color="#ef4444" />}
+                {stagingPolicyDraft.staging_enabled ? "已启用" : "已关闭"}
+              </button>
+            </label>
+            {[
+              ["default_ttl_seconds", "默认 TTL（秒）"],
+              ["max_ttl_seconds", "最大 TTL（秒）"],
+              ["max_object_size_bytes", "单对象大小上限（字节）"],
+              ["user_quota_bytes", "单用户配额（字节）"],
+              ["external_link_max_ttl_seconds", "外链最大 TTL（秒）"],
+              ["gc_interval_seconds", "GC 间隔（秒）"],
+            ].map(([key, label]) => (
+              <label
+                key={key}
+                style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px", color: "var(--color-text-dim)" }}
+              >
+                {label}
+                <input
+                  type="number"
+                  min={0}
+                  value={String(stagingPolicyDraft[key as keyof FlowSyncStagingPolicy] ?? 0)}
+                  onChange={(e) =>
+                    updateStagingDraft(
+                      key as keyof FlowSyncStagingPolicy,
+                      Number(e.target.value) as never
+                    )
+                  }
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--color-border)",
+                    background: "var(--color-surface-elevated)",
+                    color: "var(--color-text-main)",
+                    fontSize: "13px",
+                  }}
+                />
+              </label>
+            ))}
+            <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px", color: "var(--color-text-dim)" }}>
+              外链功能开关
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => updateStagingDraft("external_links_enabled", !stagingPolicyDraft.external_links_enabled)}
+                style={{ justifyContent: "flex-start", padding: "10px 12px", fontSize: "13px", gap: "8px" }}
+              >
+                {stagingPolicyDraft.external_links_enabled ? <CheckCircle2 size={14} color="#22c55e" /> : <XCircle size={14} color="#ef4444" />}
+                {stagingPolicyDraft.external_links_enabled ? "已启用" : "已关闭"}
+              </button>
+            </label>
+          </div>
+        )}
+      </div>
+
       <div
         style={{
           display: "flex",
@@ -992,30 +1144,32 @@ export default function Admin() {
                         {device.last_seen_at || "N/A"}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                        <button
-                          onClick={() =>
-                            handleKickDevice(device.id, device.device_name)
-                          }
-                          disabled={actionLoading === `device-kick:${device.id}`}
-                          className="btn-ghost"
-                          title={t("admin.kick_device")}
-                          style={{
-                            padding: "6px",
-                            color: "#ef4444",
-                            opacity:
-                              actionLoading === `device-kick:${device.id}`
-                                ? 0.5
-                                : 1,
-                            width: "30px",
-                            height: "30px",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <LogOut size={16} />
-                        </button>
+                        {device.id !== currentRemoteDeviceId && (
+                          <button
+                            onClick={() =>
+                              handleKickDevice(device.id, device.device_name)
+                            }
+                            disabled={actionLoading === `device-kick:${device.id}`}
+                            className="btn-ghost"
+                            title={t("admin.kick_device")}
+                            style={{
+                              padding: "6px",
+                              color: "#ef4444",
+                              opacity:
+                                actionLoading === `device-kick:${device.id}`
+                                  ? 0.5
+                                  : 1,
+                              width: "30px",
+                              height: "30px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <LogOut size={16} />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))

@@ -1,15 +1,15 @@
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
+use lazy_static::lazy_static;
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::RwLock;
-use lazy_static::lazy_static;
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LocalUser {
@@ -58,7 +58,7 @@ pub fn get_yiboflow_global_dir() -> PathBuf {
         }
         return path;
     }
-    
+
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
     path.push("YiboFlow");
     if !path.exists() {
@@ -89,7 +89,7 @@ pub fn get_active_user_dir() -> PathBuf {
         }
         return path;
     }
-    
+
     // Fallback: Default to "users/default" if no user is authenticated
     let mut path = base;
     path.push("users");
@@ -105,20 +105,23 @@ pub fn load_session() {
     path.push("last_session.json");
     if path.exists()
         && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(config) = serde_json::from_str::<SessionConfig>(&content)
-                && let Some(u) = config.last_username {
-                    info!("[Session] Loaded last session user: {}", u);
-                    *ACTIVE_USER.write().unwrap() = Some(u);
-                }
+        && let Ok(config) = serde_json::from_str::<SessionConfig>(&content)
+        && let Some(u) = config.last_username
+    {
+        info!("[Session] Loaded last session user: {}", u);
+        *ACTIVE_USER.write().unwrap() = Some(u);
+    }
 }
 
 pub fn save_session(username: String) {
     info!("[Session] Setting active user: {}", username);
     *ACTIVE_USER.write().unwrap() = Some(username.clone());
-    
+
     let mut path = get_yiboflow_global_dir();
     path.push("last_session.json");
-    let config = SessionConfig { last_username: Some(username) };
+    let config = SessionConfig {
+        last_username: Some(username),
+    };
     if let Ok(json) = serde_json::to_string_pretty(&config) {
         let _ = fs::write(path, json);
     }
@@ -135,7 +138,9 @@ pub fn clear_session() {
 
     let mut path = get_yiboflow_global_dir();
     path.push("last_session.json");
-    let config = SessionConfig { last_username: None };
+    let config = SessionConfig {
+        last_username: None,
+    };
     if let Ok(json) = serde_json::to_string_pretty(&config) {
         let _ = fs::write(path, json);
     }
@@ -155,9 +160,10 @@ pub fn load_users_config() -> UsersConfig {
     let path = get_users_config_path();
     if path.exists()
         && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(cfg) = serde_json::from_str::<UsersConfig>(&content) {
-                return cfg;
-            }
+        && let Ok(cfg) = serde_json::from_str::<UsersConfig>(&content)
+    {
+        return cfg;
+    }
     UsersConfig::default()
 }
 
@@ -188,7 +194,7 @@ pub fn register_local_user(username: &str, password: &str) -> Result<bool, Strin
 
     cfg.users.insert(username.to_string(), new_user);
     save_users_config(&cfg);
-    
+
     // Automatically set as active
     save_session(username.to_string());
     Ok(true)
@@ -198,7 +204,10 @@ pub fn login_local_user(username: &str, password: &str) -> Result<bool, String> 
     let cfg = load_users_config();
     if let Some(user) = cfg.users.get(username) {
         let parsed_hash = PasswordHash::new(&user.password_hash).map_err(|e| e.to_string())?;
-        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+        if Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             save_session(username.to_string());
             return Ok(true);
         } else {
@@ -221,7 +230,7 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
     let base = get_yiboflow_global_dir();
     let old_safe_name = old_username.replace(|c: char| !c.is_alphanumeric(), "_");
     let new_safe_name = new_username.replace(|c: char| !c.is_alphanumeric(), "_");
-    
+
     let mut old_path = base.clone();
     old_path.push("users");
     old_path.push(&old_safe_name);
@@ -231,9 +240,10 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
     new_path.push(&new_safe_name);
 
     if old_path.exists()
-        && let Err(e) = fs::rename(&old_path, &new_path) {
-            return Err(format!("Failed to rename user directory: {}", e));
-        }
+        && let Err(e) = fs::rename(&old_path, &new_path)
+    {
+        return Err(format!("Failed to rename user directory: {}", e));
+    }
 
     // Update users.json
     let mut user = cfg.users.remove(old_username).unwrap();
@@ -244,9 +254,10 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
     // If it was the active session, update it
     let active_user = ACTIVE_USER.read().unwrap().clone();
     if let Some(active) = active_user
-        && active == old_username {
-            save_session(new_username.to_string());
-        }
+        && active == old_username
+    {
+        save_session(new_username.to_string());
+    }
 
     Ok(true)
 }

@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	resetAdminUID  = flag.Uint("reset-admin", 0, "UID of admin to reset password for (requires --new-pass)")
-	newPass        = flag.String("new-pass", "", "New password for admin reset")
+	resetAdminUID = flag.Uint("reset-admin", 0, "UID of admin to reset password for (requires --new-pass)")
+	newPass       = flag.String("new-pass", "", "New password for admin reset")
 )
 
 func main() {
@@ -44,6 +44,15 @@ func main() {
 		if err := config.DB.AutoMigrate(&model.Device{}); err != nil {
 			log.Fatalf("AutoMigrate Device failed: %v", err)
 		}
+		if err := config.DB.AutoMigrate(&model.StagingPolicy{}); err != nil {
+			log.Fatalf("AutoMigrate StagingPolicy failed: %v", err)
+		}
+		if err := config.DB.AutoMigrate(&model.StagedObject{}); err != nil {
+			log.Fatalf("AutoMigrate StagedObject failed: %v", err)
+		}
+		if err := config.DB.AutoMigrate(&model.ShareLink{}); err != nil {
+			log.Fatalf("AutoMigrate ShareLink failed: %v", err)
+		}
 
 		// Bootstrap admin: auto-promote earliest user if no admin exists
 		bootstrapAdmin()
@@ -62,6 +71,7 @@ func main() {
 	r := gin.Default()
 	r.UseRawPath = true
 	r.UnescapePathValues = false
+	r.GET("/share/:token", handler.DownloadSharedObject)
 
 	// Base API route
 	api := r.Group("/api/v1")
@@ -72,7 +82,6 @@ func main() {
 				"version": "v1.5",
 			})
 		})
-
 		// ── Public auth endpoints ──
 		userGrp := api.Group("/user")
 		{
@@ -105,6 +114,19 @@ func main() {
 			protectedGrp.GET("/blob/:uuid", handler.DownloadBlob)
 			protectedGrp.GET("/online", handler.GetOnlineDevices)
 			protectedGrp.GET("/devices", handler.ListDevices)
+			protectedGrp.GET("/staging/policy", handler.GetStagingPolicy)
+			protectedGrp.GET("/staging/preferences", handler.GetStagingPreferences)
+			protectedGrp.PUT("/staging/preferences", handler.UpdateStagingPreferences)
+			protectedGrp.POST("/staging/objects", handler.CreateStagedObject)
+			protectedGrp.PUT("/staging/objects/:id/chunks", handler.UploadStagedObjectChunk)
+			protectedGrp.POST("/staging/objects/:id/complete", handler.CompleteStagedObject)
+			protectedGrp.GET("/staging/lookup", handler.LookupStagedObject)
+			protectedGrp.GET("/staging/objects", handler.ListMyStagedObjects)
+			protectedGrp.GET("/staging/objects/:id/content", handler.DownloadStagedObject)
+			protectedGrp.DELETE("/staging/objects/:id", handler.DeleteMyStagedObject)
+			protectedGrp.GET("/share-links", handler.ListMyShareLinks)
+			protectedGrp.POST("/share-links", handler.CreateShareLink)
+			protectedGrp.POST("/share-links/:id/disable", handler.DisableMyShareLink)
 		}
 
 		// ── Protected: user self-service (profile & password) ──
@@ -140,6 +162,8 @@ func main() {
 			adminGrp.DELETE("/users/:uid/vault", handler.AdminDeleteUserVault)
 			adminGrp.GET("/devices", handler.AdminListDevices)
 			adminGrp.DELETE("/devices/:id", handler.AdminKickDevice)
+			adminGrp.GET("/staging/policy", handler.GetStagingPolicy)
+			adminGrp.PUT("/staging/policy", handler.UpdateStagingPolicy)
 		}
 	}
 

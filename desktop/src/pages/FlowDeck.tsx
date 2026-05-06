@@ -42,6 +42,10 @@ interface DeviceItem {
     lastSeenAt?: string | number | null;
 }
 
+interface FlowSyncDiagnostics {
+    device_name: string | null;
+}
+
 const TONE_STYLES: Record<Tone, { color: string; bg: string; border: string }> = {
     ok: {
         color: "#22c55e",
@@ -194,11 +198,12 @@ export default function FlowDeck() {
     const [retryCount, setRetryCount] = useState(0);
     const [featureRules, setFeatureRules] = useState<any>(null);
     const [dictionaryCount, setDictionaryCount] = useState(0);
+    const [runtimeDeviceName, setRuntimeDeviceName] = useState<string | null>(null);
 
     const serverUrl = localStorage.getItem("yiboflow_server_url") || "";
     const username = localStorage.getItem("yiboflow_username") || "";
     const savedPwdB64 = localStorage.getItem("yiboflow_saved_pwd") || "";
-    const currentDeviceName = localStorage.getItem("yiboflow_device_name") || t("flowdeck.unknown_device");
+    const currentDeviceName = runtimeDeviceName || localStorage.getItem("yiboflow_device_name") || t("flowdeck.unknown_device");
     const connectedAt = localStorage.getItem("yiboflow_connected_at");
     const userRole = localStorage.getItem("yiboflow_user_role") || "user";
     const isRemote = !!serverUrl && serverUrl !== "local";
@@ -282,6 +287,13 @@ export default function FlowDeck() {
     useEffect(() => {
         const loadFeatureState = async () => {
             try {
+                const diagnostics: FlowSyncDiagnostics = await invoke("get_flowsync_diagnostics");
+                setRuntimeDeviceName(diagnostics.device_name);
+            } catch (error) {
+                console.error("Failed to load runtime device name:", error);
+            }
+
+            try {
                 const rules: any = await invoke("get_flow_rules");
                 setFeatureRules(rules);
             } catch (error) {
@@ -330,8 +342,6 @@ export default function FlowDeck() {
     }, [devices]);
 
     const onlineDeviceCount = devices.filter((device) => device.isOnline).length;
-    const otherOnlineDeviceCount = devices.filter((device) => !device.isLocal && device.isOnline).length;
-
     const syncStatus = useMemo<SyncStatusView>(() => {
         if (!isRemote) {
             return {
@@ -440,19 +450,8 @@ export default function FlowDeck() {
                     ? t("flowdeck.meta_remote_mode")
                     : t("flowdeck.meta_local_mode"),
             },
-            {
-                id: "flowdrop",
-                label: "FlowDrop",
-                description: t("flowdeck.feature_flowdrop_desc"),
-                status: !isRemote ? "NOT_CONFIGURED" : otherOnlineDeviceCount > 0 ? "ENABLED" : "DISABLED",
-                meta: !isRemote
-                    ? t("flowdeck.meta_remote_required")
-                    : otherOnlineDeviceCount > 0
-                        ? t("flowdeck.meta_online_targets", { count: otherOnlineDeviceCount })
-                        : t("flowdeck.meta_no_online_targets"),
-            },
         ];
-    }, [dictionaryCount, featureRules, isRemote, keyMappingSummary.enabledMappings, otherOnlineDeviceCount, t]);
+    }, [dictionaryCount, featureRules, isRemote, keyMappingSummary.enabledMappings, t]);
 
     const serverSummaryTone: Tone = !isRemote
         ? "neutral"
@@ -701,10 +700,6 @@ export default function FlowDeck() {
                         <div style={INFO_TILE_STYLE}>
                             <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_online_devices")}</div>
                             <div style={{ fontSize: "13px", fontWeight: 600 }}>{onlineDeviceCount}</div>
-                        </div>
-                        <div style={INFO_TILE_STYLE}>
-                            <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "6px" }}>{t("flowdeck.field_visible_drop_targets")}</div>
-                            <div style={{ fontSize: "13px", fontWeight: 600 }}>{otherOnlineDeviceCount}</div>
                         </div>
                     </div>
 

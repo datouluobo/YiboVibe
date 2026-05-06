@@ -12,17 +12,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n--- Step 3: Copying text -> Encrypting with Data Key (DK) ---");
     let plaintext = "Important private clipboard text: Pssst!";
-    
+
     // 1. Generate DK
     let dk = DataKey::generate();
-    
+
     // 2. Encrypt actual clipboard data with DK
     let encrypted_payload = dk.encrypt_payload(plaintext)?;
-    println!("Encrypted clipboard payload: {:?}", val_preview(&encrypted_payload.ciphertext));
-    
+    println!(
+        "Encrypted clipboard payload: {:?}",
+        val_preview(&encrypted_payload.ciphertext)
+    );
+
     // 3. Wrap DK with MK
     let wrapped_dk = mk.wrap_dk(&dk)?;
-    println!("Wrapped DK: {:?}", val_preview(&wrapped_dk.encrypted_dk.ciphertext));
+    println!(
+        "Wrapped DK: {:?}",
+        val_preview(&wrapped_dk.encrypted_dk.ciphertext)
+    );
 
     println!("\n--- Step 4: Receiving encrypted data -> Decrypting ---");
     // Client B pulls encrypted_payload and wrapped_dk from NAS

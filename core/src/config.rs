@@ -1,13 +1,14 @@
+use lazy_static::lazy_static;
 use log::error;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref GLOBAL_CONFIG: Arc<RwLock<AppConfig>> = Arc::new(RwLock::new(AppConfig::load_or_default()));
+    pub static ref GLOBAL_CONFIG: Arc<RwLock<AppConfig>> =
+        Arc::new(RwLock::new(AppConfig::load_or_default()));
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -75,15 +76,27 @@ pub struct CacheConfig {
     pub image_transport_format: String,
 }
 
-fn default_cache_dir() -> String { String::new() }
-fn default_cache_max_size() -> u64 { 200 }
-fn default_cleanup_days() -> u32 { 7 }
-fn default_image_transport_format() -> String { "png".to_string() }
+fn default_cache_dir() -> String {
+    String::new()
+}
+fn default_cache_max_size() -> u64 {
+    200
+}
+fn default_cleanup_days() -> u32 {
+    7
+}
+fn default_image_transport_format() -> String {
+    "png".to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AppConfig {
     #[serde(default = "default_true")]
     pub is_sync_enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_sync_text: bool,
+    #[serde(default = "default_true")]
+    pub auto_sync_image: bool,
     #[serde(default = "default_empty_string")]
     pub local_password_hash: String,
     #[serde(default = "default_empty_string")]
@@ -112,13 +125,22 @@ pub struct AppConfig {
     pub cache: CacheConfig,
 }
 
-fn default_min_chars() -> usize { 2 }
+fn default_min_chars() -> usize {
+    2
+}
 
-
-fn default_true() -> bool { true }
-fn default_empty_string() -> String { String::new() }
-fn default_fingerprint() -> String { stable_device_fingerprint() }
-fn default_probe_timeout() -> u64 { 10000 }
+fn default_true() -> bool {
+    true
+}
+fn default_empty_string() -> String {
+    String::new()
+}
+fn default_fingerprint() -> String {
+    stable_device_fingerprint()
+}
+fn default_probe_timeout() -> u64 {
+    10000
+}
 
 fn stable_device_fingerprint() -> String {
     let mut seed_parts = Vec::new();
@@ -294,16 +316,18 @@ impl AppConfig {
                             config.save();
                         }
                         return config;
-                    },
+                    }
                     Err(e) => error!("Failed to parse config: {}", e),
                 },
                 Err(e) => error!("Failed to read config file: {}", e),
             }
         }
-        
+
         // Default Config
-        let cfg = Self { 
+        let cfg = Self {
             is_sync_enabled: true,
+            auto_sync_text: true,
+            auto_sync_image: true,
             local_password_hash: default_empty_string(),
             local_kdf_salt: default_empty_string(),
             flowhint_min_chars: 2,
@@ -329,7 +353,10 @@ impl AppConfig {
         // Automatically bump the timestamp on save if sync is enabled locally
         let mut to_save = self.clone();
         if to_save.is_sync_enabled {
-            to_save.sync_meta.global_updated_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            to_save.sync_meta.global_updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
         }
 
         let path = Self::config_path();
@@ -346,7 +373,28 @@ impl AppConfig {
 
 pub fn get_settings() -> (bool, usize, bool, bool) {
     let cfg = GLOBAL_CONFIG.read().unwrap();
-    (cfg.is_sync_enabled, cfg.flowhint_min_chars, cfg.flowhint_accept_tab, cfg.flowhint_accept_right)
+    (
+        cfg.is_sync_enabled,
+        cfg.flowhint_min_chars,
+        cfg.flowhint_accept_tab,
+        cfg.flowhint_accept_right,
+    )
+}
+
+pub fn get_flowsync_auto_sync_prefs() -> (bool, bool) {
+    let cfg = GLOBAL_CONFIG.read().unwrap();
+    (cfg.auto_sync_text, cfg.auto_sync_image)
+}
+
+pub fn set_flowsync_auto_sync_prefs(
+    auto_sync_text: bool,
+    auto_sync_image: bool,
+) -> Result<(), String> {
+    let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+    cfg.auto_sync_text = auto_sync_text;
+    cfg.auto_sync_image = auto_sync_image;
+    cfg.save();
+    Ok(())
 }
 
 pub fn update_settings(
