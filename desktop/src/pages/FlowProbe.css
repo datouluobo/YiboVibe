@@ -10,6 +10,10 @@
   padding-right: 2px;
 }
 
+.flowprobe-page--relay {
+  gap: 12px;
+}
+
 .flowprobe-page--loading {
   align-items: center;
   justify-content: center;
@@ -55,8 +59,9 @@
   align-items: center;
   gap: 10px;
   margin: 0;
-  font-size: 24px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 720;
+  color: #0f172a;
 }
 
 .flowprobe-subtitle,
@@ -71,9 +76,10 @@
 
 .flowprobe-subtitle,
 .flowprobe-panel-header p {
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #7a8394;
 }
 
 .flowprobe-status-shell {
@@ -215,8 +221,9 @@
 .flowprobe-route-card h3,
 .flowprobe-editor h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 680;
+  color: #111827;
 }
 
 .flowprobe-banner {
@@ -251,9 +258,181 @@
 .flowprobe-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
+}
+
+.flowprobe-forwarding-toolbar {
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.flowprobe-forwarding-toolbar-main,
+.flowprobe-forwarding-actions,
+.flowprobe-advanced-summary,
+.flowprobe-inline-metric div,
+.flowprobe-inline-metric__summary {
+  display: flex;
+  gap: 10px;
+}
+
+.flowprobe-forwarding-toolbar-main,
+.flowprobe-advanced-summary {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.flowprobe-forwarding-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flowprobe-forwarding-title p,
+.flowprobe-advanced-summary p {
+  margin: 0;
+  color: #7a8394;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.flowprobe-forwarding-title code,
+.flowprobe-inline-metric code,
+.flowprobe-log-table code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.flowprobe-forwarding-actions {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.flowprobe-chip--toggle {
+  min-height: 34px;
+}
+
+.flowprobe-forwarding-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.flowprobe-inline-metric {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.flowprobe-inline-metric > span {
+  color: #7a8394;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+  letter-spacing: 0.04em;
+}
+
+.flowprobe-inline-metric div {
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: space-between;
+}
+
+.flowprobe-inline-metric code {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 560;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flowprobe-inline-metric__value,
+.flowprobe-copy-value,
+.flowprobe-inline-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.flowprobe-inline-editor {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.flowprobe-copy-value strong,
+.flowprobe-inline-input-row strong,
+.flowprobe-route-field strong {
+  color: #111827;
+}
+
+.flowprobe-copy-value code,
+.flowprobe-copy-value strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.flowprobe-inline-input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: #111827;
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.2;
+  padding: 6px 10px;
+  height: 28px;
+}
+
+.flowprobe-inline-metric__summary {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start !important;
+  color: #7a8394;
+  font-size: 10px;
+}
+
+.flowprobe-inline-metric__summary strong {
+  font-size: 13px;
+  font-weight: 650;
+  color: #0f172a;
+}
+
+.flowprobe-proxy-mode-row--main {
+  margin-top: 2px;
+  align-items: center;
+}
+
+.flowprobe-inline-warning {
+  color: #d08a1f;
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.35;
+}
+
+.flowprobe-inline-warning code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .flowprobe-panel--relay-strip {
@@ -290,12 +469,16 @@
   border: 1px solid var(--color-border);
   background: rgba(255, 255, 255, 0.03);
   color: var(--color-text-main);
-  padding: 8px 12px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1;
+  min-height: 30px;
+  white-space: nowrap;
 }
 
 .flowprobe-button--primary {
@@ -323,11 +506,14 @@
 .flowprobe-protocol-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 9px;
+  padding: 0 9px;
   border-radius: 999px;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 620;
+  min-height: 30px;
+  line-height: 1;
 }
 
 .flowprobe-tag--active {
@@ -349,6 +535,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .flowprobe-icon-button--danger {
@@ -369,13 +556,15 @@
 .flowprobe-search input,
 .flowprobe-editor input,
 .flowprobe-editor select,
-.flowprobe-route-field input {
+.flowprobe-route-field input,
+.flowprobe-route-field select {
   width: 100%;
   border: none;
   outline: none;
   background: transparent;
   color: var(--color-text-main);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 520;
 }
 
 .flowprobe-credential-list,
@@ -472,7 +661,7 @@
   border: 1px solid var(--color-border);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.02);
-  padding: 12px;
+  padding: 10px;
   min-width: 0;
 }
 
@@ -498,38 +687,103 @@
 .flowprobe-form-grid label span,
 .flowprobe-route-field span {
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 630;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  color: #7a8394;
 }
 
 .flowprobe-editor input,
 .flowprobe-editor select,
-.flowprobe-route-field input {
-  padding: 9px 10px;
+.flowprobe-route-field input,
+.flowprobe-route-field select {
+  padding: 6px 10px;
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
+  height: 34px;
 }
 
 .flowprobe-route-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 10px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.flowprobe-route-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.flowprobe-route-actions--head {
+  margin-top: -2px;
+  margin-bottom: 6px;
+  justify-content: flex-end;
+}
+
+.flowprobe-route-actions--inline {
+  margin: 0;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .flowprobe-route-head p {
   margin: 5px 0 0;
-  font-size: 11px;
-  color: var(--color-text-dim);
+  font-size: 10px;
+  color: #7a8394;
 }
 
 .flowprobe-route-body {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns:
+    minmax(130px, 0.82fr)
+    minmax(120px, 0.74fr)
+    minmax(300px, 1.75fr)
+    minmax(220px, 1.15fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.flowprobe-route-field strong {
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.3;
+}
+
+.flowprobe-route-field > strong,
+.flowprobe-copy-value,
+.flowprobe-inline-input-row {
+  min-height: 34px;
+}
+
+.flowprobe-route-field > strong {
+  display: inline-flex;
+  align-items: center;
+}
+
+.flowprobe-copy-value {
+  justify-content: space-between;
+}
+
+.flowprobe-copy-value strong,
+.flowprobe-copy-value code {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+}
+
+.flowprobe-inline-input-row select {
+  flex: 1 1 auto;
+}
+
+.flowprobe-inline-input-row > .custom-select-container {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .flowprobe-result {
@@ -569,7 +823,7 @@
 .flowprobe-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .flowprobe-metrics--single {
@@ -581,24 +835,26 @@
 }
 
 .flowprobe-metric-card {
-  padding: 10px 11px;
+  padding: 6px 8px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .flowprobe-metric-card span {
-  color: var(--color-text-muted);
+  color: #7a8394;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 620;
   text-transform: uppercase;
 }
 
 .flowprobe-metric-card strong {
-  font-size: 15px;
+  font-size: 11px;
+  font-weight: 620;
+  color: #111827;
 }
 
 .flowprobe-log-item {
@@ -769,10 +1025,26 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.flowprobe-relay-grid--cards {
+  align-items: start;
+}
+
 .flowprobe-relay-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+.flowprobe-log-panel-actions,
+.flowprobe-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flowprobe-log-panel-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .flowprobe-target-summary,
@@ -783,16 +1055,24 @@
 }
 
 .flowprobe-target-summary {
-  padding: 10px 11px;
+  padding: 8px 10px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.flowprobe-target-summary em {
+  color: #6b7280;
+  font-size: 10px;
+  font-style: normal;
 }
 
 .flowprobe-target-summary span,
 .flowprobe-target-meta {
-  color: var(--color-text-muted);
-  font-size: 11px;
+  color: #7a8394;
+  font-size: 10px;
 }
 
 .flowprobe-target-list {
@@ -823,6 +1103,70 @@
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
 }
 
+.flowprobe-log-panel {
+  gap: 8px;
+}
+
+.flowprobe-log-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.flowprobe-log-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.flowprobe-log-table th,
+.flowprobe-log-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  vertical-align: top;
+  font-size: 11px;
+}
+
+.flowprobe-log-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(201, 208, 226, 0.58);
+  color: #5b6475;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.flowprobe-log-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.flowprobe-log-table-main {
+  color: #111827;
+  font-weight: 620;
+}
+
+.flowprobe-log-table-sub {
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 9px;
+}
+
+.flowprobe-log-empty {
+  color: var(--color-text-muted);
+  text-align: center !important;
+}
+
+.flowprobe-log-empty--block {
+  border: 1px dashed var(--color-border);
+  border-radius: 12px;
+  padding: 18px 12px;
+}
+
 @media (max-width: 1500px) {
   .flowprobe-status-shell {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -847,14 +1191,45 @@
   .flowprobe-shell,
   .flowprobe-status-shell,
   .flowprobe-form-grid,
-  .flowprobe-route-body,
   .flowprobe-metrics,
   .flowprobe-log-grid,
   .flowprobe-detail-list {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .flowprobe-route-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .flowprobe-header {
     align-items: stretch;
+  }
+
+  .flowprobe-forwarding-toolbar-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flowprobe-forwarding-actions {
+    justify-content: flex-start;
+  }
+
+  .flowprobe-inline-metric {
+    flex-basis: 100%;
+  }
+
+  .flowprobe-log-panel-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .flowprobe-inline-metric {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .flowprobe-inline-metric div {
+    width: 100%;
   }
 }
