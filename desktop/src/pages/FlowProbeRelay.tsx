@@ -6,14 +6,19 @@ import {
     ArrowRightLeft,
     CheckCircle2,
     Copy,
+    Eye,
+    EyeOff,
     Loader2,
     PauseCircle,
+    Pencil,
     PlayCircle,
     RefreshCw,
     Save,
     ServerCog,
     Trash2,
+    X,
 } from "lucide-react";
+import { CustomSelect } from "../components/CustomSelect";
 import "./FlowProbe.css";
 
 type ProbeProtocol =
@@ -244,6 +249,15 @@ function maskToken(value: string) {
     return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function formatCost(value?: number | null) {
+    return value != null ? `$${value.toFixed(4)}` : "-";
+}
+
+function formatSuccessRate(stats: ProbeStatsPayload) {
+    if (!stats.total_requests) return "-";
+    return `${Math.round((stats.success_count / stats.total_requests) * 100)}%`;
+}
+
 function isLoopbackHost(host: string) {
     const value = host.trim().toLowerCase();
     return value === "127.0.0.1" || value === "localhost";
@@ -266,6 +280,10 @@ export default function FlowProbeRelay() {
     const [proxyMode, setProxyMode] = useState<"loopback" | "wildcard" | "custom">("loopback");
     const [routePickerKind, setRoutePickerKind] = useState<ProbeRouteKind | null>(null);
     const [routeResults, setRouteResults] = useState<Partial<Record<ProbeRouteKind, ProbeResult>>>({});
+    const [relayDetailTab, setRelayDetailTab] = useState<"activity" | "diagnostics">("activity");
+    const [showLocalToken, setShowLocalToken] = useState(false);
+    const [editingLocalToken, setEditingLocalToken] = useState(false);
+    const [localTokenDraft, setLocalTokenDraft] = useState("");
 
     const loadData = async (ensureProxy = false) => {
         setLoading(true);
@@ -297,6 +315,10 @@ export default function FlowProbeRelay() {
         }, 5000);
         return () => window.clearInterval(timer);
     }, []);
+
+    useEffect(() => {
+        setLocalTokenDraft(config?.proxy.local_token || "");
+    }, [config?.proxy.local_token]);
 
     const credentials = useMemo(() => sortCredentials(config?.credentials || []), [config]);
 
@@ -364,6 +386,24 @@ export default function FlowProbeRelay() {
         }
     };
 
+    const saveLocalToken = async () => {
+        if (!config) return;
+        const nextConfig = {
+            ...config,
+            proxy: {
+                ...config.proxy,
+                local_token: localTokenDraft,
+            },
+        };
+        setEditingLocalToken(false);
+        await persistConfig(nextConfig, "local-token");
+    };
+
+    const cancelLocalTokenEdit = () => {
+        setLocalTokenDraft(config?.proxy.local_token || "");
+        setEditingLocalToken(false);
+    };
+
     const handleRouteSwitch = async (kind: ProbeRouteKind, credentialId: string) => {
         if (!config) return;
         const nextConfig = {
@@ -424,7 +464,8 @@ export default function FlowProbeRelay() {
             };
             setConfig(nextConfig);
             await persistConfig(nextConfig, `models-${kind}`);
-            if (models.length && !route.model_override) {
+            const activeCredential = config.credentials.find((credential) => credential.id === route.credential_id);
+            if (models.length && !route.model_override && !activeCredential?.default_model) {
                 await handleRouteModelOverride(kind, models[0]);
             }
         } finally {
@@ -516,9 +557,22 @@ export default function FlowProbeRelay() {
         ? `http://${dashboard.status.lan_host_hint}:${dashboard.status.listen_port}/anthropic`
         : "";
     const showCrossEnvHint = !isLoopbackHost(config.proxy.listen_host);
+    const recentLogs = (dashboard.logs || []).slice(0, 20);
+    const buildModelOptions = (credential?: ProbeCredentialPayload | null, route?: ProbeRoutePayload | null) => {
+        const values = new Set<string>();
+        if (credential?.default_model) values.add(credential.default_model);
+        (credential?.discovered_models || []).forEach((model) => {
+            if (model) values.add(model);
+        });
+        if (route?.model_override) values.add(route.model_override);
+        return [...values];
+    };
+    const resolveRouteModel = (credential?: ProbeCredentialPayload | null, route?: ProbeRoutePayload | null) => {
+        return route?.model_override || credential?.default_model || credential?.discovered_models?.[0] || "";
+    };
 
     return (
-        <div className="flowprobe-page">
+        <div className="flowprobe-page flowprobe-page--relay">
             <div className="flowprobe-header">
                 <div className="flowprobe-title-group">
                     <h1 className="flowprobe-title">
@@ -532,146 +586,166 @@ export default function FlowProbeRelay() {
                         <RefreshCw size={15} />
                         刷新
                     </button>
-                    <button className="flowprobe-button flowprobe-button--primary" onClick={saveProxySettings} disabled={saving}>
-                        {saving && busyAction === "save-proxy" ? <Loader2 size={15} className="flowprobe-spin" /> : <Save size={15} />}
-                        保存配置
-                    </button>
                 </div>
             </div>
-
-            <section className="flowprobe-panel flowprobe-panel--relay-strip">
-                <div className="flowprobe-relay-strip">
-                    <div className="flowprobe-status-card">
-                        <div className="flowprobe-status-line">
-                            <span className={`flowprobe-dot ${dashboard.status.is_running ? "is-on" : "is-off"}`} />
-                            <span>{dashboard.status.is_running ? "运行中" : "已停止"}</span>
-                        </div>
-                        <div className="flowprobe-status-line">
-                            <span>代理开关</span>
-                            <strong>{config.proxy.is_enabled ? "已启用" : "已禁用"}</strong>
-                        </div>
-                        <div className="flowprobe-status-line">
-                            <span>统计采集</span>
-                            <strong>{config.proxy.collect_usage ? "已开启" : "已关闭"}</strong>
-                        </div>
-                        <div className="flowprobe-status-line">
-                            <span>监听地址</span>
-                            <code>{config.proxy.listen_host}:{config.proxy.listen_port}</code>
-                        </div>
-                        <div className="flowprobe-proxy-mode-row">
-                            <button className={`flowprobe-chip ${proxyMode === "loopback" ? "is-active" : ""}`} onClick={() => applyProxyMode("loopback")}>
-                                仅本机
-                            </button>
-                            <button className={`flowprobe-chip ${proxyMode === "wildcard" ? "is-active" : ""}`} onClick={() => applyProxyMode("wildcard")}>
-                                WSL / 局域网
-                            </button>
-                            <button className={`flowprobe-chip ${proxyMode === "custom" ? "is-active" : ""}`} onClick={() => applyProxyMode("custom")}>
-                                自定义
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="flowprobe-status-card">
-                        <div className="flowprobe-proxy-config">
-                            <label>
-                                <span>Host</span>
-                                <input
-                                    value={config.proxy.listen_host}
-                                    placeholder={proxyMode === "custom" ? "例如 192.168.1.92" : ""}
-                                    onChange={(event) =>
-                                        setConfig({
-                                            ...config,
-                                            proxy: { ...config.proxy, listen_host: event.target.value },
-                                        })
-                                    }
-                                />
-                            </label>
-                            <label>
-                                <span>Port</span>
-                                <input
-                                    type="number"
-                                    value={config.proxy.listen_port}
-                                    onChange={(event) =>
-                                        setConfig({
-                                            ...config,
-                                            proxy: { ...config.proxy, listen_port: Number(event.target.value) || 0 },
-                                        })
-                                    }
-                                />
-                            </label>
-                        </div>
-                        <div className="flowprobe-status-line">
-                            <span>本地 Token</span>
-                            <code>{maskToken(dashboard.status.local_token)}</code>
-                            <button className="flowprobe-icon-button" onClick={() => copyText(dashboard.status.local_token)}>
-                                <Copy size={14} />
-                            </button>
-                        </div>
-                        <div className="flowprobe-proxy-mode-row">
-                            <button
-                                className={`flowprobe-chip ${config.proxy.is_enabled ? "is-active" : ""}`}
-                                onClick={() =>
-                                    setConfig({
-                                        ...config,
-                                        proxy: { ...config.proxy, is_enabled: !config.proxy.is_enabled },
-                                    })
-                                }
-                            >
-                                {config.proxy.is_enabled ? "代理已启用" : "代理已禁用"}
-                            </button>
-                            <button
-                                className={`flowprobe-chip ${config.proxy.collect_usage ? "is-active" : ""}`}
-                                onClick={() =>
-                                    setConfig({
-                                        ...config,
-                                        proxy: { ...config.proxy, collect_usage: !config.proxy.collect_usage },
-                                    })
-                                }
-                            >
-                                {config.proxy.collect_usage ? "统计采集中" : "统计采集关闭"}
-                            </button>
-                        </div>
-                        {isLoopbackHost(config.proxy.listen_host) && (
-                            <div className="flowprobe-status-warning">
-                                WSL / 容器 / 虚拟机客户端不能使用 127.0.0.1。改为 <code>0.0.0.0</code> 或 Windows 主机 IP。
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flowprobe-status-card">
-                        <div className="flowprobe-status-line">
-                            <span>接入示例</span>
-                            <code>{showCrossEnvHint ? openaiLanEndpoint || openaiLocalEndpoint : openaiLocalEndpoint}</code>
-                            <button className="flowprobe-icon-button" onClick={() => copyText(showCrossEnvHint ? openaiLanEndpoint || openaiLocalEndpoint : openaiLocalEndpoint)}>
-                                <Copy size={14} />
-                            </button>
-                        </div>
-                        <div className="flowprobe-status-line">
-                            <span>Anthropic</span>
-                            <code>{showCrossEnvHint ? anthropicLanEndpoint || anthropicLocalEndpoint : anthropicLocalEndpoint}</code>
-                            <button className="flowprobe-icon-button" onClick={() => copyText(showCrossEnvHint ? anthropicLanEndpoint || anthropicLocalEndpoint : anthropicLocalEndpoint)}>
-                                <Copy size={14} />
-                            </button>
-                        </div>
-                        <div className="flowprobe-relay-actions">
-                            <button className="flowprobe-button flowprobe-button--secondary" onClick={saveProxySettings} disabled={saving}>
-                                {saving && busyAction === "save-proxy" ? <Loader2 size={15} className="flowprobe-spin" /> : <Save size={15} />}
-                                保存网络
-                            </button>
-                            <button className="flowprobe-button flowprobe-button--secondary" onClick={toggleProxy} disabled={!config.proxy.is_enabled}>
-                                {busyAction === "toggle-proxy" ? <Loader2 size={15} className="flowprobe-spin" /> : dashboard.status.is_running ? <PauseCircle size={15} /> : <PlayCircle size={15} />}
-                                {!config.proxy.is_enabled ? "Probe 已禁用" : dashboard.status.is_running ? "停止 Probe" : "启动 Probe"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </section>
 
             {dashboard.status.last_error && (
                 <div className="flowprobe-banner flowprobe-banner--danger">{dashboard.status.last_error}</div>
             )}
 
-            <div className="flowprobe-relay-grid">
+            <section className="flowprobe-panel flowprobe-forwarding-toolbar">
+                <div className="flowprobe-forwarding-toolbar-main">
+                    <div className="flowprobe-forwarding-title">
+                        <div className="flowprobe-status-line">
+                            <span className={`flowprobe-dot ${dashboard.status.is_running ? "is-on" : "is-off"}`} />
+                            <strong>{dashboard.status.is_running ? "本机转发运行中" : "本机转发已停止"}</strong>
+                        </div>
+                        <p>
+                            当前监听 <code>{config.proxy.listen_host}:{config.proxy.listen_port}</code>
+                            ，可直接切换回环、跨环境共享或自定义地址。
+                        </p>
+                        <div className="flowprobe-proxy-mode-row flowprobe-proxy-mode-row--main">
+                            <button className={`flowprobe-chip ${proxyMode === "loopback" ? "is-active" : ""}`} onClick={() => applyProxyMode("loopback")}>
+                                本机 127.0.0.1
+                            </button>
+                            <button className={`flowprobe-chip ${proxyMode === "wildcard" ? "is-active" : ""}`} onClick={() => applyProxyMode("wildcard")}>
+                                WSL / 容器 / 虚拟机 0.0.0.0
+                            </button>
+                            <button className={`flowprobe-chip ${proxyMode === "custom" ? "is-active" : ""}`} onClick={() => applyProxyMode("custom")}>
+                                自定义 IP
+                            </button>
+                            {isLoopbackHost(config.proxy.listen_host) && (
+                                <span className="flowprobe-inline-warning">
+                                    WSL / 容器 / 虚拟机客户端不能使用 127.0.0.1。需要跨环境访问时，切到 <code>0.0.0.0</code> 或自定义 IP。
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flowprobe-forwarding-actions">
+                        <button
+                            className={`flowprobe-chip flowprobe-chip--toggle ${config.proxy.is_enabled ? "is-active" : ""}`}
+                            onClick={() =>
+                                setConfig({
+                                    ...config,
+                                    proxy: { ...config.proxy, is_enabled: !config.proxy.is_enabled },
+                                })
+                            }
+                        >
+                            代理开关
+                        </button>
+                        <button
+                            className={`flowprobe-chip flowprobe-chip--toggle ${config.proxy.collect_usage ? "is-active" : ""}`}
+                            onClick={() =>
+                                setConfig({
+                                    ...config,
+                                    proxy: { ...config.proxy, collect_usage: !config.proxy.collect_usage },
+                                })
+                            }
+                        >
+                            统计采集
+                        </button>
+                        <button className="flowprobe-button flowprobe-button--secondary" onClick={toggleProxy} disabled={!config.proxy.is_enabled}>
+                            {busyAction === "toggle-proxy" ? <Loader2 size={15} className="flowprobe-spin" /> : dashboard.status.is_running ? <PauseCircle size={15} /> : <PlayCircle size={15} />}
+                            {!config.proxy.is_enabled ? "Probe 已禁用" : dashboard.status.is_running ? "停止 Probe" : "启动 Probe"}
+                        </button>
+                        <button className="flowprobe-button flowprobe-button--primary" onClick={saveProxySettings} disabled={saving}>
+                            {saving && busyAction === "save-proxy" ? <Loader2 size={15} className="flowprobe-spin" /> : <Save size={15} />}
+                            保存配置
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flowprobe-forwarding-grid">
+                    <div className="flowprobe-inline-metric">
+                        <span>OpenAI 本机入口</span>
+                        <div>
+                            <code>{showCrossEnvHint ? openaiLanEndpoint || openaiLocalEndpoint : openaiLocalEndpoint}</code>
+                            <button className="flowprobe-icon-button" onClick={() => copyText(showCrossEnvHint ? openaiLanEndpoint || openaiLocalEndpoint : openaiLocalEndpoint)}>
+                                <Copy size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flowprobe-inline-metric">
+                        <span>Anthropic 本机入口</span>
+                        <div>
+                            <code>{showCrossEnvHint ? anthropicLanEndpoint || anthropicLocalEndpoint : anthropicLocalEndpoint}</code>
+                            <button className="flowprobe-icon-button" onClick={() => copyText(showCrossEnvHint ? anthropicLanEndpoint || anthropicLocalEndpoint : anthropicLocalEndpoint)}>
+                                <Copy size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flowprobe-inline-metric">
+                        <span>本地 Token</span>
+                        <div className="flowprobe-inline-metric__value">
+                            <div className="flowprobe-inline-editor">
+                                {editingLocalToken ? (
+                                    <input
+                                        className="flowprobe-inline-input"
+                                        value={localTokenDraft}
+                                        placeholder="输入本地 Token"
+                                        onChange={(event) => setLocalTokenDraft(event.target.value)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                                void saveLocalToken();
+                                            }
+                                            if (event.key === "Escape") {
+                                                cancelLocalTokenEdit();
+                                            }
+                                        }}
+                                        autoFocus
+                                    />
+                                ) : (
+                                    <code>{showLocalToken ? config.proxy.local_token || "未设置" : maskToken(config.proxy.local_token)}</code>
+                                )}
+                            </div>
+                            <button
+                                className="flowprobe-icon-button"
+                                onClick={() => setShowLocalToken((value) => !value)}
+                                title={showLocalToken ? "隐藏 Token" : "显示 Token"}
+                            >
+                                {showLocalToken ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                            {editingLocalToken ? (
+                                <>
+                                    <button className="flowprobe-icon-button" onClick={() => void saveLocalToken()} title="保存 Token">
+                                        <Save size={14} />
+                                    </button>
+                                    <button className="flowprobe-icon-button" onClick={cancelLocalTokenEdit} title="取消编辑">
+                                        <X size={14} />
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    className="flowprobe-icon-button"
+                                    onClick={() => {
+                                        setLocalTokenDraft(config.proxy.local_token || "");
+                                        setEditingLocalToken(true);
+                                    }}
+                                    title="编辑 Token"
+                                >
+                                    <Pencil size={14} />
+                                </button>
+                            )}
+                            <button className="flowprobe-icon-button" onClick={() => copyText(config.proxy.local_token)} title="复制 Token">
+                                <Copy size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flowprobe-inline-metric">
+                        <span>当前会话汇总</span>
+                        <div className="flowprobe-inline-metric__summary">
+                            <strong>{relayStats.current_session.total_requests}</strong>
+                            <span>请求</span>
+                            <strong>{formatSuccessRate(relayStats.current_session)}</strong>
+                            <span>成功率</span>
+                            <strong>{formatCost(relayStats.current_session.estimated_cost)}</strong>
+                            <span>估算费用</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <div className="flowprobe-relay-grid flowprobe-relay-grid--cards">
                 {routeCards.map((item) => {
                     const route = routeMap.get(item.kind);
                     const credential = route ? credentialMap.get(route.credential_id) : null;
@@ -684,53 +758,98 @@ export default function FlowProbeRelay() {
                                 <div className="flowprobe-route-head">
                                     <div>
                                         <h3>{item.title}</h3>
-                                        <p>{item.endpoint}</p>
                                     </div>
-                                    <span className={`flowprobe-chip flowprobe-chip--status ${route?.enabled ? "is-active" : ""}`}>
-                                        {route?.enabled ? "已启用" : "未启用"}
-                                    </span>
+                                    <div className="flowprobe-route-head-meta">
+                                        <div className="flowprobe-route-actions flowprobe-route-actions--inline">
+                                            <button className="flowprobe-button flowprobe-button--secondary" onClick={() => setRoutePickerKind(item.kind)}>
+                                                <ArrowRightLeft size={14} />
+                                                切换目标
+                                            </button>
+                                            <button className="flowprobe-button flowprobe-button--secondary" onClick={() => runRouteTest(item.kind)}>
+                                                {busyAction === `test-${item.kind}` ? <Loader2 size={14} className="flowprobe-spin" /> : <RefreshCw size={14} />}
+                                                测试当前
+                                            </button>
+                                        </div>
+                                        <span className={`flowprobe-chip flowprobe-chip--status ${route?.enabled ? "is-active" : ""}`}>
+                                            {route?.enabled ? "已启用" : "未启用"}
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="flowprobe-endpoint-meta flowprobe-endpoint-meta--relay">
                                     <span>固定别名</span>
-                                    <code>{item.alias}</code>
-                                    <button className="flowprobe-icon-button" onClick={() => copyText(item.alias)}>
-                                        <Copy size={14} />
-                                    </button>
+                                    <div className="flowprobe-copy-value">
+                                        <code>{item.alias}</code>
+                                        <button className="flowprobe-icon-button" onClick={() => copyText(item.alias)} title="复制固定别名">
+                                            <Copy size={14} />
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="flowprobe-route-body">
                                     <div className="flowprobe-route-field">
                                         <span>接入 API</span>
-                                        <strong>{credential?.name || "未选择"}</strong>
+                                        <div className="flowprobe-copy-value">
+                                            <strong>{credential?.name || "未选择"}</strong>
+                                            {credential?.name && (
+                                                <button className="flowprobe-icon-button" onClick={() => copyText(credential.name)} title="复制 API 名称">
+                                                    <Copy size={14} />
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="flowprobe-route-field">
                                         <span>服务商</span>
                                         <strong>{credential?.provider || "未选择"}</strong>
                                     </div>
-                                    <div className="flowprobe-route-field is-wide">
-                                        <span>上游地址</span>
-                                        <code title={credential?.base_url || ""}>{credential?.base_url || "未配置"}</code>
-                                    </div>
                                     <div className="flowprobe-route-field">
                                         <span>模型</span>
-                                        <input
-                                            value={route?.model_override || ""}
-                                            placeholder={credential?.default_model || "沿用 API 默认模型"}
-                                            onChange={(event) => {
-                                                if (!config || !route) return;
-                                                const nextConfig = {
-                                                    ...config,
-                                                    routes: config.routes.map((candidate) =>
-                                                        candidate.kind === item.kind
-                                                            ? { ...candidate, model_override: event.target.value }
-                                                            : candidate
-                                                    ),
-                                                };
-                                                setConfig(nextConfig);
-                                            }}
-                                            onBlur={(event) => handleRouteModelOverride(item.kind, event.target.value)}
-                                        />
+                                        <div className="flowprobe-inline-input-row">
+                                            <CustomSelect
+                                                options={buildModelOptions(credential, route).map((model) => ({
+                                                    val: model,
+                                                    label: model,
+                                                }))}
+                                                value={resolveRouteModel(credential, route)}
+                                                onChange={(value) => handleRouteModelOverride(item.kind, String(value || ""))}
+                                                placeholder="暂无模型"
+                                                triggerStyle={{
+                                                    minHeight: 34,
+                                                    padding: "0 12px",
+                                                    borderRadius: 10,
+                                                    background: "rgba(255,255,255,0.03)",
+                                                    fontSize: 11,
+                                                    fontWeight: 560,
+                                                    color: "var(--color-text-main)",
+                                                    boxShadow: "none",
+                                                }}
+                                            />
+                                            <button
+                                                className="flowprobe-icon-button"
+                                                onClick={() => fetchRouteModels(item.kind)}
+                                                title="拉取模型并刷新下拉"
+                                            >
+                                                {busyAction === `models-${item.kind}` ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
+                                            </button>
+                                            <button
+                                                className="flowprobe-icon-button"
+                                                onClick={() => copyText(resolveRouteModel(credential, route))}
+                                                title="复制模型名"
+                                            >
+                                                <Copy size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flowprobe-route-field">
+                                        <span>上游地址</span>
+                                        <div className="flowprobe-copy-value">
+                                            <code title={credential?.base_url || ""}>{credential?.base_url || "未配置"}</code>
+                                            {credential?.base_url && (
+                                                <button className="flowprobe-icon-button" onClick={() => copyText(credential.base_url)} title="复制上游地址">
+                                                    <Copy size={14} />
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="flowprobe-route-field">
                                         <span>最近 5 分钟</span>
@@ -744,12 +863,12 @@ export default function FlowProbeRelay() {
                                         <strong>{stats.total_requests}</strong>
                                     </div>
                                     <div className="flowprobe-metric-card">
-                                        <span>输入 / 输出 Token</span>
-                                        <strong>{stats.input_tokens} / {stats.output_tokens}</strong>
+                                        <span>成功率</span>
+                                        <strong>{formatSuccessRate(stats)}</strong>
                                     </div>
                                     <div className="flowprobe-metric-card">
-                                        <span>估算费用</span>
-                                        <strong>{stats.estimated_cost != null ? `$${stats.estimated_cost.toFixed(4)}` : "-"}</strong>
+                                        <span>输入 / 输出 Token</span>
+                                        <strong>{stats.input_tokens} / {stats.output_tokens}</strong>
                                     </div>
                                 </div>
 
@@ -760,21 +879,7 @@ export default function FlowProbeRelay() {
                                             ? `${targetStats.credential_name} · ${targetStats.stats.total_requests} 次 / Token ${targetStats.stats.total_tokens}`
                                             : "当前路由还没有目标 API 级统计"}
                                     </strong>
-                                </div>
-
-                                <div className="flowprobe-route-actions">
-                                    <button className="flowprobe-button flowprobe-button--secondary" onClick={() => setRoutePickerKind(item.kind)}>
-                                        <ArrowRightLeft size={14} />
-                                        切换目标
-                                    </button>
-                                    <button className="flowprobe-button flowprobe-button--secondary" onClick={() => runRouteTest(item.kind)}>
-                                        {busyAction === `test-${item.kind}` ? <Loader2 size={14} className="flowprobe-spin" /> : <RefreshCw size={14} />}
-                                        测试当前
-                                    </button>
-                                    <button className="flowprobe-button flowprobe-button--secondary" onClick={() => fetchRouteModels(item.kind)}>
-                                        {busyAction === `models-${item.kind}` ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
-                                        拉取模型
-                                    </button>
+                                    <em>费用：{formatCost(targetStats?.stats.estimated_cost ?? stats.estimated_cost)}</em>
                                 </div>
 
                                 {result && (
@@ -803,65 +908,78 @@ export default function FlowProbeRelay() {
                 })}
             </div>
 
-            <div className="flowprobe-shell flowprobe-shell--relay-bottom">
-                <section className="flowprobe-panel">
-                    <div className="flowprobe-panel-header">
-                        <div>
-                            <h2>汇总统计</h2>
-                            <p>默认先看全局，再结合每个兼容接口卡片观察拆分数据。</p>
-                        </div>
+            <section className="flowprobe-panel flowprobe-log-panel">
+                <div className="flowprobe-panel-header">
+                    <div>
+                        <h2>日志与诊断</h2>
                     </div>
-                    <div className="flowprobe-metrics">
-                        <div className="flowprobe-metric-card">
-                            <span>当前会话请求</span>
-                            <strong>{relayStats.current_session.total_requests}</strong>
-                        </div>
-                        <div className="flowprobe-metric-card">
-                            <span>成功 / 错误</span>
-                            <strong>{relayStats.current_session.success_count} / {relayStats.current_session.error_count}</strong>
-                        </div>
-                        <div className="flowprobe-metric-card">
-                            <span>输入 / 输出 Token</span>
-                            <strong>{relayStats.current_session.input_tokens} / {relayStats.current_session.output_tokens}</strong>
-                        </div>
-                        <div className="flowprobe-metric-card">
-                            <span>估算费用</span>
-                            <strong>{relayStats.current_session.estimated_cost != null ? `$${relayStats.current_session.estimated_cost.toFixed(4)}` : "-"}</strong>
-                        </div>
-                    </div>
-
-                    <div className="flowprobe-target-list">
-                        {relayStats.by_target_current_session.map((target) => (
-                            <div key={`${target.route_kind}:${target.credential_id}`} className="flowprobe-target-item">
-                                <div className="flowprobe-target-head">
-                                    <strong>{target.credential_name}</strong>
-                                    <span className="flowprobe-tag">{target.route_kind === "OpenAi" ? "OpenAI" : "Anthropic"}</span>
-                                </div>
-                                <div className="flowprobe-target-meta">
-                                    <span>{target.provider}</span>
-                                    <span>{formatProtocolBadge(target.protocol)}</span>
-                                    <span>{target.stats.total_requests} 次</span>
-                                    <span>Token {target.stats.total_tokens}</span>
-                                    <span>{target.stats.estimated_cost != null ? `$${target.stats.estimated_cost.toFixed(4)}` : "-"}</span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="flowprobe-panel">
-                    <div className="flowprobe-panel-header">
-                        <div>
-                            <h2>近期活动</h2>
-                            <p>保留一张活动表，不再拆成多组“查看全部”的折叠块。</p>
+                    <div className="flowprobe-log-panel-actions">
+                        <div className="flowprobe-tab-row">
+                            <button
+                                className={`flowprobe-chip ${relayDetailTab === "activity" ? "is-active" : ""}`}
+                                onClick={() => setRelayDetailTab("activity")}
+                            >
+                                活动日志
+                            </button>
+                            <button
+                                className={`flowprobe-chip ${relayDetailTab === "diagnostics" ? "is-active" : ""}`}
+                                onClick={() => setRelayDetailTab("diagnostics")}
+                            >
+                                诊断详情
+                            </button>
                         </div>
                         <button className="flowprobe-icon-button" onClick={clearLogs}>
                             {busyAction === "clear-logs" ? <Loader2 size={14} className="flowprobe-spin" /> : <Trash2 size={14} />}
                         </button>
                     </div>
+                </div>
 
+                {relayDetailTab === "activity" ? (
+                    <div className="flowprobe-log-table-wrap">
+                        <table className="flowprobe-log-table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>兼容接口</th>
+                                    <th>目标 API</th>
+                                    <th>请求类型</th>
+                                    <th>Path</th>
+                                    <th>Status</th>
+                                    <th>Latency</th>
+                                    <th>错误 / 诊断</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {recentLogs.length > 0 ? recentLogs.map((entry) => (
+                                    <tr key={entry.id}>
+                                        <td>{formatDate(entry.timestamp_ms)}</td>
+                                        <td>{entry.route_kind === "OpenAi" ? "OpenAI" : "Anthropic"}</td>
+                                        <td>
+                                            <div className="flowprobe-log-table-main">{entry.credential_name}</div>
+                                            <div className="flowprobe-log-table-sub">{entry.provider}</div>
+                                        </td>
+                                        <td>{entry.request_kind || "-"}</td>
+                                        <td>
+                                            <div className="flowprobe-log-table-main">{entry.request_path || "-"}</div>
+                                            {entry.model && <div className="flowprobe-log-table-sub">{entry.model}</div>}
+                                        </td>
+                                        <td>{entry.status_code}</td>
+                                        <td>{entry.latency_ms} ms</td>
+                                        <td>
+                                            {entry.error_message || (entry.diagnostic_flags || []).join(" / ") || entry.response_signature || "-"}
+                                        </td>
+                                    </tr>
+                                )) : (
+                                    <tr>
+                                        <td colSpan={8} className="flowprobe-log-empty">当前还没有日志。</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
                     <div className="flowprobe-log-list">
-                        {(dashboard.logs || []).slice(0, 12).map((entry) => (
+                        {recentLogs.length > 0 ? recentLogs.map((entry) => (
                             <div key={entry.id} className="flowprobe-log-item">
                                 <div className="flowprobe-log-top">
                                     <div className="flowprobe-log-title">
@@ -876,7 +994,7 @@ export default function FlowProbeRelay() {
                                     <span>{entry.status_code}</span>
                                     <span>{entry.latency_ms} ms</span>
                                     <span>{entry.request_path || "-"}</span>
-                                    <span>{entry.estimated_cost != null ? `$${entry.estimated_cost.toFixed(4)}` : "-"}</span>
+                                    <span>{formatCost(entry.estimated_cost)}</span>
                                 </div>
                                 {(entry.request_kind || entry.request_signature || entry.response_signature || (entry.diagnostic_flags || []).length > 0) && (
                                     <div className="flowprobe-log-diagnostics">
@@ -894,11 +1012,17 @@ export default function FlowProbeRelay() {
                                 )}
                                 {entry.error_message && <div className="flowprobe-log-error">{entry.error_message}</div>}
                             </div>
-                        ))}
+                        )) : (
+                            <div className="flowprobe-log-empty flowprobe-log-empty--block">当前还没有诊断详情。</div>
+                        )}
                     </div>
-                </section>
-            </div>
+                )}
+            </section>
 
+            {/*
+              Route picker remains available because target switching is still a required runtime action,
+              even though the first-pass UI now prioritizes the dashboard layout.
+            */}
             {routePickerKind && (
                 <div className="flowprobe-modal-backdrop" onClick={() => setRoutePickerKind(null)}>
                     <div className="flowprobe-modal" onClick={(event) => event.stopPropagation()}>
