@@ -6,7 +6,8 @@
         "flowdeck": "FlowDeck",
         "flowmind": "FlowMind",
         "flowsync": "FlowSync",
-        "flowprobe": "FlowProbe",
+        "flowprobe_sources": "Sources",
+        "flowprobe_relay": "Relay",
         "flowrules": "FlowRules",
         "settings": "Settings",
         "flowinfo": "FlowInfo",
@@ -14,7 +15,8 @@
         "tooltip_flowdeck": "System overview, sync state, and device summary",
         "tooltip_flowmind": "Unified smart input engine: prefix expansion and intelligent completion",
         "tooltip_flowsync": "End-to-end encrypted clipboard bridge",
-        "tooltip_flowprobe": "Direct-connect AI API testing tool",
+        "tooltip_flowprobe_sources": "Manage upstream API sources, connectivity checks, and model discovery",
+        "tooltip_flowprobe_relay": "Manage local compatible endpoints, current relay targets, and usage stats",
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
         "tooltip_settings": "Theme, language and global preferences",
         "tooltip_flowinfo": "About YiboFlow — version, credits & info",
@@ -115,6 +117,10 @@
         "debug_mode_off": "Debug Mode: OFF",
         "backup_title": "Backup & Restore",
         "backup_desc": "Export or import your configuration data.",
+        "flowprobe_backup_title": "FlowProbe Key Backup",
+        "flowprobe_backup_desc": "By default, only FlowProbe configuration is backed up. When enabled, the export package also includes an encrypted FlowProbe key backup.",
+        "flowprobe_backup_on": "Encrypted Key Backup: ON",
+        "flowprobe_backup_off": "Encrypted Key Backup: OFF",
         "btn_export": "Export Config",
         "btn_import": "Import Config",
         "error_remote_account_required": "This advanced sync maintenance feature requires a connected remote account with a remembered password.",
@@ -126,7 +132,8 @@
         "error_cache_max_size_failed": "Failed to update the cache size limit: {{detail}}",
         "error_debug_mode_failed": "Failed to update debug mode: {{detail}}",
         "error_autostart_failed": "Failed to update the startup setting: {{detail}}",
-        "error_device_fingerprint_reset_failed": "Failed to reset the device fingerprint: {{detail}}"
+        "error_device_fingerprint_reset_failed": "Failed to reset the device fingerprint: {{detail}}",
+        "error_flowprobe_backup_failed": "Failed to update the FlowProbe backup policy: {{detail}}"
     },
     "snippets": {
         "title": "FlowSnap",
@@ -374,32 +381,15 @@
         "diag_yes": "Yes",
         "diag_no": "No"
       },
-    "flowprobe": {
-        "title": "FlowProbe",
-        "subtitle": "Directly test AI service API connectivity, authentication, and model discovery from this device",
-        "route_title": "Test Targets",
-        "route_desc": "Targets saved here are for local testing only. They are not part of the runtime engine path and are not proxied through NAS.",
-        "btn_add_node": "Add Node",
-        "btn_add_target": "Add Target",
-        "add_preset": "Add Preset Target",
-        "preset_custom": "-- Custom --",
-        "placeholder_name": "Target name",
-        "placeholder_url": "Endpoint URL (http://...)",
-        "placeholder_model": "Model name",
-        "placeholder_api_key": "API Key / Secret",
-        "btn_test": "Test",
-        "btn_fetch_models": "Fetch models",
-        "btn_delete": "Delete target",
-        "status_enabled": "Enabled",
-        "status_disabled": "Disabled",
-        "drag_sort": "Drag to reorder",
-        "loading": "Verifying...",
-        "direct_notice": "FlowProbe is now a direct-connect testing tool only. Every request is sent from this device straight to the target URL; it does not pass through the YiboFlow server and is not routed through NAS. NAS is just another test target address.",
-        "local_secrets_notice": "Target definitions can sync with app configuration; API keys stay local to this device by default.",
-        "no_models": "No models were returned",
-        "result_protocol": "Detected protocol",
-        "result_auth": "Auth status",
-        "result_models": "Model count"
+    "flowprobe_sources": {
+        "title": "FlowProbe Sources",
+        "subtitle": "Manage upstream API assets, connectivity checks, and available models.",
+        "phase_banner": "Phase 1 completed the navigation split. The next phase will build the list, detail, and verification workflow here."
+    },
+    "flowprobe_relay": {
+        "title": "FlowProbe Relay",
+        "subtitle": "Manage local compatible endpoints, current relay targets, and IDE access.",
+        "phase_banner": "Phase 1 completed the navigation split. The next phase will build the status strip, dual relay cards, and activity area here."
     },
     "flowmind": {
         "title": "FlowMind",

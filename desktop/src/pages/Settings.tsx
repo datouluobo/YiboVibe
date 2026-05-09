@@ -190,6 +190,7 @@ export default function Settings() {
     const [cacheStats, setCacheStats] = useState<any>(null);
     const [cacheMaxSize, setCacheMaxSize] = useState(200);
     const [imageTransportFormat, setImageTransportFormat] = useState("png");
+    const [flowprobeBackupKeys, setFlowprobeBackupKeys] = useState(false);
     const cacheUsageRatio = cacheStats?.max_size_mb ? cacheStats.total_size_mb / cacheStats.max_size_mb : 0;
     const cacheOverLimit = Boolean(cacheStats && cacheStats.total_size_mb > cacheStats.max_size_mb);
     const cacheUsageTone = cacheOverLimit ? 'var(--color-danger)' : (cacheUsageRatio >= 0.85 ? 'var(--color-warning)' : 'var(--color-primary)');
@@ -200,6 +201,7 @@ export default function Settings() {
                 setImageTransportFormat(settings.image_transport_format);
             }
             setDebugMode(!!settings?.debug_mode);
+            setFlowprobeBackupKeys(!!settings?.flowprobe_backup_keys);
         }).catch(console.error);
     };
 
@@ -225,6 +227,7 @@ export default function Settings() {
                 flowhintAcceptRight: settings.flowhint_accept_right,
                 debugMode: !!settings.debug_mode,
                 imageTransportFormat: nextFormat,
+                flowprobeBackupKeys: !!settings.flowprobe_backup_keys,
             });
             setImageTransportFormat(nextFormat);
             setAlertDialog({ isOpen: true, message: "图片传输格式已更新。新复制的图片会按新格式同步。", type: 'success' });
@@ -248,12 +251,43 @@ export default function Settings() {
                 flowhintAcceptRight: settings.flowhint_accept_right,
                 debugMode: next,
                 imageTransportFormat: settings.image_transport_format || "png",
+                flowprobeBackupKeys: !!settings.flowprobe_backup_keys,
             });
             setDebugMode(next);
         } catch (e) {
             setAlertDialog({
                 isOpen: true,
                 message: formatOperationError(t, "SETTINGS_DEBUG_MODE_FAILED", "settings.error_debug_mode_failed", { detail: String(e) }),
+                type: 'error'
+            });
+        }
+    };
+
+    const toggleFlowprobeBackupKeys = async () => {
+        const next = !flowprobeBackupKeys;
+        try {
+            const settings: any = await invoke("get_settings");
+            await invoke("update_settings", {
+                isSyncEnabled: settings.is_sync_enabled,
+                flowhintMinChars: settings.flowhint_min_chars,
+                flowhintAcceptTab: settings.flowhint_accept_tab,
+                flowhintAcceptRight: settings.flowhint_accept_right,
+                debugMode: !!settings.debug_mode,
+                imageTransportFormat: settings.image_transport_format || "png",
+                flowprobeBackupKeys: next,
+            });
+            setFlowprobeBackupKeys(next);
+            setAlertDialog({
+                isOpen: true,
+                message: next
+                    ? "FlowProbe Key 将以加密形式随备份导出。"
+                    : "FlowProbe Key 仅保留在本机，不再随备份导出。",
+                type: 'success'
+            });
+        } catch (e) {
+            setAlertDialog({
+                isOpen: true,
+                message: formatOperationError(t, "SETTINGS_FLOWPROBE_BACKUP_FAILED", "settings.error_flowprobe_backup_failed", { detail: String(e) }),
                 type: 'error'
             });
         }
@@ -647,10 +681,60 @@ export default function Settings() {
 
             {/* Backup & Restore */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginTop: '32px' }}>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <button
-                        onClick={handleExport}
-                        className="btn-ghost"
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '20px', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: '280px', flex: '1 1 320px' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--color-text-main)' }}>
+                            {t('settings.backup_title')}
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '6px', lineHeight: 1.6, maxWidth: '640px' }}>
+                            {t('settings.backup_desc')}
+                        </div>
+                        <div style={{
+                            marginTop: '16px',
+                            padding: '14px 16px',
+                            borderRadius: '14px',
+                            background: 'var(--color-surface-elevated)',
+                            border: '1px solid var(--color-glass-border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: '16px',
+                            flexWrap: 'wrap'
+                        }}>
+                            <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--color-text-main)' }}>
+                                    {t('settings.flowprobe_backup_title')}
+                                </div>
+                                <div style={{ fontSize: '11px', color: 'var(--color-text-dim)', marginTop: '6px', lineHeight: 1.55 }}>
+                                    {t('settings.flowprobe_backup_desc')}
+                                </div>
+                            </div>
+                            <button
+                                onClick={toggleFlowprobeBackupKeys}
+                                style={{
+                                    background: flowprobeBackupKeys ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-surface-elevated)',
+                                    border: `1px solid ${flowprobeBackupKeys ? 'rgba(34, 197, 94, 0.3)' : 'var(--color-border)'}`,
+                                    color: flowprobeBackupKeys ? '#22c55e' : 'var(--color-text-muted)',
+                                    padding: '8px 18px',
+                                    borderRadius: '100px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    cursor: 'pointer',
+                                    fontWeight: 600,
+                                    fontSize: '12px',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                {flowprobeBackupKeys ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                                {flowprobeBackupKeys ? t('settings.flowprobe_backup_on') : t('settings.flowprobe_backup_off')}
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        <button
+                            onClick={handleExport}
+                            className="btn-ghost"
                         style={{
                             padding: '10px 24px', borderRadius: 'var(--radius-md)', fontSize: '14px',
                             display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--color-border)'
@@ -671,6 +755,7 @@ export default function Settings() {
                         <UploadCloud size={16} />
                         {t('settings.btn_import')}
                     </button>
+                    </div>
                 </div>
             </div>
 

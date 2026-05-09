@@ -7,7 +7,8 @@ import Layout from "./components/Layout";
 const FlowDeck = lazy(() => import("./pages/FlowDeck"));
 const FlowMind = lazy(() => import("./pages/FlowMind"));
 const FlowSync = lazy(() => import("./pages/FlowSync"));
-const FlowProbe = lazy(() => import("./pages/FlowProbe"));
+const FlowProbeSources = lazy(() => import("./pages/FlowProbeSources"));
+const FlowProbeRelay = lazy(() => import("./pages/FlowProbeRelay"));
 const FlowRules = lazy(() => import("./pages/FlowRules"));
 const Settings = lazy(() => import("./pages/Settings"));
 const FlowInfo = lazy(() => import("./pages/FlowInfo"));
@@ -115,7 +116,8 @@ function App() {
               <Route path="flowdeck" element={<Suspense fallback={<PageFallback />}><FlowDeck /></Suspense>} />
               <Route path="flowmind" element={<Suspense fallback={<PageFallback />}><FlowMind /></Suspense>} />
               <Route path="flowsync" element={<Suspense fallback={<PageFallback />}><FlowSync /></Suspense>} />
-              <Route path="flowprobe" element={<Suspense fallback={<PageFallback />}><FlowProbe /></Suspense>} />
+              <Route path="flowprobe-sources" element={<Suspense fallback={<PageFallback />}><FlowProbeSources /></Suspense>} />
+              <Route path="flowprobe-relay" element={<Suspense fallback={<PageFallback />}><FlowProbeRelay /></Suspense>} />
               <Route path="flowrules" element={<Suspense fallback={<PageFallback />}><FlowRules /></Suspense>} />
               <Route path="settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
               <Route path="flowinfo" element={<Suspense fallback={<PageFallback />}><FlowInfo /></Suspense>} />
