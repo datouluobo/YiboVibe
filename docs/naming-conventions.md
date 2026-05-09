@@ -21,7 +21,7 @@
 | `overview` | 总览 | 布告 FlowDeck |
 | `input` | 输入 | 灵思 FlowMind |
 | `transfer` | 传输 | 烽火 FlowSync, 走镖 FlowDrop |
-| `system` | 系统 | 探脉 FlowProbe, 键谱 FlowKeys, 中枢 FlowRules, 韬略 Settings, 扉页 FlowInfo |
+| `system` | 系统 | 探脉 FlowProbe（接入 / 转发）, 键谱 FlowKeys, 中枢 FlowRules, 韬略 Settings, 扉页 FlowInfo |
 
 ### 已有页面对照表
 
@@ -31,7 +31,8 @@
 | FlowMind | 灵思 | `FlowMind.tsx` | `/app/flowmind` | Sparkles | 统一智能输入引擎 |
 | FlowSync | 烽火 | `FlowSync.tsx` | `/app/flowsync` | Flame | 端到端加密剪贴板同步 |
 | FlowDrop | 走镖 | `FlowDrop.tsx` | `/app/flowdrop` | Truck | P2P 跨设备安全文件传输 |
-| FlowProbe | 探脉 | `FlowProbe.tsx` | `/app/flowprobe` | Activity | 本机直连 AI 服务 API 测试工具 |
+| FlowProbe Sources | 接入 | `FlowProbeSources.tsx` | `/app/flowprobe-sources` | Database | 上游 API 资产管理、模型拉取与目标指派 |
+| FlowProbe Relay | 转发 | `FlowProbeRelay.tsx` | `/app/flowprobe-relay` | ArrowRightLeft | 本机兼容接口、运行状态与转发统计 |
 | FlowKeys | 键谱 | `FlowKeys.tsx` | `/app/flowkeys` | Keyboard | 键盘按键重映射与快捷键配置 |
 | FlowRules | 中枢 | `FlowRules.tsx` | `/app/flowrules` | ShieldCheck | 按应用精细控制功能模块 |
 | Settings | 韬略 | `Settings.tsx` | `/app/settings` | Settings | 主题、语言与全局偏好配置 |

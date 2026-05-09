@@ -1,6 +1,6 @@
 # FlowProbe 收口上线清单
 
-更新时间：2026-04-28
+更新时间：2026-05-09
 
 ## 1. 目标
 
@@ -25,7 +25,8 @@
 
 涉及的关键代码：
 
-- [desktop/src/pages/FlowProbe.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowProbe.tsx)
+- [desktop/src/pages/FlowProbeSources.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowProbeSources.tsx)
+- [desktop/src/pages/FlowProbeRelay.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowProbeRelay.tsx)
 - [desktop/src/pages/FlowDeck.tsx](/F:/Download/GitHub/YiboFlow/desktop/src/pages/FlowDeck.tsx)
 - [desktop/src-tauri/src/probe.rs](/F:/Download/GitHub/YiboFlow/desktop/src-tauri/src/probe.rs)
 - [desktop/src-tauri/src/lib.rs](/F:/Download/GitHub/YiboFlow/desktop/src-tauri/src/lib.rs)
@@ -72,6 +73,12 @@
   - `auth_status`
   - `model_count`
 - API Key 不进入同步配置，只保存在本机 `probe_secrets.json`
+- 已拉取模型列表会回写到 `probe_tool.credentials[*].discovered_models`
+- `FlowProbe` 统计口径明确区分：
+  - 当前会话累计
+  - 最近 5 分钟
+- `proxy.is_enabled=false` 时不能启动本机代理
+- `proxy.collect_usage=false` 时不再新增调用日志、Token 与费用统计
 - `FlowDeck` 不再展示任何第三方 AI 运行状态
 
 ## 5. 服务端发布检查
@@ -99,6 +106,9 @@
    - 路径错误
    - 协议不匹配
    - 网络错误
+6. 在 Sources 页面拉取模型后，刷新页面仍能看到相同模型列表。
+7. 将 `collect_usage` 关闭后，调用代理接口不会继续累加近期活动和统计。
+8. 将 `is_enabled` 关闭并保存后，已运行的 Probe 会停止，且不能再次启动直到重新启用。
 
 ## 7. 上线后观察项
 

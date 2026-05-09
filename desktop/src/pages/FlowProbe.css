@@ -1,0 +1,860 @@
+.flowprobe-page {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.flowprobe-page--loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.flowprobe-spin {
+  animation: flowprobe-spin 1s linear infinite;
+}
+
+@keyframes flowprobe-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.flowprobe-header,
+.flowprobe-panel-header,
+.flowprobe-status-shell,
+.flowprobe-route-actions,
+.flowprobe-filter-row,
+.flowprobe-editor-actions,
+.flowprobe-log-grid,
+.flowprobe-endpoint-value,
+.flowprobe-status-line,
+.flowprobe-header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.flowprobe-header,
+.flowprobe-panel-header {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.flowprobe-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.flowprobe-subtitle,
+.flowprobe-panel-header p,
+.flowprobe-note-body,
+.flowprobe-log-error,
+.flowprobe-result-body,
+.flowprobe-editor label span,
+.flowprobe-endpoint-label {
+  color: var(--color-text-muted);
+}
+
+.flowprobe-subtitle,
+.flowprobe-panel-header p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.flowprobe-status-shell {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(280px, 0.8fr) minmax(260px, 0.8fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.flowprobe-endpoint-card,
+.flowprobe-status-card,
+.flowprobe-note-card,
+.flowprobe-panel,
+.flowprobe-banner {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-glass);
+}
+
+.flowprobe-endpoint-card,
+.flowprobe-status-card,
+.flowprobe-note-card {
+  padding: 12px 14px;
+}
+
+.flowprobe-endpoint-value,
+.flowprobe-status-line,
+.flowprobe-endpoint-meta {
+  align-items: center;
+}
+
+.flowprobe-endpoint-value code,
+.flowprobe-route-field code,
+.flowprobe-status-line code,
+.flowprobe-endpoint-meta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flowprobe-endpoint-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.flowprobe-endpoint-meta--relay {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.flowprobe-endpoint-meta code {
+  flex: 1;
+}
+
+.flowprobe-proxy-mode-row,
+.flowprobe-proxy-config,
+.flowprobe-status-hint {
+  display: flex;
+  gap: 8px;
+}
+
+.flowprobe-proxy-mode-row {
+  flex-wrap: wrap;
+}
+
+.flowprobe-proxy-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+}
+
+.flowprobe-proxy-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.flowprobe-proxy-config span,
+.flowprobe-status-hint span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.flowprobe-proxy-config input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-main);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.flowprobe-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.flowprobe-status-hint {
+  align-items: center;
+}
+
+.flowprobe-status-hint code {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flowprobe-status-warning {
+  font-size: 12px;
+  color: #fbbf24;
+  line-height: 1.5;
+}
+
+.flowprobe-status-warning code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.flowprobe-note-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.flowprobe-note-title,
+.flowprobe-panel h2,
+.flowprobe-route-card h3,
+.flowprobe-editor h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.flowprobe-banner {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.flowprobe-banner--info {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--color-text-main);
+}
+
+.flowprobe-banner--danger {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+}
+
+.flowprobe-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(420px, 1fr) minmax(320px, 400px);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.flowprobe-shell--sources {
+  grid-template-columns: minmax(280px, 340px) minmax(460px, 1.15fr) minmax(320px, 0.95fr);
+}
+
+.flowprobe-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.flowprobe-panel--relay-strip {
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.flowprobe-panel--center {
+  overflow: visible;
+}
+
+.flowprobe-button,
+.flowprobe-chip,
+.flowprobe-icon-button,
+.flowprobe-editor input,
+.flowprobe-editor select,
+.flowprobe-search input,
+.flowprobe-route-field input,
+.flowprobe-credential-item,
+.flowprobe-picker-item {
+  transition: all 150ms ease;
+}
+
+.flowprobe-button,
+.flowprobe-chip,
+.flowprobe-icon-button {
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.flowprobe-button {
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-main);
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.flowprobe-button--primary {
+  border: none;
+  background: linear-gradient(135deg, var(--color-primary), #7c86e6);
+  color: #fff;
+}
+
+.flowprobe-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.flowprobe-chip,
+.flowprobe-icon-button,
+.flowprobe-tag,
+.flowprobe-protocol-badge {
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-muted);
+}
+
+.flowprobe-chip,
+.flowprobe-tag,
+.flowprobe-protocol-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.flowprobe-tag--active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
+
+.flowprobe-chip.is-active,
+.flowprobe-chip--status.is-active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
+
+.flowprobe-icon-button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flowprobe-icon-button--danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.24);
+}
+
+.flowprobe-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.flowprobe-search input,
+.flowprobe-editor input,
+.flowprobe-editor select,
+.flowprobe-route-field input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--color-text-main);
+  font-size: 12px;
+}
+
+.flowprobe-credential-list,
+.flowprobe-picker-list,
+.flowprobe-log-list,
+.flowprobe-route-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flowprobe-credential-item,
+.flowprobe-picker-item {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+}
+
+.flowprobe-credential-item:hover,
+.flowprobe-picker-item:hover,
+.flowprobe-button:hover,
+.flowprobe-chip:hover,
+.flowprobe-icon-button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
+
+.flowprobe-credential-item.is-active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary-glow);
+}
+
+.flowprobe-credential-top,
+.flowprobe-log-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.flowprobe-credential-name,
+.flowprobe-log-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.flowprobe-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.flowprobe-dot.is-on {
+  background: #22c55e;
+}
+
+.flowprobe-dot.is-off {
+  background: #ef4444;
+}
+
+.flowprobe-credential-meta,
+.flowprobe-picker-meta,
+.flowprobe-log-grid {
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+
+.flowprobe-credential-meta,
+.flowprobe-picker-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.flowprobe-credential-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.flowprobe-editor,
+.flowprobe-route-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px;
+  min-width: 0;
+}
+
+.flowprobe-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flowprobe-form-grid label,
+.flowprobe-route-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.flowprobe-form-grid label.is-wide,
+.flowprobe-route-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.flowprobe-form-grid label span,
+.flowprobe-route-field span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.flowprobe-editor input,
+.flowprobe-editor select,
+.flowprobe-route-field input {
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.flowprobe-route-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.flowprobe-route-head p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+
+.flowprobe-route-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flowprobe-result {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+}
+
+.flowprobe-result.is-success {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.flowprobe-result.is-error {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.flowprobe-result-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.flowprobe-result-head strong {
+  font-size: 11px;
+}
+
+.flowprobe-result-head em {
+  color: var(--color-text-dim);
+  font-style: normal;
+}
+
+.flowprobe-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flowprobe-metrics--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.flowprobe-metrics--route {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.flowprobe-metric-card {
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flowprobe-metric-card span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.flowprobe-metric-card strong {
+  font-size: 15px;
+}
+
+.flowprobe-log-item {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
+
+.flowprobe-log-time {
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
+
+.flowprobe-log-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.flowprobe-log-error {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.flowprobe-log-diagnostics {
+  margin-top: 8px;
+  color: var(--color-text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flowprobe-log-diagnostics strong {
+  color: var(--color-text-main);
+  font-weight: 700;
+}
+
+.flowprobe-log-flags {
+  color: #f59e0b;
+  font-weight: 700;
+}
+
+.flowprobe-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.44);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.flowprobe-modal {
+  width: min(640px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+}
+
+.flowprobe-empty-state {
+  border: 1px dashed var(--color-border);
+  border-radius: 14px;
+  padding: 18px 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.flowprobe-empty-state--inline {
+  padding: 14px 12px;
+}
+
+.flowprobe-empty-state strong {
+  display: block;
+  font-size: 13px;
+}
+
+.flowprobe-empty-state p {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.flowprobe-detail-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.flowprobe-detail-list div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flowprobe-detail-list span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.flowprobe-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.flowprobe-model-item {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.flowprobe-model-item:hover,
+.flowprobe-model-item.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
+
+.flowprobe-model-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.flowprobe-model-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+
+.flowprobe-editor-actions--sources {
+  flex-wrap: wrap;
+}
+
+.flowprobe-relay-strip,
+.flowprobe-relay-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.flowprobe-relay-strip {
+  grid-template-columns: 1.05fr 1fr 1.15fr;
+}
+
+.flowprobe-relay-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.flowprobe-relay-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.flowprobe-target-summary,
+.flowprobe-target-item {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.flowprobe-target-summary {
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flowprobe-target-summary span,
+.flowprobe-target-meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.flowprobe-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flowprobe-target-item {
+  padding: 10px 11px;
+}
+
+.flowprobe-target-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.flowprobe-target-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.flowprobe-shell--relay-bottom {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+}
+
+@media (max-width: 1500px) {
+  .flowprobe-status-shell {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flowprobe-shell {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  }
+
+  .flowprobe-shell--sources {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  }
+
+  .flowprobe-relay-strip,
+  .flowprobe-relay-grid,
+  .flowprobe-shell--relay-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1100px) {
+  .flowprobe-shell,
+  .flowprobe-status-shell,
+  .flowprobe-form-grid,
+  .flowprobe-route-body,
+  .flowprobe-metrics,
+  .flowprobe-log-grid,
+  .flowprobe-detail-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flowprobe-header {
+    align-items: stretch;
+  }
+}

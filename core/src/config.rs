@@ -11,7 +11,7 @@ lazy_static! {
         Arc::new(RwLock::new(AppConfig::load_or_default()));
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ProbeProtocol {
     OpenAiCompatible,
     Ollama,
@@ -20,8 +20,72 @@ pub enum ProbeProtocol {
     Custom,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ProbeRouteKind {
+    OpenAi,
+    Anthropic,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct ProbeTarget {
+pub struct ProbeCredential {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub protocol: ProbeProtocol,
+    pub base_url: String,
+    pub default_model: String,
+    #[serde(default)]
+    pub discovered_models: Vec<String>,
+    #[serde(default)]
+    pub model_catalog_updated_at_ms: Option<u64>,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub enabled: bool,
+    pub sort_order: i32,
+    #[serde(default)]
+    pub input_price_per_million: Option<f64>,
+    #[serde(default)]
+    pub output_price_per_million: Option<f64>,
+    #[serde(default = "default_probe_price_unit")]
+    pub price_unit: String,
+    #[serde(default = "default_probe_price_currency")]
+    pub price_currency: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProbeRoute {
+    pub kind: ProbeRouteKind,
+    pub credential_id: String,
+    #[serde(default)]
+    pub model_override: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProbeProxyConfig {
+    pub listen_host: String,
+    pub listen_port: u16,
+    pub local_token: String,
+    pub is_enabled: bool,
+    pub collect_usage: bool,
+}
+
+impl Default for ProbeProxyConfig {
+    fn default() -> Self {
+        Self {
+            listen_host: "127.0.0.1".to_string(),
+            listen_port: 17861,
+            local_token: generate_probe_local_token(),
+            is_enabled: true,
+            collect_usage: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LegacyProbeTarget {
     pub id: String,
     pub name: String,
     pub protocol: ProbeProtocol,
@@ -31,15 +95,37 @@ pub struct ProbeTarget {
     pub order: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ProbeToolConfig {
-    pub targets: Vec<ProbeTarget>,
+    #[serde(default)]
+    pub credentials: Vec<ProbeCredential>,
+    #[serde(default)]
+    pub routes: Vec<ProbeRoute>,
+    #[serde(default)]
+    pub proxy: ProbeProxyConfig,
+    #[serde(default = "default_probe_timeout")]
     pub timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<LegacyProbeTarget>,
+}
+
+impl Default for ProbeToolConfig {
+    fn default() -> Self {
+        let credentials = default_probe_credentials();
+        let routes = default_probe_routes(&credentials);
+        Self {
+            credentials,
+            routes,
+            proxy: ProbeProxyConfig::default(),
+            timeout_ms: default_probe_timeout(),
+            targets: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WindowConfig {
-    pub pos_type: i32, // 0: Follow, 1: Fixed
+    pub pos_type: i32,
     pub fixed_x: i32,
     pub fixed_y: i32,
     pub offset_x: i32,
@@ -79,12 +165,15 @@ pub struct CacheConfig {
 fn default_cache_dir() -> String {
     String::new()
 }
+
 fn default_cache_max_size() -> u64 {
     200
 }
+
 fn default_cleanup_days() -> u32 {
     7
 }
+
 fn default_image_transport_format() -> String {
     "png".to_string()
 }
@@ -114,6 +203,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub probe_tool: ProbeToolConfig,
     #[serde(default)]
+    pub flowprobe_backup_keys: bool,
+    #[serde(default)]
     pub dictionary_order: Vec<String>,
     #[serde(default = "default_fingerprint")]
     pub device_fingerprint: String,
@@ -132,14 +223,262 @@ fn default_min_chars() -> usize {
 fn default_true() -> bool {
     true
 }
+
 fn default_empty_string() -> String {
     String::new()
 }
+
 fn default_fingerprint() -> String {
     stable_device_fingerprint()
 }
+
 fn default_probe_timeout() -> u64 {
     10000
+}
+
+fn default_probe_price_unit() -> String {
+    "1M tokens".to_string()
+}
+
+fn default_probe_price_currency() -> String {
+    "USD".to_string()
+}
+
+fn default_probe_credentials() -> Vec<ProbeCredential> {
+    vec![
+        ProbeCredential {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Local Ollama".to_string(),
+            provider: "Ollama".to_string(),
+            protocol: ProbeProtocol::Ollama,
+            base_url: "http://127.0.0.1:11434".to_string(),
+            default_model: "".to_string(),
+            discovered_models: Vec::new(),
+            model_catalog_updated_at_ms: None,
+            note: "Local model runtime".to_string(),
+            tags: vec!["local".to_string(), "private".to_string()],
+            enabled: true,
+            sort_order: 1,
+            input_price_per_million: None,
+            output_price_per_million: None,
+            price_unit: default_probe_price_unit(),
+            price_currency: default_probe_price_currency(),
+        },
+        ProbeCredential {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "NAS Ollama".to_string(),
+            provider: "Ollama".to_string(),
+            protocol: ProbeProtocol::Ollama,
+            base_url: "http://192.168.1.88:11434".to_string(),
+            default_model: "".to_string(),
+            discovered_models: Vec::new(),
+            model_catalog_updated_at_ms: None,
+            note: "NAS-hosted model runtime".to_string(),
+            tags: vec!["nas".to_string(), "private".to_string()],
+            enabled: true,
+            sort_order: 2,
+            input_price_per_million: None,
+            output_price_per_million: None,
+            price_unit: default_probe_price_unit(),
+            price_currency: default_probe_price_currency(),
+        },
+        ProbeCredential {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "DeepSeek API".to_string(),
+            provider: "DeepSeek".to_string(),
+            protocol: ProbeProtocol::OpenAiCompatible,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            default_model: "deepseek-chat".to_string(),
+            discovered_models: Vec::new(),
+            model_catalog_updated_at_ms: None,
+            note: "OpenAI-compatible upstream".to_string(),
+            tags: vec!["cloud".to_string(), "openai".to_string()],
+            enabled: true,
+            sort_order: 3,
+            input_price_per_million: None,
+            output_price_per_million: None,
+            price_unit: default_probe_price_unit(),
+            price_currency: default_probe_price_currency(),
+        },
+        ProbeCredential {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Anthropic API".to_string(),
+            provider: "Anthropic".to_string(),
+            protocol: ProbeProtocol::Anthropic,
+            base_url: "https://api.anthropic.com".to_string(),
+            default_model: "claude-sonnet-4-20250514".to_string(),
+            discovered_models: Vec::new(),
+            model_catalog_updated_at_ms: None,
+            note: "Anthropic official API".to_string(),
+            tags: vec!["cloud".to_string(), "anthropic".to_string()],
+            enabled: true,
+            sort_order: 4,
+            input_price_per_million: None,
+            output_price_per_million: None,
+            price_unit: default_probe_price_unit(),
+            price_currency: default_probe_price_currency(),
+        },
+    ]
+}
+
+fn default_probe_routes(credentials: &[ProbeCredential]) -> Vec<ProbeRoute> {
+    let openai_id = credentials
+        .iter()
+        .find(|credential| {
+            credential.enabled
+                && matches!(
+                    credential.protocol,
+                    ProbeProtocol::OpenAiCompatible | ProbeProtocol::GeminiOpenAiCompatible
+                )
+        })
+        .map(|credential| credential.id.clone())
+        .unwrap_or_default();
+    let anthropic_id = credentials
+        .iter()
+        .find(|credential| credential.enabled && credential.protocol == ProbeProtocol::Anthropic)
+        .map(|credential| credential.id.clone())
+        .unwrap_or_default();
+
+    vec![
+        ProbeRoute {
+            kind: ProbeRouteKind::OpenAi,
+            credential_id: openai_id,
+            model_override: String::new(),
+            enabled: true,
+        },
+        ProbeRoute {
+            kind: ProbeRouteKind::Anthropic,
+            credential_id: anthropic_id,
+            model_override: String::new(),
+            enabled: true,
+        },
+    ]
+}
+
+fn generate_probe_local_token() -> String {
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    format!("yfp-{}", &token[..12])
+}
+
+fn normalize_probe_provider(name: &str, protocol: &ProbeProtocol) -> String {
+    let lower = name.to_lowercase();
+    if lower.contains("openrouter") {
+        "OpenRouter".to_string()
+    } else if lower.contains("deepseek") {
+        "DeepSeek".to_string()
+    } else if lower.contains("anthropic") || matches!(protocol, ProbeProtocol::Anthropic) {
+        "Anthropic".to_string()
+    } else if lower.contains("ollama") || matches!(protocol, ProbeProtocol::Ollama) {
+        "Ollama".to_string()
+    } else if lower.contains("gemini") {
+        "Gemini".to_string()
+    } else {
+        name.trim().to_string()
+    }
+}
+
+fn migrate_legacy_targets(targets: &[LegacyProbeTarget]) -> Vec<ProbeCredential> {
+    let mut ordered = targets.to_vec();
+    ordered.sort_by_key(|target| target.order);
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, target)| ProbeCredential {
+            id: target.id,
+            name: target.name.clone(),
+            provider: normalize_probe_provider(&target.name, &target.protocol),
+            protocol: target.protocol,
+            base_url: target.base_url.trim().trim_end_matches('/').to_string(),
+            default_model: target.model.trim().to_string(),
+            discovered_models: Vec::new(),
+            model_catalog_updated_at_ms: None,
+            note: "Migrated from legacy FlowProbe targets".to_string(),
+            tags: Vec::new(),
+            enabled: target.is_enabled,
+            sort_order: index as i32 + 1,
+            input_price_per_million: None,
+            output_price_per_million: None,
+            price_unit: default_probe_price_unit(),
+            price_currency: default_probe_price_currency(),
+        })
+        .collect()
+}
+
+fn ensure_probe_defaults(config: &mut AppConfig) -> bool {
+    let mut mutated = false;
+
+    if config.probe_tool.credentials.is_empty() {
+        if !config.probe_tool.targets.is_empty() {
+            config.probe_tool.credentials = migrate_legacy_targets(&config.probe_tool.targets);
+        } else {
+            config.probe_tool.credentials = default_probe_credentials();
+        }
+        mutated = true;
+    }
+
+    if config.probe_tool.routes.is_empty() {
+        config.probe_tool.routes = default_probe_routes(&config.probe_tool.credentials);
+        mutated = true;
+    }
+
+    if config.probe_tool.proxy.listen_host.trim().is_empty() {
+        config.probe_tool.proxy.listen_host = ProbeProxyConfig::default().listen_host;
+        mutated = true;
+    }
+    if config.probe_tool.proxy.listen_port == 0 {
+        config.probe_tool.proxy.listen_port = ProbeProxyConfig::default().listen_port;
+        mutated = true;
+    }
+    if config.probe_tool.proxy.local_token.trim().is_empty() {
+        config.probe_tool.proxy.local_token = generate_probe_local_token();
+        mutated = true;
+    }
+    if config.probe_tool.timeout_ms == 0 {
+        config.probe_tool.timeout_ms = default_probe_timeout();
+        mutated = true;
+    }
+    if !config.probe_tool.targets.is_empty() {
+        config.probe_tool.targets.clear();
+        mutated = true;
+    }
+
+    let mut credentials = config.probe_tool.credentials.clone();
+    credentials.sort_by_key(|credential| credential.sort_order);
+    for (index, credential) in credentials.iter_mut().enumerate() {
+        let order = index as i32 + 1;
+        if credential.sort_order != order {
+            credential.sort_order = order;
+            mutated = true;
+        }
+        if credential.price_unit.trim().is_empty() {
+            credential.price_unit = default_probe_price_unit();
+            mutated = true;
+        }
+        if credential.price_currency.trim().is_empty() {
+            credential.price_currency = default_probe_price_currency();
+            mutated = true;
+        }
+    }
+    config.probe_tool.credentials = credentials;
+
+    for route in &mut config.probe_tool.routes {
+        let route_kind = route.kind.clone();
+        let is_valid = config
+            .probe_tool
+            .credentials
+            .iter()
+            .any(|credential| credential.id == route.credential_id);
+        if !is_valid {
+            route.credential_id = default_probe_routes(&config.probe_tool.credentials)
+                .into_iter()
+                .find(|candidate| candidate.kind == route_kind)
+                .map(|candidate| candidate.credential_id)
+                .unwrap_or_default();
+            mutated = true;
+        }
+    }
+
+    mutated
 }
 
 fn stable_device_fingerprint() -> String {
@@ -233,47 +572,6 @@ fn needs_fingerprint_migration(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok()
 }
 
-fn default_probe_targets() -> Vec<ProbeTarget> {
-    vec![
-        ProbeTarget {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "Local Ollama".to_string(),
-            protocol: ProbeProtocol::Ollama,
-            base_url: "http://127.0.0.1:11434".to_string(),
-            model: "".to_string(),
-            is_enabled: true,
-            order: 1,
-        },
-        ProbeTarget {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "NAS Ollama".to_string(),
-            protocol: ProbeProtocol::Ollama,
-            base_url: "http://192.168.1.88:11434".to_string(),
-            model: "".to_string(),
-            is_enabled: true,
-            order: 2,
-        },
-        ProbeTarget {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "DeepSeek API".to_string(),
-            protocol: ProbeProtocol::OpenAiCompatible,
-            base_url: "https://api.deepseek.com/v1".to_string(),
-            model: "deepseek-chat".to_string(),
-            is_enabled: true,
-            order: 3,
-        },
-        ProbeTarget {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "Anthropic API".to_string(),
-            protocol: ProbeProtocol::Anthropic,
-            base_url: "https://api.anthropic.com".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
-            is_enabled: true,
-            order: 4,
-        },
-    ]
-}
-
 impl AppConfig {
     pub fn config_path() -> PathBuf {
         let mut path = crate::local_auth::get_active_user_dir();
@@ -293,15 +591,7 @@ impl AppConfig {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Self>(&content) {
                     Ok(mut config) => {
-                        let mut mutated = false;
-                        if config.probe_tool.targets.is_empty() {
-                            config.probe_tool.targets = default_probe_targets();
-                            mutated = true;
-                        }
-                        if config.probe_tool.timeout_ms == 0 {
-                            config.probe_tool.timeout_ms = default_probe_timeout();
-                            mutated = true;
-                        }
+                        let mut mutated = ensure_probe_defaults(&mut config);
                         if config.cache.image_transport_format.is_empty() {
                             config.cache.image_transport_format = default_image_transport_format();
                             mutated = true;
@@ -323,7 +613,6 @@ impl AppConfig {
             }
         }
 
-        // Default Config
         let cfg = Self {
             is_sync_enabled: true,
             auto_sync_text: true,
@@ -334,10 +623,8 @@ impl AppConfig {
             flowhint_accept_tab: true,
             flowhint_accept_right: true,
             debug_mode: false,
-            probe_tool: ProbeToolConfig {
-                targets: default_probe_targets(),
-                timeout_ms: default_probe_timeout(),
-            },
+            probe_tool: ProbeToolConfig::default(),
+            flowprobe_backup_keys: false,
             sync_meta: crate::sync::SyncMeta::default(),
             dictionary_order: Vec::new(),
             device_fingerprint: default_fingerprint(),
@@ -350,7 +637,6 @@ impl AppConfig {
     }
 
     pub fn save(&self) {
-        // Automatically bump the timestamp on save if sync is enabled locally
         let mut to_save = self.clone();
         if to_save.is_sync_enabled {
             to_save.sync_meta.global_updated_at = std::time::SystemTime::now()

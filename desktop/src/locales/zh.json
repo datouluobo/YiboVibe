@@ -6,7 +6,8 @@
         "flowdeck": "总览",
         "flowmind": "灵思",
         "flowsync": "烽火",
-        "flowprobe": "测试",
+        "flowprobe_sources": "接入",
+        "flowprobe_relay": "转发",
         "flowrules": "规则",
         "settings": "设置",
         "flowinfo": "关于",
@@ -14,7 +15,8 @@
         "tooltip_flowdeck": "系统状态总览、同步状态与设备概况",
         "tooltip_flowmind": "统一智能输入引擎，前缀展开与智能词库补全",
         "tooltip_flowsync": "受端到端加密保护的剪贴板同步桥梁",
-        "tooltip_flowprobe": "本机直连 AI 服务 API 测试工具",
+        "tooltip_flowprobe_sources": "上游 API 资产管理、连通性验证与模型拉取",
+        "tooltip_flowprobe_relay": "本机兼容接口、当前转发目标与调用统计",
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
         "tooltip_settings": "主题、语言与全局偏好配置",
         "tooltip_flowinfo": "关于 YiboFlow 的版本与信息",
@@ -115,6 +117,10 @@
         "debug_mode_off": "调试模式: 已关闭",
         "backup_title": "备份与恢复",
         "backup_desc": "导出或导入您的全部配置数据。",
+        "flowprobe_backup_title": "FlowProbe Key 备份",
+        "flowprobe_backup_desc": "默认只备份 FlowProbe 配置，不备份 Key。开启后，导出包会附带一份加密后的 FlowProbe Key 备份。",
+        "flowprobe_backup_on": "加密 Key 备份: 已开启",
+        "flowprobe_backup_off": "加密 Key 备份: 已关闭",
         "btn_export": "导出配置",
         "btn_import": "导入配置",
         "error_remote_account_required": "此高级同步维护功能需要在已连接远程账号且已记住密码的前提下使用。",
@@ -126,7 +132,8 @@
         "error_cache_max_size_failed": "更新缓存容量上限失败：{{detail}}",
         "error_debug_mode_failed": "更新调试模式失败：{{detail}}",
         "error_autostart_failed": "更新开机自启设置失败：{{detail}}",
-        "error_device_fingerprint_reset_failed": "重置设备指纹失败：{{detail}}"
+        "error_device_fingerprint_reset_failed": "重置设备指纹失败：{{detail}}",
+        "error_flowprobe_backup_failed": "更新 FlowProbe 备份策略失败：{{detail}}"
     },
     "snippets": {
         "title": "缩略语 · FlowSnap",
@@ -375,32 +382,15 @@
         "diag_yes": "是",
         "diag_no": "否"
       },
-    "flowprobe": {
-        "title": "测试 · FlowProbe",
-        "subtitle": "直接从本机测试 AI 服务 API 的连通性、认证与模型发现",
-        "route_title": "测试目标",
-        "route_desc": "这里只保存测试目标，不参与系统运行链路，也不会经过 NAS 转发。",
-        "btn_add_node": "新增节点",
-        "btn_add_target": "新增目标",
-        "add_preset": "从预设新增目标",
-        "preset_custom": "-- 自定义 --",
-        "placeholder_name": "目标名称",
-        "placeholder_url": "接口地址 (http://...)",
-        "placeholder_model": "模型名称",
-        "placeholder_api_key": "API Key / Secret",
-        "btn_test": "测试",
-        "btn_fetch_models": "拉取模型",
-        "btn_delete": "删除目标",
-        "status_enabled": "已启用",
-        "status_disabled": "已禁用",
-        "drag_sort": "拖拽排序",
-        "loading": "正在并发验证...",
-        "direct_notice": "FlowProbe 现在只作为本机直连测试工具使用：你填写的地址会由当前设备直接发起请求，不会经过 YiboFlow 服务端，也不会经过 NAS 中转。NAS 只是一个可选测试目标地址。",
-        "local_secrets_notice": "目标列表会随配置同步；API Key 默认仅保存在本机，不进入同步配置。",
-        "no_models": "未拉取到模型列表",
-        "result_protocol": "识别协议",
-        "result_auth": "认证状态",
-        "result_models": "模型数量"
+    "flowprobe_sources": {
+        "title": "FlowProbe 接入",
+        "subtitle": "管理上游 API 资产、测试连通性并维护可用模型。",
+        "phase_banner": "Phase 1 已完成导航拆分。下一阶段将在这里落接入页的列表、详情与验证工作流。"
+    },
+    "flowprobe_relay": {
+        "title": "FlowProbe 转发",
+        "subtitle": "管理本机兼容接口、当前转发目标与 IDE 接入方式。",
+        "phase_banner": "Phase 1 已完成导航拆分。下一阶段将在这里落运行状态条、双转出口主卡和活动区。"
     },
     "flowmind": {
         "title": "灵思 · FlowMind",

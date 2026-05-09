@@ -628,6 +628,7 @@ struct SettingsPayload {
     debug_mode: bool,
     dictionary_order: Vec<String>,
     image_transport_format: String,
+    flowprobe_backup_keys: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -637,25 +638,59 @@ struct FlowSyncAutoSyncPayload {
 }
 
 #[tauri::command]
-fn get_probe_targets() -> Result<Vec<probe::ProbeTargetPayload>, String> {
-    probe::get_probe_targets()
+fn get_probe_config() -> Result<probe::ProbeConfigPayload, String> {
+    probe::get_probe_config()
 }
 
 #[tauri::command]
-fn save_probe_targets(targets: Vec<probe::ProbeTargetPayload>) -> Result<(), String> {
-    probe::save_probe_targets(targets)
+async fn save_probe_config(payload: probe::ProbeConfigPayload) -> Result<(), String> {
+    probe::save_probe_config(payload).await
 }
 
 #[tauri::command]
-async fn probe_ai_target(target: probe::ProbeTargetPayload) -> Result<probe::ProbeResult, String> {
-    probe::probe_target(target).await
+async fn test_probe_credential(
+    credential: probe::ProbeCredentialPayload,
+) -> Result<probe::ProbeResult, String> {
+    probe::test_credential(credential).await
 }
 
 #[tauri::command]
-async fn list_probe_target_models(
-    target: probe::ProbeTargetPayload,
+async fn test_probe_route(kind: yiboflow_core::config::ProbeRouteKind) -> Result<probe::ProbeResult, String> {
+    probe::test_route(kind).await
+}
+
+#[tauri::command]
+async fn list_probe_credential_models(
+    credential: probe::ProbeCredentialPayload,
 ) -> Result<Vec<String>, String> {
-    probe::list_probe_target_models(target).await
+    probe::list_credential_models(credential).await
+}
+
+#[tauri::command]
+async fn list_probe_route_models(
+    kind: yiboflow_core::config::ProbeRouteKind,
+) -> Result<Vec<String>, String> {
+    probe::list_route_models(kind).await
+}
+
+#[tauri::command]
+async fn start_probe_proxy() -> Result<probe::ProbeProxyStatusPayload, String> {
+    probe::start_proxy().await
+}
+
+#[tauri::command]
+async fn stop_probe_proxy() -> Result<probe::ProbeProxyStatusPayload, String> {
+    probe::stop_proxy().await
+}
+
+#[tauri::command]
+async fn get_probe_dashboard() -> Result<probe::ProbeDashboardPayload, String> {
+    probe::probe_dashboard().await
+}
+
+#[tauri::command]
+async fn clear_probe_logs() -> Result<(), String> {
+    probe::clear_proxy_logs().await
 }
 
 #[tauri::command]
@@ -676,6 +711,7 @@ fn get_settings() -> Result<SettingsPayload, String> {
         debug_mode: cfg.debug_mode,
         dictionary_order: cfg.dictionary_order.clone(),
         image_transport_format: cfg.cache.image_transport_format.clone(),
+        flowprobe_backup_keys: cfg.flowprobe_backup_keys,
     })
 }
 
@@ -1290,6 +1326,7 @@ fn update_settings(
     flowhint_accept_right: bool,
     debug_mode: bool,
     image_transport_format: String,
+    flowprobe_backup_keys: bool,
 ) -> Result<(), String> {
     let mut cfg = yiboflow_core::config::GLOBAL_CONFIG
         .write()
@@ -1299,6 +1336,7 @@ fn update_settings(
     cfg.flowhint_accept_tab = flowhint_accept_tab;
     cfg.flowhint_accept_right = flowhint_accept_right;
     cfg.debug_mode = debug_mode;
+    cfg.flowprobe_backup_keys = flowprobe_backup_keys;
     cfg.cache.image_transport_format = match image_transport_format.as_str() {
         "png" | "webp_lossless" | "jpeg" => image_transport_format,
         _ => "png".to_string(),
@@ -3482,10 +3520,16 @@ pub fn run() {
             connect_engine,
             register_engine,
             resolve_sync_conflict,
-            get_probe_targets,
-            save_probe_targets,
-            probe_ai_target,
-            list_probe_target_models,
+            get_probe_config,
+            save_probe_config,
+            test_probe_credential,
+            test_probe_route,
+            list_probe_credential_models,
+            list_probe_route_models,
+            start_probe_proxy,
+            stop_probe_proxy,
+            get_probe_dashboard,
+            clear_probe_logs,
             get_app_config,
             get_settings,
             update_settings,

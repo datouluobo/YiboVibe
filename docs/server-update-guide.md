@@ -211,6 +211,8 @@ curl http://127.0.0.1:11434/api/v1/ping
 6. `FlowSync` 外链可生成
 7. `FlowSync` 外链可下载
 8. `FlowProbe` 的 API Key 没有被同步到服务端配置
+9. `FlowProbe` 已拉取模型列表只保存在桌面端本地配置，不依赖服务端保存
+10. `FlowProbe` 本机代理关闭后，不会通过服务端兜底转发第三方模型请求
 
 ## 11. PostgreSQL 兼容性注意项
 
@@ -251,5 +253,6 @@ ERROR: type "longtext" does not exist (SQLSTATE 42704)
 1. 不考虑兼容旧的 AI 网关行为。
 2. 不考虑为 `FlowProbe` 提供任何服务端代理支持。
 3. `FlowSync` 外链能力依赖网关正确放行 `/share/*`。
+4. `FlowProbe` 的模型资产、调用日志与费用统计都以桌面本机为准，不以服务端为准。
 
 如果未来重新引入新的网关职责，必须先更新 [docs/specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md)，再改此文档。
