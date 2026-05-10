@@ -73,6 +73,8 @@ pub struct ProbeCredentialPayload {
     pub price_unit: String,
     #[serde(default = "default_probe_price_currency")]
     pub price_currency: String,
+    #[serde(default)]
+    pub last_test_latency_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -309,6 +311,7 @@ impl From<ProbeCredential> for ProbeCredentialPayload {
             output_price_per_million: value.output_price_per_million,
             price_unit: value.price_unit,
             price_currency: value.price_currency,
+            last_test_latency_ms: value.last_test_latency_ms,
         }
     }
 }
@@ -332,6 +335,7 @@ impl From<ProbeCredentialPayload> for ProbeCredential {
             output_price_per_million: value.output_price_per_million,
             price_unit: value.price_unit,
             price_currency: value.price_currency,
+            last_test_latency_ms: value.last_test_latency_ms,
         }
     }
 }
@@ -614,6 +618,7 @@ pub async fn test_route(kind: ProbeRouteKind) -> Result<ProbeResult, String> {
         output_price_per_million: route.credential.output_price_per_million,
         price_unit: route.credential.price_unit.clone(),
         price_currency: route.credential.price_currency.clone(),
+        last_test_latency_ms: route.credential.last_test_latency_ms,
     };
     probe_credential(payload).await
 }
@@ -642,6 +647,7 @@ pub async fn list_route_models(kind: ProbeRouteKind) -> Result<Vec<String>, Stri
         output_price_per_million: route.credential.output_price_per_million,
         price_unit: route.credential.price_unit.clone(),
         price_currency: route.credential.price_currency.clone(),
+        last_test_latency_ms: route.credential.last_test_latency_ms,
     })
     .await
 }
@@ -2825,6 +2831,7 @@ mod tests {
             output_price_per_million: Some(2.0),
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         };
 
         {
@@ -2973,6 +2980,7 @@ mod tests {
             output_price_per_million: Some(2.0),
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         };
 
         {
@@ -3606,6 +3614,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 output_price_per_million: None,
                 price_unit: default_probe_price_unit(),
                 price_currency: default_probe_price_currency(),
+                last_test_latency_ms: None,
             };
             cfg.probe_tool.credentials = vec![credential.clone()];
             cfg.probe_tool.routes = vec![ProbeRoute {
