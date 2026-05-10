@@ -52,6 +52,8 @@ pub struct ProbeCredential {
     pub price_unit: String,
     #[serde(default = "default_probe_price_currency")]
     pub price_currency: String,
+    #[serde(default)]
+    pub last_test_latency_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -263,6 +265,7 @@ fn default_probe_credentials() -> Vec<ProbeCredential> {
             output_price_per_million: None,
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         },
         ProbeCredential {
             id: uuid::Uuid::new_v4().to_string(),
@@ -281,6 +284,7 @@ fn default_probe_credentials() -> Vec<ProbeCredential> {
             output_price_per_million: None,
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         },
         ProbeCredential {
             id: uuid::Uuid::new_v4().to_string(),
@@ -299,6 +303,7 @@ fn default_probe_credentials() -> Vec<ProbeCredential> {
             output_price_per_million: None,
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         },
         ProbeCredential {
             id: uuid::Uuid::new_v4().to_string(),
@@ -317,6 +322,7 @@ fn default_probe_credentials() -> Vec<ProbeCredential> {
             output_price_per_million: None,
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         },
     ]
 }
@@ -400,6 +406,7 @@ fn migrate_legacy_targets(targets: &[LegacyProbeTarget]) -> Vec<ProbeCredential>
             output_price_per_million: None,
             price_unit: default_probe_price_unit(),
             price_currency: default_probe_price_currency(),
+            last_test_latency_ms: None,
         })
         .collect()
 }

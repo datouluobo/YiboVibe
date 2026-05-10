@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
     ArrowRightLeft,
+    Copy,
     Database,
-    ListFilter,
+    Eye,
+    EyeOff,
     Loader2,
     Plus,
     RefreshCw,
-    Save,
     Search,
     ServerCog,
     Trash2,
@@ -42,6 +43,7 @@ interface ProbeCredentialPayload {
     output_price_per_million?: number | null;
     price_unit: string;
     price_currency: string;
+    last_test_latency_ms?: number | null;
 }
 
 interface ProbeRoutePayload {
@@ -95,20 +97,20 @@ interface ProbeDashboardPayload {
 }
 
 const PROTOCOL_LABELS: Record<ProbeProtocol, string> = {
-    OpenAiCompatible: "OpenAI Compatible",
+    OpenAiCompatible: "OpenAI",
     Ollama: "Ollama",
     GeminiOpenAiCompatible: "Gemini OpenAI",
     Anthropic: "Anthropic",
     Custom: "Custom",
 };
 
-const FILTERS = [
+const FILTER_OPTIONS = [
     { id: "all", label: "全部" },
     { id: "openai", label: "OpenAI兼容" },
     { id: "anthropic", label: "Anthropic" },
     { id: "ollama", label: "Ollama" },
     { id: "local", label: "本地" },
-];
+] as const;
 
 function emptyCredential(sortOrder: number): ProbeCredentialPayload {
     return {
@@ -129,14 +131,8 @@ function emptyCredential(sortOrder: number): ProbeCredentialPayload {
         output_price_per_million: null,
         price_unit: "1M tokens",
         price_currency: "USD",
+        last_test_latency_ms: null,
     };
-}
-
-function parseNonNegativeNumber(value: string) {
-    if (!value.trim()) return null;
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return null;
-    return Math.max(0, parsed);
 }
 
 function createInvokeErrorResult(error: unknown): ProbeResult {
@@ -214,8 +210,12 @@ function protocolSupportsRoute(kind: ProbeRouteKind, protocol: ProbeProtocol) {
     return ["Anthropic", "Custom"].includes(protocol);
 }
 
-function routeLabel(kind: ProbeRouteKind) {
-    return kind === "OpenAi" ? "OpenAI 目标" : "Anthropic 目标";
+function latencyTone(latencyMs?: number | null, isFailure?: boolean) {
+    if (isFailure) return "is-fail";
+    if (typeof latencyMs !== "number") return "";
+    if (latencyMs <= 120) return "is-fast";
+    if (latencyMs <= 450) return "is-warn";
+    return "is-fail";
 }
 
 export default function FlowProbeSources() {
@@ -229,7 +229,14 @@ export default function FlowProbeSources() {
     const [saving, setSaving] = useState(false);
     const [busyAction, setBusyAction] = useState("");
     const [credentialResult, setCredentialResult] = useState<ProbeResult | null>(null);
+    const [credentialHealth, setCredentialHealth] = useState<Record<string, ProbeResult>>({});
     const [modelsLoadState, setModelsLoadState] = useState<Record<string, string>>({});
+    const [showSecret, setShowSecret] = useState(false);
+    const [modelSearchQuery, setModelSearchQuery] = useState("");
+    const [autoSaveState, setAutoSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+    const [autoSaveError, setAutoSaveError] = useState("");
+    const hasHydratedRef = useRef(false);
+    const lastSavedSnapshotRef = useRef("");
 
     const loadData = async () => {
         setLoading(true);
@@ -238,6 +245,10 @@ export default function FlowProbeSources() {
             const probeDashboard = await invoke<ProbeDashboardPayload>("get_probe_dashboard");
             setConfig(probeConfig);
             setDashboard(probeDashboard);
+            lastSavedSnapshotRef.current = JSON.stringify(probeConfig);
+            hasHydratedRef.current = true;
+            setAutoSaveState("saved");
+            setAutoSaveError("");
             const fallbackId =
                 selectedCredentialId && probeConfig.credentials.some((item) => item.id === selectedCredentialId)
                     ? selectedCredentialId
@@ -274,7 +285,7 @@ export default function FlowProbeSources() {
 
     const filteredCredentials = useMemo(() => {
         return credentials.filter((credential) => {
-            const haystack = `${credential.name} ${credential.provider} ${credential.note} ${credential.default_model} ${credential.tags.join(" ")}`.toLowerCase();
+            const haystack = `${credential.name} ${credential.provider} ${credential.default_model} ${credential.tags.join(" ")}`.toLowerCase();
             if (searchQuery && !haystack.includes(searchQuery.toLowerCase())) {
                 return false;
             }
@@ -295,17 +306,59 @@ export default function FlowProbeSources() {
         });
     }, [credentials, filterId, searchQuery]);
 
-    const persistConfig = async (next: ProbeConfigPayload, actionLabel = "save") => {
-        setSaving(true);
-        setBusyAction(actionLabel);
+    const persistConfig = async (
+        next: ProbeConfigPayload,
+        actionLabel = "save",
+        options?: { background?: boolean; refreshDashboard?: boolean }
+    ) => {
+        const background = options?.background ?? false;
+        const refreshDashboard = options?.refreshDashboard ?? true;
+        if (background) {
+            setAutoSaveState("saving");
+            setAutoSaveError("");
+        } else {
+            setSaving(true);
+            setBusyAction(actionLabel);
+        }
         try {
             await invoke("save_probe_config", { payload: next });
-            setConfig(next);
-            const probeDashboard = await invoke<ProbeDashboardPayload>("get_probe_dashboard");
-            setDashboard(probeDashboard);
+            lastSavedSnapshotRef.current = JSON.stringify(next);
+            if (refreshDashboard) {
+                const probeDashboard = await invoke<ProbeDashboardPayload>("get_probe_dashboard");
+                setDashboard(probeDashboard);
+            }
+            if (background) {
+                setAutoSaveState("saved");
+            }
         } finally {
-            setSaving(false);
-            setBusyAction("");
+            if (!background) {
+                setSaving(false);
+                setBusyAction("");
+            }
+        }
+    };
+
+    useEffect(() => {
+        if (!config || !hasHydratedRef.current) return;
+        const snapshot = JSON.stringify(config);
+        if (snapshot === lastSavedSnapshotRef.current) return;
+        setAutoSaveState("saving");
+        setAutoSaveError("");
+        const timer = window.setTimeout(() => {
+            persistConfig(config, "autosave", { background: true, refreshDashboard: false }).catch((error) => {
+                setAutoSaveState("error");
+                setAutoSaveError(error instanceof Error ? error.message : String(error || "自动保存失败"));
+            });
+        }, 500);
+        return () => window.clearTimeout(timer);
+    }, [config]);
+
+    const copyText = async (value: string) => {
+        if (!value) return;
+        try {
+            await navigator.clipboard.writeText(value);
+        } catch {
+            // Ignore clipboard failures on unsupported contexts.
         }
     };
 
@@ -317,20 +370,6 @@ export default function FlowProbeSources() {
         setConfig({ ...config, credentials: nextCredentials });
     };
 
-    const saveSelectedCredential = async () => {
-        if (!config) return;
-        await persistConfig(
-            {
-                ...config,
-                credentials: sortCredentials(config.credentials).map((credential, index) => ({
-                    ...credential,
-                    sort_order: index + 1,
-                })),
-            },
-            "save-credential"
-        );
-    };
-
     const addCredential = () => {
         if (!config) return;
         const next = emptyCredential(config.credentials.length + 1);
@@ -340,6 +379,8 @@ export default function FlowProbeSources() {
         });
         setSelectedCredentialId(next.id);
         setCredentialResult(null);
+        setModelSearchQuery("");
+        setShowSecret(false);
     };
 
     const deleteCredential = async (credentialId: string) => {
@@ -357,6 +398,7 @@ export default function FlowProbeSources() {
         };
         setSelectedCredentialId(nextCredentials[0]?.id || "");
         setCredentialResult(null);
+        setConfig(nextConfig);
         await persistConfig(nextConfig, "delete-credential");
     };
 
@@ -368,15 +410,38 @@ export default function FlowProbeSources() {
                 credential: selectedCredential,
             });
             setCredentialResult(result);
+            setCredentialHealth((prev) => ({ ...prev, [selectedCredential.id]: result }));
+            if (config) {
+                setConfig({
+                    ...config,
+                    credentials: config.credentials.map((credential) =>
+                        credential.id === selectedCredential.id
+                            ? { ...credential, last_test_latency_ms: result.latency_ms ?? null }
+                            : credential
+                    ),
+                });
+            }
         } catch (error) {
-            setCredentialResult(createInvokeErrorResult(error));
+            const result = createInvokeErrorResult(error);
+            setCredentialResult(result);
+            setCredentialHealth((prev) => ({ ...prev, [selectedCredential.id]: result }));
+            if (config) {
+                setConfig({
+                    ...config,
+                    credentials: config.credentials.map((credential) =>
+                        credential.id === selectedCredential.id
+                            ? { ...credential, last_test_latency_ms: null }
+                            : credential
+                    ),
+                });
+            }
         } finally {
             setBusyAction("");
         }
     };
 
     const fetchCredentialModels = async () => {
-        if (!selectedCredential) return;
+        if (!selectedCredential || !config) return;
         setBusyAction("models-credential");
         setModelsLoadState((prev) => ({ ...prev, [selectedCredential.id]: "loading" }));
         try {
@@ -384,9 +449,9 @@ export default function FlowProbeSources() {
                 credential: selectedCredential,
             });
             setModelsLoadState((prev) => ({ ...prev, [selectedCredential.id]: "ready" }));
-            const nextConfig: ProbeConfigPayload = {
-                ...config!,
-                credentials: config!.credentials.map((credential) =>
+            setConfig({
+                ...config,
+                credentials: config.credentials.map((credential) =>
                     credential.id === selectedCredential.id
                         ? {
                             ...credential,
@@ -396,9 +461,7 @@ export default function FlowProbeSources() {
                         }
                         : credential
                 ),
-            };
-            setConfig(nextConfig);
-            await persistConfig(nextConfig, "models-credential");
+            });
         } catch {
             setModelsLoadState((prev) => ({ ...prev, [selectedCredential.id]: "error" }));
         } finally {
@@ -406,19 +469,45 @@ export default function FlowProbeSources() {
         }
     };
 
-    const assignRouteTarget = async (kind: ProbeRouteKind) => {
+    const assignRouteTarget = (kind: ProbeRouteKind) => {
         if (!config || !selectedCredential) return;
-        const nextConfig = {
+        setConfig({
             ...config,
             routes: config.routes.map((route) =>
                 route.kind === kind ? { ...route, credential_id: selectedCredential.id } : route
             ),
-        };
-        await persistConfig(nextConfig, `switch-${kind}`);
+        });
     };
 
     const selectedModels = selectedCredential ? selectedCredential.discovered_models || [] : [];
     const modelsState = selectedCredential ? modelsLoadState[selectedCredential.id] || "" : "";
+    const filteredModels = useMemo(() => {
+        if (!modelSearchQuery.trim()) return selectedModels;
+        const needle = modelSearchQuery.trim().toLowerCase();
+        return selectedModels.filter((model) => model.toLowerCase().includes(needle));
+    }, [modelSearchQuery, selectedModels]);
+
+    const diagnosticLines = useMemo(() => {
+        if (!selectedCredential) return [];
+        if (!credentialResult) {
+            return [
+                `等待测试 ${selectedCredential.name}`,
+                "点击“测试 API”后，这里会显示连通性、鉴权和协议诊断。",
+            ];
+        }
+        const lines = [
+            `probe credential="${selectedCredential.name}" protocol="${formatProtocolBadge(selectedCredential.protocol)}"`,
+            `base_url ${selectedCredential.base_url || "(empty)"}`,
+            `result ${credentialResult.code} auth=${credentialResult.auth_status || "unknown"} protocol=${credentialResult.detected_protocol || "unknown"}`,
+        ];
+        if (typeof credentialResult.latency_ms === "number") {
+            lines.push(`latency ${credentialResult.latency_ms}ms models=${credentialResult.model_count ?? "-"}`);
+        }
+        if (credentialResult.detail || credentialResult.summary) {
+            lines.push(credentialResult.detail || credentialResult.summary);
+        }
+        return lines;
+    }, [credentialResult, selectedCredential]);
 
     if (loading || !config || !dashboard) {
         return (
@@ -430,7 +519,7 @@ export default function FlowProbeSources() {
     }
 
     return (
-        <div className="flowprobe-page">
+        <div className="flowprobe-page flowprobe-page--sources">
             <div className="flowprobe-header">
                 <div className="flowprobe-title-group">
                     <h1 className="flowprobe-title">
@@ -440,53 +529,52 @@ export default function FlowProbeSources() {
                     <p className="flowprobe-subtitle">{t("flowprobe_sources.subtitle")}</p>
                 </div>
                 <div className="flowprobe-header-actions">
+                    <span className={`flowprobe-save-indicator is-${autoSaveState}`}>
+                        {autoSaveState === "saving" ? "自动保存中" : autoSaveState === "error" ? "自动保存失败" : "已自动保存"}
+                    </span>
                     <button className="flowprobe-button flowprobe-button--secondary" onClick={() => loadData()}>
                         <RefreshCw size={15} />
-                        刷新
-                    </button>
-                    <button className="flowprobe-button flowprobe-button--primary" onClick={saveSelectedCredential} disabled={saving || !selectedCredential}>
-                        {saving && busyAction === "save-credential" ? <Loader2 size={15} className="flowprobe-spin" /> : <Save size={15} />}
-                        保存当前 API
+                        重新读取
                     </button>
                 </div>
             </div>
+
+            {autoSaveError && (
+                <div className="flowprobe-banner flowprobe-banner--danger">{autoSaveError}</div>
+            )}
 
             {dashboard.status.last_error && (
                 <div className="flowprobe-banner flowprobe-banner--danger">{dashboard.status.last_error}</div>
             )}
 
             <div className="flowprobe-shell flowprobe-shell--sources">
-                <section className="flowprobe-panel">
+                <section className="flowprobe-panel flowprobe-panel--sources-list">
                     <div className="flowprobe-panel-header">
                         <div>
                             <h2>接入 API 列表</h2>
-                            <p>记录所有可用上游 API、协议、默认模型和摘要标签。</p>
                         </div>
-                        <button className="flowprobe-icon-button" onClick={addCredential}>
-                            <Plus size={16} />
+                        <button className="flowprobe-button flowprobe-button--primary" onClick={addCredential}>
+                            <Plus size={14} />
+                            新增 API
                         </button>
                     </div>
 
-                    <div className="flowprobe-search">
-                        <Search size={14} />
-                        <input
-                            value={searchQuery}
-                            onChange={(event) => setSearchQuery(event.target.value)}
-                            placeholder="搜索名称 / 标签 / 备注 / 模型"
-                        />
-                    </div>
-
-                    <div className="flowprobe-filter-row">
-                        {FILTERS.map((filter) => (
-                            <button
-                                key={filter.id}
-                                className={`flowprobe-chip ${filterId === filter.id ? "is-active" : ""}`}
-                                onClick={() => setFilterId(filter.id)}
-                            >
-                                <ListFilter size={12} />
-                                {filter.label}
-                            </button>
-                        ))}
+                    <div className="flowprobe-list-toolbar">
+                        <div className="flowprobe-search">
+                            <Search size={14} />
+                            <input
+                                value={searchQuery}
+                                onChange={(event) => setSearchQuery(event.target.value)}
+                                placeholder="搜索名称 / 标签 / 模型"
+                            />
+                        </div>
+                        <div className="flowprobe-filter-select">
+                            <select value={filterId} onChange={(event) => setFilterId(event.target.value)}>
+                                {FILTER_OPTIONS.map((filter) => (
+                                    <option key={filter.id} value={filter.id}>{filter.label}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     <div className="flowprobe-credential-list">
@@ -494,6 +582,7 @@ export default function FlowProbeSources() {
                             const usedBy = (["OpenAi", "Anthropic"] as ProbeRouteKind[]).filter(
                                 (kind) => routeMap.get(kind)?.credential_id === credential.id
                             );
+                            const displayTag = credential.tags.find((tag) => tag.trim().length > 0) || "";
                             return (
                                 <button
                                     key={credential.id}
@@ -501,26 +590,36 @@ export default function FlowProbeSources() {
                                     onClick={() => {
                                         setSelectedCredentialId(credential.id);
                                         setCredentialResult(null);
+                                        setModelSearchQuery("");
+                                        setShowSecret(false);
                                     }}
                                 >
-                                    <div className="flowprobe-credential-top">
+                                    <div className="flowprobe-credential-row">
                                         <div className="flowprobe-credential-name">
-                                            <span className={`flowprobe-dot ${credential.enabled ? "is-on" : "is-off"}`} />
-                                            {credential.name}
+                                            <span
+                                                className={`flowprobe-dot ${
+                                                    credentialHealth[credential.id]
+                                                        ? credentialHealth[credential.id].success ? "is-on" : "is-off"
+                                                        : credential.enabled ? "is-on" : "is-off"
+                                                }`}
+                                            />
+                                            <span className="flowprobe-credential-row__title">{credential.name}</span>
                                         </div>
-                                        <span className="flowprobe-protocol-badge">{formatProtocolBadge(credential.protocol)}</span>
+                                        <span className={`flowprobe-credential-row__latency flowprobe-latency-value ${latencyTone(credential.last_test_latency_ms, credentialHealth[credential.id] ? !credentialHealth[credential.id].success : false)}`}>
+                                            {typeof credential.last_test_latency_ms === "number"
+                                                ? `${credential.last_test_latency_ms} ms`
+                                                : "未探测"}
+                                        </span>
+                                        <span className={`flowprobe-protocol-badge ${usedBy.length > 0 ? "is-active" : ""}`}>
+                                            {formatProtocolBadge(credential.protocol)}
+                                        </span>
                                     </div>
-                                    <div className="flowprobe-credential-meta">
+                                    <div className="flowprobe-credential-row flowprobe-credential-row--meta">
                                         <span>{credential.provider || "未填写服务商"}</span>
-                                        <span>{credential.default_model || "未设默认模型"}</span>
-                                    </div>
-                                    <div className="flowprobe-credential-tags">
-                                        {usedBy.map((kind) => (
-                                            <span key={kind} className="flowprobe-tag flowprobe-tag--active">{routeLabel(kind)}</span>
-                                        ))}
-                                        {credential.tags.slice(0, 3).map((tag) => (
-                                            <span key={tag} className="flowprobe-tag">{tag}</span>
-                                        ))}
+                                        <span className="flowprobe-credential-row__model">{credential.default_model || "未设默认模型"}</span>
+                                        <span className="flowprobe-credential-row__routes">
+                                            {displayTag}
+                                        </span>
                                     </div>
                                 </button>
                             );
@@ -528,246 +627,218 @@ export default function FlowProbeSources() {
                     </div>
                 </section>
 
-                <section className="flowprobe-panel flowprobe-panel--center">
+                <section className="flowprobe-panel flowprobe-panel--center flowprobe-panel--sources-workspace">
                     {selectedCredential ? (
-                        <div className="flowprobe-editor">
-                            <div className="flowprobe-panel-header flowprobe-panel-header--tight">
-                                <div>
-                                    <h3>API 详情</h3>
-                                    <p>点左侧列表项后，这里的配置会随之切换。</p>
+                        <div className="flowprobe-sources-workspace">
+                            <div className="flowprobe-sources-top-row">
+                                <div className="flowprobe-editor flowprobe-editor--sources">
+                                    <div className="flowprobe-panel-header flowprobe-panel-header--tight">
+                                        <div>
+                                            <h3>API 详情</h3>
+                                        </div>
+                                        <div className="flowprobe-route-actions flowprobe-route-actions--inline">
+                                            <span className={`flowprobe-chip flowprobe-chip--status ${selectedCredential.enabled ? "is-active" : ""}`}>
+                                                {selectedCredential.enabled ? "已启用" : "未启用"}
+                                            </span>
+                                            <button className="flowprobe-icon-button flowprobe-icon-button--danger" onClick={() => deleteCredential(selectedCredential.id)}>
+                                                {saving && busyAction === "delete-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <Trash2 size={14} />}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="flowprobe-form-grid flowprobe-form-grid--sources">
+                                        <label>
+                                            <span>名称</span>
+                                            <input value={selectedCredential.name} onChange={(event) => updateSelectedCredential({ name: event.target.value })} />
+                                        </label>
+                                        <label>
+                                            <span>服务商</span>
+                                            <input value={selectedCredential.provider} onChange={(event) => updateSelectedCredential({ provider: event.target.value })} />
+                                        </label>
+                                        <label className="is-wide">
+                                            <span>Base URL</span>
+                                            <div className="flowprobe-inline-input-row flowprobe-inline-input-row--boxed">
+                                                <input value={selectedCredential.base_url} onChange={(event) => updateSelectedCredential({ base_url: event.target.value })} />
+                                                <button className="flowprobe-icon-button" onClick={() => copyText(selectedCredential.base_url)} title="复制 Base URL">
+                                                    <Copy size={14} />
+                                                </button>
+                                            </div>
+                                        </label>
+                                        <label>
+                                            <span>协议</span>
+                                            <select value={selectedCredential.protocol} onChange={(event) => updateSelectedCredential({ protocol: event.target.value as ProbeProtocol })}>
+                                                {Object.entries(PROTOCOL_LABELS).map(([value, label]) => (
+                                                    <option key={value} value={value}>{label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <label>
+                                            <span>默认模型</span>
+                                            <div className="flowprobe-inline-input-row flowprobe-inline-input-row--boxed">
+                                                <input value={selectedCredential.default_model} onChange={(event) => updateSelectedCredential({ default_model: event.target.value })} />
+                                                <button className="flowprobe-icon-button" onClick={() => copyText(selectedCredential.default_model)} title="复制默认模型">
+                                                    <Copy size={14} />
+                                                </button>
+                                            </div>
+                                        </label>
+                                        <label className="is-wide">
+                                            <span>API Key / Secret</span>
+                                            <div className="flowprobe-inline-input-row flowprobe-inline-input-row--boxed">
+                                                <input
+                                                    type={showSecret ? "text" : "password"}
+                                                    value={selectedCredential.api_key}
+                                                    onChange={(event) => updateSelectedCredential({ api_key: event.target.value })}
+                                                    placeholder="sk-..."
+                                                />
+                                                <button className="flowprobe-icon-button" onClick={() => setShowSecret((prev) => !prev)} title={showSecret ? "隐藏密钥" : "显示密钥"}>
+                                                    {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                                                </button>
+                                                <button className="flowprobe-icon-button" onClick={() => copyText(selectedCredential.api_key)} title="复制密钥">
+                                                    <Copy size={14} />
+                                                </button>
+                                            </div>
+                                        </label>
+                                        <label className="is-wide">
+                                            <span>备注</span>
+                                            <input value={selectedCredential.note} onChange={(event) => updateSelectedCredential({ note: event.target.value })} />
+                                        </label>
+                                        <label className="is-wide">
+                                            <span>标签（逗号分隔）</span>
+                                            <input
+                                                value={selectedCredential.tags.join(", ")}
+                                                onChange={(event) =>
+                                                    updateSelectedCredential({
+                                                        tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean),
+                                                    })
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="flowprobe-sources-route-row">
+                                        <button
+                                            className={`flowprobe-chip ${selectedRouteKinds.includes("OpenAi") ? "is-active" : ""}`}
+                                            disabled={!protocolSupportsRoute("OpenAi", selectedCredential.protocol)}
+                                            onClick={() => assignRouteTarget("OpenAi")}
+                                        >
+                                            <ArrowRightLeft size={12} />
+                                            设为 OpenAI 目标
+                                        </button>
+                                        <button
+                                            className={`flowprobe-chip ${selectedRouteKinds.includes("Anthropic") ? "is-active" : ""}`}
+                                            disabled={!protocolSupportsRoute("Anthropic", selectedCredential.protocol)}
+                                            onClick={() => assignRouteTarget("Anthropic")}
+                                        >
+                                            <ArrowRightLeft size={12} />
+                                            设为 Anthropic 目标
+                                        </button>
+                                        <button className="flowprobe-button flowprobe-button--secondary" onClick={runCredentialTest}>
+                                            {busyAction === "test-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <RefreshCw size={14} />}
+                                            测试 API
+                                        </button>
+                                        <button className="flowprobe-button flowprobe-button--secondary" onClick={fetchCredentialModels}>
+                                            {busyAction === "models-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
+                                            拉取模型
+                                        </button>
+                                    </div>
+
                                 </div>
-                                <button className="flowprobe-icon-button flowprobe-icon-button--danger" onClick={() => deleteCredential(selectedCredential.id)}>
-                                    <Trash2 size={14} />
-                                </button>
+
+                                <section className="flowprobe-panel flowprobe-panel--subsection flowprobe-panel--sources-models">
+                                    <div className="flowprobe-panel-header flowprobe-panel-header--tight">
+                                        <div>
+                                            <h3>模型池</h3>
+                                        </div>
+                                        <button className="flowprobe-icon-button" onClick={fetchCredentialModels}>
+                                            {busyAction === "models-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
+                                        </button>
+                                    </div>
+
+                                    <div className="flowprobe-search flowprobe-search--compact">
+                                        <Search size={14} />
+                                        <input
+                                            value={modelSearchQuery}
+                                            onChange={(event) => setModelSearchQuery(event.target.value)}
+                                            placeholder="搜索模型名"
+                                        />
+                                    </div>
+
+                                    <div className="flowprobe-model-chip-list">
+                                        {filteredModels.length > 0 ? (
+                                            filteredModels.map((model) => (
+                                                <button
+                                                    key={`${selectedCredential.id}:${model}`}
+                                                    className={`flowprobe-model-chip ${selectedCredential.default_model === model ? "is-active" : ""}`}
+                                                    onClick={() => updateSelectedCredential({ default_model: model })}
+                                                    title={model}
+                                                >
+                                                    {model}
+                                                </button>
+                                            ))
+                                        ) : (
+                                            <div className="flowprobe-empty-state flowprobe-empty-state--inline">
+                                                <strong>{modelsState === "error" ? "模型拉取失败" : selectedModels.length > 0 ? "没有匹配模型" : "还没有模型列表"}</strong>
+                                                <p>
+                                                    {modelsState === "loading"
+                                                        ? "正在从当前 API 拉取模型列表。"
+                                                        : selectedModels.length > 0
+                                                            ? "换个关键词，或者直接从列表中点击一个模型。"
+                                                            : "点击“拉取模型”后，这里会出现当前 API 返回的模型池。"}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </section>
                             </div>
 
-                            <div className="flowprobe-form-grid">
-                                <label>
-                                    <span>名称</span>
-                                    <input value={selectedCredential.name} onChange={(event) => updateSelectedCredential({ name: event.target.value })} />
-                                </label>
-                                <label>
-                                    <span>服务商</span>
-                                    <input value={selectedCredential.provider} onChange={(event) => updateSelectedCredential({ provider: event.target.value })} />
-                                </label>
-                                <label>
-                                    <span>协议</span>
-                                    <select value={selectedCredential.protocol} onChange={(event) => updateSelectedCredential({ protocol: event.target.value as ProbeProtocol })}>
-                                        {Object.entries(PROTOCOL_LABELS).map(([value, label]) => (
-                                            <option key={value} value={value}>{label}</option>
+                            <div className="flowprobe-sources-bottom-row">
+                                <section className="flowprobe-panel flowprobe-panel--subsection flowprobe-panel--sources-logs">
+                                    <div className="flowprobe-panel-header flowprobe-panel-header--tight">
+                                        <div>
+                                            <h3>诊断日志</h3>
+                                        </div>
+                                    </div>
+
+                                    {credentialResult ? (
+                                        <div className={`flowprobe-result ${credentialResult.success ? "is-success" : "is-error"}`}>
+                                            <div className="flowprobe-result-head">
+                                                <strong>{credentialResult.code}</strong>
+                                                <span>{resultSummaryZh(credentialResult)}</span>
+                                                {typeof credentialResult.latency_ms === "number" && <em>{credentialResult.latency_ms} ms</em>}
+                                            </div>
+                                            <div className="flowprobe-result-body">
+                                                <div className="flowprobe-detail-list">
+                                                    <div><span>中文</span><strong>{resultSummaryZh(credentialResult)}</strong></div>
+                                                    <div><span>结论</span><strong>{resultConclusionZh(credentialResult)}</strong></div>
+                                                    <div><span>认证状态</span><strong>{credentialResult.auth_status || "-"}</strong></div>
+                                                    <div><span>识别协议</span><strong>{credentialResult.detected_protocol || "-"}</strong></div>
+                                                    <div><span>模型数量</span><strong>{credentialResult.model_count ?? "-"}</strong></div>
+                                                    <div><span>状态码</span><strong>{credentialResult.code || "-"}</strong></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flowprobe-empty-state flowprobe-empty-state--inline">
+                                            <strong>{typeof selectedCredential.last_test_latency_ms === "number" ? `最近一次探测：${selectedCredential.last_test_latency_ms} ms` : "还没有测试结果"}</strong>
+                                            <p>{typeof selectedCredential.last_test_latency_ms === "number" ? "当前会话还没有新的测试结果。" : "先测试，再决定是改地址、改协议还是改密钥。"}</p>
+                                        </div>
+                                    )}
+
+                                    <div className="flowprobe-source-log-stream">
+                                        {diagnosticLines.map((line, index) => (
+                                            <div key={`${selectedCredential.id}-diag-${index}`} className="flowprobe-source-log-line">
+                                                <span>$</span>
+                                                <code>{line}</code>
+                                            </div>
                                         ))}
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>默认模型</span>
-                                    <input value={selectedCredential.default_model} onChange={(event) => updateSelectedCredential({ default_model: event.target.value })} />
-                                </label>
-                                <label className="is-wide">
-                                    <span>Base URL</span>
-                                    <input value={selectedCredential.base_url} onChange={(event) => updateSelectedCredential({ base_url: event.target.value })} />
-                                </label>
-                                <label className="is-wide">
-                                    <span>API Key / Secret</span>
-                                    <input value={selectedCredential.api_key} onChange={(event) => updateSelectedCredential({ api_key: event.target.value })} />
-                                </label>
-                                <label className="is-wide">
-                                    <span>备注</span>
-                                    <input value={selectedCredential.note} onChange={(event) => updateSelectedCredential({ note: event.target.value })} />
-                                </label>
-                                <label className="is-wide">
-                                    <span>标签（逗号分隔）</span>
-                                    <input
-                                        value={selectedCredential.tags.join(", ")}
-                                        onChange={(event) =>
-                                            updateSelectedCredential({
-                                                tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean),
-                                            })
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    <span>输入价格</span>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.000001"
-                                        value={selectedCredential.input_price_per_million ?? ""}
-                                        onChange={(event) =>
-                                            updateSelectedCredential({
-                                                input_price_per_million: parseNonNegativeNumber(event.target.value),
-                                            })
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    <span>输出价格</span>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.000001"
-                                        value={selectedCredential.output_price_per_million ?? ""}
-                                        onChange={(event) =>
-                                            updateSelectedCredential({
-                                                output_price_per_million: parseNonNegativeNumber(event.target.value),
-                                            })
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    <span>计价单位</span>
-                                    <input
-                                        value={selectedCredential.price_unit}
-                                        placeholder="1M tokens"
-                                        onChange={(event) => updateSelectedCredential({ price_unit: event.target.value })}
-                                    />
-                                </label>
-                                <label>
-                                    <span>计价币种</span>
-                                    <input
-                                        value={selectedCredential.price_currency}
-                                        placeholder="USD"
-                                        onChange={(event) => updateSelectedCredential({ price_currency: event.target.value.toUpperCase() })}
-                                    />
-                                </label>
+                                    </div>
+                                </section>
                             </div>
-
-                            <div className="flowprobe-editor-actions flowprobe-editor-actions--sources">
-                                <button className="flowprobe-button flowprobe-button--secondary" onClick={runCredentialTest}>
-                                    {busyAction === "test-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <RefreshCw size={14} />}
-                                    测试 API
-                                </button>
-                                <button className="flowprobe-button flowprobe-button--secondary" onClick={fetchCredentialModels}>
-                                    {busyAction === "models-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
-                                    拉取模型
-                                </button>
-                                <button
-                                    className="flowprobe-button flowprobe-button--secondary"
-                                    disabled={!protocolSupportsRoute("OpenAi", selectedCredential.protocol)}
-                                    onClick={() => assignRouteTarget("OpenAi")}
-                                >
-                                    <ArrowRightLeft size={14} />
-                                    设为 OpenAI 目标
-                                </button>
-                                <button
-                                    className="flowprobe-button flowprobe-button--secondary"
-                                    disabled={!protocolSupportsRoute("Anthropic", selectedCredential.protocol)}
-                                    onClick={() => assignRouteTarget("Anthropic")}
-                                >
-                                    <ArrowRightLeft size={14} />
-                                    设为 Anthropic 目标
-                                </button>
-                                <button className="flowprobe-button flowprobe-button--primary" onClick={saveSelectedCredential}>
-                                    {saving && busyAction === "save-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <Save size={14} />}
-                                    保存
-                                </button>
-                            </div>
-
                         </div>
                     ) : (
                         <div className="flowprobe-empty-state">
                             <strong>暂无 API</strong>
                             <p>新增一个上游 API 后，这里会显示它的完整配置。</p>
-                        </div>
-                    )}
-                </section>
-
-                <section className="flowprobe-panel">
-                    <div className="flowprobe-panel-header">
-                        <div>
-                            <h2>验证与模型</h2>
-                            <p>这里始终展示当前选中 API 的验证结果和可用模型。</p>
-                        </div>
-                    </div>
-
-                    {selectedCredential ? (
-                        <>
-                            <div className="flowprobe-metrics flowprobe-metrics--single">
-                                <div className="flowprobe-metric-card">
-                                    <span>来源</span>
-                                    <strong>{selectedCredential.name}</strong>
-                                </div>
-                                <div className="flowprobe-metric-card">
-                                    <span>服务商 / 协议</span>
-                                    <strong>{selectedCredential.provider || "未填写"} / {formatProtocolBadge(selectedCredential.protocol)}</strong>
-                                </div>
-                                <div className="flowprobe-metric-card">
-                                    <span>当前绑定</span>
-                                    <strong>{selectedRouteKinds.length ? selectedRouteKinds.map(routeLabel).join(" · ") : "未用于转发"}</strong>
-                                </div>
-                                <div className="flowprobe-metric-card">
-                                    <span>模型来源</span>
-                                    <strong>{selectedModels.length ? `${selectedModels.length} 个模型来自当前 API` : "尚未拉取"}</strong>
-                                </div>
-                            </div>
-
-                            {credentialResult ? (
-                                <div className={`flowprobe-result ${credentialResult.success ? "is-success" : "is-error"}`}>
-                                    <div className="flowprobe-result-head">
-                                        <strong>{credentialResult.code}</strong>
-                                        <span>{resultSummaryZh(credentialResult)}</span>
-                                        {typeof credentialResult.latency_ms === "number" && <em>{credentialResult.latency_ms} ms</em>}
-                                    </div>
-                                    <div className="flowprobe-result-body">
-                                        <div className="flowprobe-detail-list">
-                                            <div><span>代码 / 代号</span><strong>{credentialResult.code || "-"}</strong></div>
-                                            <div><span>中文</span><strong>{resultSummaryZh(credentialResult)}</strong></div>
-                                            <div><span>结论</span><strong>{resultConclusionZh(credentialResult)}</strong></div>
-                                            <div><span>认证状态</span><strong>{credentialResult.auth_status || "-"}</strong></div>
-                                            <div><span>识别协议</span><strong>{credentialResult.detected_protocol || "-"}</strong></div>
-                                            <div><span>模型数量</span><strong>{credentialResult.model_count ?? "-"}</strong></div>
-                                        </div>
-                                        <div>{credentialResult.detail || credentialResult.summary}</div>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="flowprobe-empty-state flowprobe-empty-state--inline">
-                                    <strong>还没有测试结果</strong>
-                                    <p>点击“测试 API”后，这里会显示连通状态、认证结果和响应摘要。</p>
-                                </div>
-                            )}
-
-                            <div className="flowprobe-panel-header flowprobe-panel-header--tight">
-                                <div>
-                                    <h3>可用模型</h3>
-                                    <p>当前列表只显示这个 API 拉回来的模型，不跨来源混排。</p>
-                                </div>
-                                <button className="flowprobe-icon-button" onClick={fetchCredentialModels}>
-                                    {busyAction === "models-credential" ? <Loader2 size={14} className="flowprobe-spin" /> : <ServerCog size={14} />}
-                                </button>
-                            </div>
-
-                            <div className="flowprobe-model-list">
-                                {selectedModels.length > 0 ? (
-                                    selectedModels.map((model) => (
-                                        <button
-                                            key={`${selectedCredential.id}:${model}`}
-                                            className={`flowprobe-model-item ${selectedCredential.default_model === model ? "is-active" : ""}`}
-                                            onClick={() => updateSelectedCredential({ default_model: model })}
-                                        >
-                                            <div className="flowprobe-model-name">{model}</div>
-                                            <div className="flowprobe-model-meta">
-                                                <span>{selectedCredential.name}</span>
-                                                <span>{selectedCredential.provider || formatProtocolBadge(selectedCredential.protocol)}</span>
-                                                {selectedCredential.default_model === model && <span className="flowprobe-tag flowprobe-tag--active">默认模型</span>}
-                                            </div>
-                                        </button>
-                                    ))
-                                ) : (
-                                    <div className="flowprobe-empty-state flowprobe-empty-state--inline">
-                                        <strong>{modelsState === "error" ? "模型拉取失败" : "还没有模型列表"}</strong>
-                                        <p>
-                                            {modelsState === "loading"
-                                                ? "正在从当前 API 拉取模型列表。"
-                                                : "点击“拉取模型”后，这里会显示当前 API 返回的模型。"}
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        </>
-                    ) : (
-                        <div className="flowprobe-empty-state">
-                            <strong>没有选中的 API</strong>
-                            <p>从左侧列表选择一个 API 后，这里会同步显示它的验证结果和模型。</p>
                         </div>
                     )}
                 </section>
