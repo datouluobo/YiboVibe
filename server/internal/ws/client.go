@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/datouluobo/YiboVibe/server/internal/relay"
+	"github.com/datouluobo/YiboVibe/server/internal/session"
 )
 
 const (
@@ -67,7 +70,12 @@ func (c *Client) ReadPump() {
 		msg.SenderUID = c.UID
 		msg.SenderDeviceID = c.DeviceID
 
-		c.Hub.Broadcast <- &msg
+		// Route session-signal messages through the Signal Hub path
+		if isSignalMessage(msg.Type) {
+			handleSignalMessage(c, &msg)
+		} else {
+			c.Hub.Broadcast <- &msg
+		}
 	}
 }
 
@@ -105,6 +113,78 @@ func (c *Client) WritePump() {
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+		}
+	}
+}
+
+// isSignalMessage checks if this WS message is a Signal Hub message
+type signalPayload struct {
+	SessionID string `json:"session_id,omitempty"`
+	State     string `json:"state,omitempty"`
+}
+
+func isSignalMessage(msgType string) bool {
+	signalTypes := map[string]bool{
+		"session:register": true,
+		"session:update":   true,
+		"session:unregister": true,
+		"host:heartbeat":   true,
+		"host:alert":       true,
+		"host:vitals":      true,
+	}
+	return signalTypes[msgType]
+}
+
+func handleSignalMessage(c *Client, msg *Message) {
+	var payload signalPayload
+	if data, ok := msg.Payload.(string); ok {
+		_ = json.Unmarshal([]byte(data), &payload)
+	} else if data, ok := msg.Payload.(map[string]interface{}); ok {
+		// Handle parsed JSON case
+		if sid, ok := data["session_id"].(string); ok {
+			payload.SessionID = sid
+		}
+		if state, ok := data["state"].(string); ok {
+			payload.State = state
+		}
+	}
+
+	switch msg.Type {
+	case "session:register", "session:update":
+		newState := session.StateRunning
+		if payload.State == "paused" {
+			newState = session.StatePaused
+		} else if payload.State == "stopped" {
+			newState = session.StateStopped
+		} else if payload.State == "crashed" {
+			newState = session.StateCrashed
+		}
+		s := &session.Session{
+			ID:          payload.SessionID,
+			OwnerUID:    c.UID,
+			OwnerDevice: c.DeviceID,
+			State:       newState,
+		}
+		c.Hub.Sessions.Upsert(s)
+		log.Printf("[SignalHub] Session %s state=%s from UID=%d Dev=%d",
+			payload.SessionID, newState, c.UID, c.DeviceID)
+
+	case "session:unregister":
+		c.Hub.Sessions.Delete(payload.SessionID)
+		log.Printf("[SignalHub] Session %s unregistered by UID=%d", payload.SessionID, c.UID)
+
+	case "host:heartbeat":
+		rm := relay.NewRelayMessage(relay.CmdHeartbeat, payload.SessionID, c.UID, c.DeviceID, msg.Payload)
+		select {
+		case c.Hub.Heartbeat <- rm:
+		default:
+		}
+
+	case "host:alert":
+		rm := relay.NewRelayMessage(relay.CmdAlert, payload.SessionID, c.UID, c.DeviceID, msg.Payload)
+		select {
+		case c.Hub.Alert <- rm:
+		default:
 		}
 	}
 }

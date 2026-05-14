@@ -16,7 +16,7 @@ func InitDatabase() error {
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
 		// Fallback for local testing if env is not set
-		dsn = "host=localhost user=yibo_admin password=secret_password dbname=yiboflow port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+		dsn = "host=localhost user=yibo_admin password=secret_password dbname=yibovibe port=5432 sslmode=disable TimeZone=Asia/Shanghai"
 	}
 
 	if dsn == "mock" {

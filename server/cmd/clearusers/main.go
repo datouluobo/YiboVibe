@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 
-	"github.com/datouluobo/YiboFlow/server/internal/model"
-	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
+	"github.com/datouluobo/YiboVibe/server/internal/model"
+	"github.com/datouluobo/YiboVibe/server/internal/pkg/config"
 )
 
 func main() {

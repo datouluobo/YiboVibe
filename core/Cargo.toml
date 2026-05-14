@@ -1,8 +1,8 @@
 [package]
-name = "yiboflow-core"
-version = "0.9.3"
+name = "yibovibe-core"
+version = "0.9.4"
 edition = "2024"
-authors = ["YiboFlow Team"]
+authors = ["YiboSoft"]
 
 [dependencies]
 # Async Runtime & Networking

@@ -92,11 +92,11 @@ export default function Admin() {
   const [stagingPolicyLoading, setStagingPolicyLoading] = useState(false);
 
   const tryRestoreAdminSession = useCallback(async () => {
-    const serverUrl = localStorage.getItem("yiboflow_server_url") || "";
-    const username = localStorage.getItem("yiboflow_username") || "";
-    const savedPwdB64 = localStorage.getItem("yiboflow_saved_pwd") || "";
+    const serverUrl = localStorage.getItem("yibovibe_server_url") || "";
+    const username = localStorage.getItem("yibovibe_username") || "";
+    const savedPwdB64 = localStorage.getItem("yibovibe_saved_pwd") || "";
     const deviceName =
-      localStorage.getItem("yiboflow_device_name") || "Sim-PC-1";
+      localStorage.getItem("yibovibe_device_name") || "Sim-PC-1";
 
     if (!serverUrl || !username || !savedPwdB64) {
       return false;
@@ -114,7 +114,7 @@ export default function Admin() {
         }
       );
       if (result.success) {
-        localStorage.setItem("yiboflow_user_role", result.role);
+        localStorage.setItem("yibovibe_user_role", result.role);
         return true;
       }
     } catch (error) {

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/datouluobo/YiboFlow/server/internal/pkg/utils"
+	"github.com/datouluobo/YiboVibe/server/internal/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 

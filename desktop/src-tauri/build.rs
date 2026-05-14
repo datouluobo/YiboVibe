@@ -1,4 +1,4 @@
-use std::env;
+﻿use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,15 +41,16 @@ fn main() {
         build_unix_ts
     );
 
-    println!("cargo:rustc-env=YIBOFLOW_BUILD_ID={build_id}");
-    println!("cargo:rustc-env=YIBOFLOW_BUILD_GIT_COMMIT={git_commit}");
+    println!("cargo:rustc-env=YIBOVIBE_BUILD_ID={build_id}");
+    println!("cargo:rustc-env=YIBOVIBE_BUILD_GIT_COMMIT={git_commit}");
     println!(
-        "cargo:rustc-env=YIBOFLOW_BUILD_GIT_DIRTY={}",
+        "cargo:rustc-env=YIBOVIBE_BUILD_GIT_DIRTY={}",
         if git_dirty { "1" } else { "0" }
     );
-    println!("cargo:rustc-env=YIBOFLOW_BUILD_UNIX_TS={build_unix_ts}");
-    println!("cargo:rustc-env=YIBOFLOW_BUILD_PROFILE={profile}");
-    println!("cargo:rustc-env=YIBOFLOW_BUILD_TARGET_DIR={target_dir}");
+    println!("cargo:rustc-env=YIBOVIBE_BUILD_UNIX_TS={build_unix_ts}");
+    println!("cargo:rustc-env=YIBOVIBE_BUILD_PROFILE={profile}");
+    println!("cargo:rustc-env=YIBOVIBE_BUILD_TARGET_DIR={target_dir}");
 
     tauri_build::build()
 }
+

@@ -363,7 +363,7 @@ export default function FlowSync() {
     const [diagnostics, setDiagnostics] = useState<FlowSyncDiagnostics | null>(null);
     const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
     const [showDiagnostics, setShowDiagnostics] = useState(false);
-    const [currentUserRole, setCurrentUserRole] = useState(() => localStorage.getItem("yiboflow_user_role") || "");
+    const [currentUserRole, setCurrentUserRole] = useState(() => localStorage.getItem("yibovibe_user_role") || "");
     const clearMenuRef = useRef<HTMLDivElement>(null);
     const createMenuRef = useRef<HTMLDivElement>(null);
     const pushMenuRef = useRef<HTMLDivElement>(null);
@@ -395,11 +395,11 @@ export default function FlowSync() {
     const [copiedShareLinkId, setCopiedShareLinkId] = useState<number | null>(null);
 
     const [itemHeight, setItemHeight] = useState(() => {
-        const h = Number(localStorage.getItem('yiboflow_item_height') || 56);
+        const h = Number(localStorage.getItem('yibovibe_item_height') || 56);
         return Number.isFinite(h) ? Math.max(48, h) : 56;
     });
     const [listWidthRatio, setListWidthRatio] = useState(() => {
-        const r = Number(localStorage.getItem('yiboflow_list_width_ratio'));
+        const r = Number(localStorage.getItem('yibovibe_list_width_ratio'));
         if (Number.isFinite(r) && r >= 0.25 && r <= 0.55) return r;
         return 0.36;
     });
@@ -439,10 +439,10 @@ export default function FlowSync() {
     }, [filterStage, logs, sharedHashSet, stagedHashSet]);
 
     const tryRestoreServerSession = useCallback(async () => {
-        const serverUrl = localStorage.getItem("yiboflow_server_url") || "";
-        const username = localStorage.getItem("yiboflow_username") || "";
-        const savedPwdB64 = localStorage.getItem("yiboflow_saved_pwd") || "";
-        const deviceName = localStorage.getItem("yiboflow_device_name") || "Sim-PC-1";
+        const serverUrl = localStorage.getItem("yibovibe_server_url") || "";
+        const username = localStorage.getItem("yibovibe_username") || "";
+        const savedPwdB64 = localStorage.getItem("yibovibe_saved_pwd") || "";
+        const deviceName = localStorage.getItem("yibovibe_device_name") || "Sim-PC-1";
 
         if (!serverUrl || !username || !savedPwdB64) {
             return false;
@@ -457,7 +457,7 @@ export default function FlowSync() {
                 deviceName,
             });
             if (result.success) {
-                localStorage.setItem("yiboflow_user_role", result.role);
+                localStorage.setItem("yibovibe_user_role", result.role);
                 setCurrentUserRole(result.role);
                 return true;
             }
@@ -1905,7 +1905,7 @@ export default function FlowSync() {
                                     <input type="range" min={48} max={200} value={itemHeight} onChange={e => {
                                         const v = Math.max(48, Math.min(200, Number(e.target.value)));
                                         setItemHeight(v);
-                                        localStorage.setItem('yiboflow_item_height', String(v));
+                                        localStorage.setItem('yibovibe_item_height', String(v));
                                     }} style={{ flex: 1, accentColor: "var(--color-primary)" }} />
                                     <span style={{ fontSize: "11px", color: "var(--color-text-main)", fontWeight: 600, minWidth: "36px", textAlign: "right" }}>{itemHeight}px</span>
                                 </div>
@@ -1919,7 +1919,7 @@ export default function FlowSync() {
                                         onChange={e => {
                                             const p = Math.max(25, Math.min(55, Number(e.target.value))) / 100;
                                             setListWidthRatio(p);
-                                            localStorage.setItem('yiboflow_list_width_ratio', String(p));
+                                            localStorage.setItem('yibovibe_list_width_ratio', String(p));
                                         }}
                                         style={{ flex: 1, accentColor: "var(--color-primary)" }}
                                     />

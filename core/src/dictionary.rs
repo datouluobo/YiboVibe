@@ -121,7 +121,7 @@ pub fn init_and_load_dictionaries() {
             name: "CMD 命令词库".to_string(),
             description: "Windows 命令提示符常用命令补全".to_string(),
             version: "1.0".to_string(),
-            author: "YiboFlow Built-in".to_string(),
+            author: "YiboVibe Built-in".to_string(),
             min_trigger_chars: 2,
             dict_type: "builtin".to_string(),
             entries: vec![
@@ -152,7 +152,7 @@ pub fn init_and_load_dictionaries() {
             name: "Git 命令词库".to_string(),
             description: "Git 常用操作快捷补全".to_string(),
             version: "1.0".to_string(),
-            author: "YiboFlow Built-in".to_string(),
+            author: "YiboVibe Built-in".to_string(),
             min_trigger_chars: 2,
             dict_type: "builtin".to_string(),
             entries: vec![
@@ -183,7 +183,7 @@ pub fn init_and_load_dictionaries() {
             name: "NPM 包管理".to_string(),
             description: "NPM/PNPM 常用命令大全".to_string(),
             version: "1.0".to_string(),
-            author: "YiboFlow Built-in".to_string(),
+            author: "YiboVibe Built-in".to_string(),
             min_trigger_chars: 2,
             dict_type: "builtin".to_string(),
             entries: vec![
@@ -214,7 +214,7 @@ pub fn init_and_load_dictionaries() {
             name: "HTML 标签".to_string(),
             description: "常用 HTML5 标签补全".to_string(),
             version: "1.0".to_string(),
-            author: "YiboFlow Built-in".to_string(),
+            author: "YiboVibe Built-in".to_string(),
             min_trigger_chars: 2,
             dict_type: "builtin".to_string(),
             entries: vec![
@@ -244,7 +244,7 @@ pub fn init_and_load_dictionaries() {
             name: "Docker 指令".to_string(),
             description: "Docker 及 Compose 常用部署指令".to_string(),
             version: "1.0".to_string(),
-            author: "YiboFlow Built-in".to_string(),
+            author: "YiboVibe Built-in".to_string(),
             min_trigger_chars: 2,
             dict_type: "builtin".to_string(),
             entries: vec![

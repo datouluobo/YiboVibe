@@ -1,6 +1,6 @@
 # YiboFlow 服务端更新方法
 
-更新时间：2026-05-05
+更新时间：2026-05-11
 
 ## 1. 适用范围
 
@@ -88,6 +88,27 @@
 - `GATE_PORT` 与外部端口映射一致，默认 `11434`
 - `YIBOFLOW_API_IMAGE` 应明确指向目标版本，而不是长期盲跟未知镜像
 
+## 6.1 镜像与容器命名约定
+
+统一规则：
+
+- Docker Hub 仓库固定为 `datouluobo/yiboflow-server`
+- 发布时推两个标签：`<version>` 与 `latest`
+- 本机与 NAS 的实际运行镜像只使用明确版本号，例如 `datouluobo/yiboflow-server:0.9.3`
+- 本机与 NAS 不长期保留 `latest`
+- 本机与 NAS 不长期保留 `server-api:*`、`yiboflow-server:local-*` 这类本地别名
+- Compose 容器名固定为：
+  - `yiboflow_api`
+  - `yiboflow_ai_gate`
+  - `yiboflow_db`
+  - `yiboflow_redis`
+
+操作原则：
+
+- 统一从 `server/docker-compose.yml` 所在目录执行更新
+- 不通过 UI 复制或临时新建容器来更新服务端
+- 如果容器名出现 `8d52..._yiboflow_api` 这类随机前缀，说明更新路径偏离了标准 Compose 方式
+
 ## 7. 网关配置要求
 
 当前 `Caddyfile` 的正确状态应为：
@@ -127,20 +148,21 @@
 如果使用已发布镜像：
 
 ```powershell
-docker compose pull
-docker compose up -d
+docker pull datouluobo/yiboflow-server:0.9.3
+$env:YIBOFLOW_API_IMAGE='datouluobo/yiboflow-server:0.9.3'
+docker compose up -d api
 ```
 
-如果使用本地最新源码构建镜像：
+如果仅做临时本地验证，可以先从源码构建：
 
 ```powershell
-docker build -t yiboflow-server:local-2026-05-05 .
+docker build -t datouluobo/yiboflow-server:0.9.3 .
 ```
 
-然后临时指定镜像并更新 `api` 容器：
+然后用同一个版本号更新 `api` 容器：
 
 ```powershell
-$env:YIBOFLOW_API_IMAGE='yiboflow-server:local-2026-05-05'
+$env:YIBOFLOW_API_IMAGE='datouluobo/yiboflow-server:0.9.3'
 docker compose up -d api
 ```
 
@@ -158,7 +180,17 @@ Remove-Item Env:YIBOFLOW_API_IMAGE
 docker compose build api
 ```
 
-因为 `api` 服务当前没有 `build:` 段，默认更新路径是拉取镜像，或先手动 `docker build` 再通过 `YIBOFLOW_API_IMAGE` 切换。
+因为 `api` 服务当前没有 `build:` 段，默认更新路径是拉取版本镜像，或先手动 `docker build` 出同名版本标签再通过 `YIBOFLOW_API_IMAGE` 切换。
+
+### 8.5 更新后的清理
+
+更新完成并确认无误后，清理原则如下：
+
+- 本机与 NAS 只保留当前运行中的版本号镜像
+- 删除旧的 `yiboflow-server:local-*`
+- 删除旧的 `server-api:*`
+- 删除本机/NAS 上的 `datouluobo/yiboflow-server:latest`
+- Docker Hub 远端保留 `latest` 与当前版本号，旧版本标签按需删除
 
 ## 9. 更新后验证
 
@@ -178,6 +210,13 @@ docker compose build api
 ```powershell
 docker compose ps
 ```
+
+预期容器名固定为：
+
+- `yiboflow_api`
+- `yiboflow_ai_gate`
+- `yiboflow_db`
+- `yiboflow_redis`
 
 ```powershell
 docker compose logs api --tail=200

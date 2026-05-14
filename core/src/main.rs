@@ -5,14 +5,14 @@ use tray_icon::{
     Icon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem},
 };
-use yiboflow_core::{api, clipboard, crypto, dictionary, hook_manager, ws};
+use yibovibe_core::{api, clipboard, crypto, dictionary, hook_manager, ws};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    info!("Starting YiboFlow Core Engine...");
+    info!("Starting YiboVibe Core Engine...");
 
-    // 初始化本地词库引擎
+    // 初始化本地词库引�?
     dictionary::init_and_load_dictionaries();
 
     // Start Global Keyboard Hook Daemon
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoopBuilder::new().build();
 
     let tray_menu = Menu::new();
-    let quit_i = MenuItem::new("Quit YiboFlow Core", true, None);
+    let quit_i = MenuItem::new("Quit YiboVibe Core", true, None);
     let config_i = MenuItem::new("Connect to NAS & Test Mode", true, None);
     tray_menu.append_items(&[&config_i, &quit_i]).unwrap();
 
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
-        .with_tooltip("YiboFlow Core Engine")
+        .with_tooltip("YiboVibe Core Engine")
         .with_icon(icon)
         .build()
         .unwrap();

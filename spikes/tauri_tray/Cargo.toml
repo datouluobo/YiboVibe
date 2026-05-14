@@ -1,9 +1,0 @@
-[package]
-name = "tauri_tray_prototype"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Simulated tauri minimal dependencies. We use tray-icon instead of real tauri for raw process checking.
-tray-icon = "0.14.3"
-tao = "0.30.0" # Windowing library used by tauri under the hood

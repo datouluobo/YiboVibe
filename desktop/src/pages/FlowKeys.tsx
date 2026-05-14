@@ -22,8 +22,8 @@ function genId(prefix: string) {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-const STORAGE_KEY = "yiboflow_key_profiles";
-const ACTIVE_KEY = "yiboflow_key_active_profile";
+const STORAGE_KEY = "yibovibe_key_profiles";
+const ACTIVE_KEY = "yibovibe_key_active_profile";
 
 function loadProfiles(): Profile[] {
     try {

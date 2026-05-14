@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-TITLE YiboFlow Debug
+TITLE YiboVibe Debug
 cd /d "%~dp0"
 
 set "NODE_EXE="
@@ -21,7 +21,7 @@ if not exist "%TAURI_CLI_JS%" (
 )
 
 taskkill /F /IM tauri-app.exe /T 2>nul
-taskkill /F /IM YiboFlow.exe /T 2>nul
+taskkill /F /IM YiboVibe.exe /T 2>nul
 
 :: Kill any leftover node processes holding port 1420
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :1420 ^| findstr LISTENING') do (

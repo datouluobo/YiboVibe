@@ -4,7 +4,7 @@
 *.log
 *.txt
 *.exe
-yiboflow_server_linux
+yibovibe_server_linux
 backend_out.txt
 build.log
 err.txt

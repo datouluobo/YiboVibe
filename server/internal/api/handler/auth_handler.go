@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/datouluobo/YiboFlow/server/internal/service"
+	"github.com/datouluobo/YiboVibe/server/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 )

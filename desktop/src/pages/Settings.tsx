@@ -33,7 +33,7 @@ export default function Settings() {
     };
 
     useEffect(() => {
-        const theme = localStorage.getItem('yiboflow_theme') || 'dark';
+        const theme = localStorage.getItem('yibovibe_theme') || 'dark';
         setCurrentTheme(theme);
         fetchConfig();
 
@@ -54,9 +54,9 @@ export default function Settings() {
     const [alertDialog, setAlertDialog] = useState<{ isOpen: boolean, message: string, type: 'info' | 'error' | 'success' }>({ isOpen: false, message: "", type: 'info' });
 
     const handleVaultAction = async (action: string) => {
-        const serverUrl = localStorage.getItem('yiboflow_server_url');
-        const username = localStorage.getItem('yiboflow_username');
-        const savedPwdB64 = localStorage.getItem('yiboflow_saved_pwd');
+        const serverUrl = localStorage.getItem('yibovibe_server_url');
+        const username = localStorage.getItem('yibovibe_username');
+        const savedPwdB64 = localStorage.getItem('yibovibe_saved_pwd');
 
         if (!serverUrl || serverUrl === 'local' || !username || !savedPwdB64) {
             setAlertDialog({
@@ -106,8 +106,8 @@ export default function Settings() {
     const handleExport = async () => {
         try {
             const destPath = await save({
-                title: "导出 YiboFlow 配置",
-                filters: [{ name: "YiboFlow Backup", extensions: ["ybflow"] }]
+                title: "导出 YiboVibe 配置",
+                filters: [{ name: "YiboVibe Backup", extensions: ["yvb"] }]
             });
             if (destPath) {
                 await invoke("export_config", { destPath });
@@ -126,9 +126,9 @@ export default function Settings() {
     const handleImport = async () => {
         try {
             const srcPath = await open({
-                title: "导入 YiboFlow 配置",
+                title: "导入 YiboVibe 配置",
                 multiple: false,
-                filters: [{ name: "YiboFlow Backup", extensions: ["ybflow"] }]
+                filters: [{ name: "YiboVibe Backup", extensions: ["yvb"] }]
             });
             if (srcPath && !Array.isArray(srcPath)) {
                 setConfirmDialog({
@@ -161,7 +161,7 @@ export default function Settings() {
 
     const handleThemeChange = (themeId: string) => {
         setCurrentTheme(themeId);
-        localStorage.setItem('yiboflow_theme', themeId);
+        localStorage.setItem('yibovibe_theme', themeId);
         document.documentElement.setAttribute('data-theme', themeId);
         // Sync to other windows
         import("@tauri-apps/api/event").then(({ emit }) => {
@@ -769,7 +769,7 @@ export default function Settings() {
                         className="btn-outline"
                         style={{ padding: '10px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
-                        {syncLoading ? "执行中..." : "🗜️ 整理碎片冗余 (Compact)"}
+                        {syncLoading ? "执行中..." : "整理碎片冗余 (Compact)"}
                     </button>
                     <button
                         onClick={() => handleVaultAction('push')}
@@ -777,7 +777,7 @@ export default function Settings() {
                         className="btn-danger-outline"
                         style={{ padding: '10px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid var(--color-danger)', color: 'var(--color-danger)', background: 'transparent' }}
                     >
-                        {syncLoading ? "执行中..." : "⬆️ 强制上传覆盖 (Force Push)"}
+                        {syncLoading ? "执行中..." : "强制上传覆盖 (Force Push)"}
                     </button>
                     <button
                         onClick={() => handleVaultAction('pull')}
@@ -785,7 +785,7 @@ export default function Settings() {
                         className="btn-danger-outline"
                         style={{ padding: '10px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid var(--color-warning)', color: 'var(--color-warning)', background: 'transparent' }}
                     >
-                        {syncLoading ? "执行中..." : "⬇️ 强制下载覆盖 (Force Pull)"}
+                        {syncLoading ? "执行中..." : "强制下载覆盖 (Force Pull)"}
                     </button>
                 </div>
             </div>
@@ -839,7 +839,7 @@ export default function Settings() {
                     </button>
                 </div>
                 <p style={{ marginTop: '16px', fontSize: '12px', color: 'var(--color-text-dim)', lineHeight: 1.5 }}>
-                    💡 提示：如果您通过“直接复制配置文件夹”的方式在另一台电脑部署了 YiboFlow，可能导致两台电脑拥有相同的指纹，从而无法同时被云端识别。点击重置后，两台电脑即可在仪表盘中互相看见。
+                    提示：如果您通过“直接复制配置文件夹”的方式在另一台电脑部署了 YiboVibe，可能导致两台电脑拥有相同的指纹，从而无法同时被云端识别。点击重置后，两台电脑即可在仪表盘中互相看见。
                 </p>
             </div>
             )}

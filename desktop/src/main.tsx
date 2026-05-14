@@ -4,7 +4,7 @@ import "./index.css";
 import App from "./App";
 import "./i18n";
 
-const savedTheme = localStorage.getItem('yiboflow_theme') || 'dark';
+const savedTheme = localStorage.getItem('yibovibe_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
 
 document.addEventListener("contextmenu", (e) => {

@@ -9,7 +9,7 @@ node_modules/
 *.txt
 *.exe
 .env
-/server/yiboflow_server_linux
+/server/yibovibe_server_linux
 /start_debug.bat
 /git_log.txt
 /git_status.txt

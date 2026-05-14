@@ -351,7 +351,7 @@ pub async fn start_flow_entry_send(
                 .to_string_lossy()
                 .to_string()
         });
-    let temp_root = std::env::temp_dir().join("yiboflow-flowsync");
+    let temp_root = std::env::temp_dir().join("yibovibe-flowsync");
     fs::create_dir_all(&temp_root).map_err(|e| {
         format!(
             "Failed to create temp transfer dir {}: {}",

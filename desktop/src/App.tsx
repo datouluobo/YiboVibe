@@ -15,6 +15,10 @@ const FlowInfo = lazy(() => import("./pages/FlowInfo"));
 const FlowKeys = lazy(() => import("./pages/FlowKeys"));
 const HintWindow = lazy(() => import("./pages/HintWindow"));
 const Admin = lazy(() => import("./pages/Admin"));
+const VibeConsole = lazy(() => import('./pages/VibeConsole'));
+const Agents = lazy(() => import('./pages/Agents'));
+const Sessions = lazy(() => import('./pages/Sessions'));
+const Resources = lazy(() => import('./pages/Resources'));
 
 import "./App.css";
 
@@ -38,7 +42,7 @@ function App() {
   const lastClickRef = useRef({ time: 0, x: 0, y: 0 });
 
   useEffect(() => {
-    const theme = localStorage.getItem('yiboflow_theme') || 'dark';
+    const theme = localStorage.getItem('yibovibe_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', theme);
   }, []);
 
@@ -80,7 +84,7 @@ function App() {
           className="titlebar"
           onMouseDown={handleTitlebarMouseDown}
         >
-          <span className="titlebar-title">YiboFlow</span>
+          <span className="titlebar-title">YiboVibe</span>
           <div className="titlebar-controls">
             <button
               className="titlebar-button minimize"
@@ -112,7 +116,11 @@ function App() {
             <Route path="/" element={<Login />} />
             <Route path="/hint" element={<Suspense fallback={<PageFallback />}><HintWindow /></Suspense>} />
             <Route path="/app" element={<Layout />}>
-              <Route index element={<Navigate to="/app/flowdeck" replace />} />
+              <Route index element={<Navigate to="/app/console" replace />} />
+              <Route path="console" element={<Suspense fallback={<PageFallback />}><VibeConsole /></Suspense>} />
+              <Route path="agents" element={<Suspense fallback={<PageFallback />}><Agents /></Suspense>} />
+              <Route path="sessions" element={<Suspense fallback={<PageFallback />}><Sessions /></Suspense>} />
+              <Route path="resources" element={<Suspense fallback={<PageFallback />}><Resources /></Suspense>} />
               <Route path="flowdeck" element={<Suspense fallback={<PageFallback />}><FlowDeck /></Suspense>} />
               <Route path="flowmind" element={<Suspense fallback={<PageFallback />}><FlowMind /></Suspense>} />
               <Route path="flowsync" element={<Suspense fallback={<PageFallback />}><FlowSync /></Suspense>} />

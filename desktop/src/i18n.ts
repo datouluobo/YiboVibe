@@ -13,7 +13,7 @@ const resources = {
     }
 };
 
-const savedLang = localStorage.getItem('yiboflow_lang') || 'zh';
+const savedLang = localStorage.getItem('yibovibe_lang') || 'zh';
 
 i18n
     .use(initReactI18next)

@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/datouluobo/YiboFlow/server/internal/model"
-	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
-	"github.com/datouluobo/YiboFlow/server/internal/pkg/utils"
-	"github.com/datouluobo/YiboFlow/server/internal/repo"
+	"github.com/datouluobo/YiboVibe/server/internal/model"
+	"github.com/datouluobo/YiboVibe/server/internal/pkg/config"
+	"github.com/datouluobo/YiboVibe/server/internal/pkg/utils"
+	"github.com/datouluobo/YiboVibe/server/internal/repo"
 )
 
 var (

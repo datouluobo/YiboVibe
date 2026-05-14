@@ -49,9 +49,9 @@ fn resolve_dev_instance_dir(base: &PathBuf) -> Option<PathBuf> {
     Some(path)
 }
 
-/// Helper to get the base `%APPDATA%/YiboFlow` global dir
-pub fn get_yiboflow_global_dir() -> PathBuf {
-    if let Ok(val) = std::env::var("YIBOFLOW_DATA_DIR") {
+/// Helper to get the base `%APPDATA%/YiboVibe` global dir
+pub fn get_yibovibe_global_dir() -> PathBuf {
+    if let Ok(val) = std::env::var("YIBOVIBE_DATA_DIR") {
         let path = PathBuf::from(val);
         if !path.exists() {
             let _ = fs::create_dir_all(&path);
@@ -60,7 +60,7 @@ pub fn get_yiboflow_global_dir() -> PathBuf {
     }
 
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("./"));
-    path.push("YiboFlow");
+    path.push("YiboVibe");
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
     }
@@ -75,9 +75,9 @@ pub fn get_yiboflow_global_dir() -> PathBuf {
     path
 }
 
-/// Helper to get the current `%APPDATA%/YiboFlow/users/<username>` active dir
+/// Helper to get the current `%APPDATA%/YiboVibe/users/<username>` active dir
 pub fn get_active_user_dir() -> PathBuf {
-    let base = get_yiboflow_global_dir();
+    let base = get_yibovibe_global_dir();
     let user_lock = ACTIVE_USER.read().unwrap();
     if let Some(ref username) = *user_lock {
         let mut path = base;
@@ -101,7 +101,7 @@ pub fn get_active_user_dir() -> PathBuf {
 }
 
 pub fn load_session() {
-    let mut path = get_yiboflow_global_dir();
+    let mut path = get_yibovibe_global_dir();
     path.push("last_session.json");
     if path.exists()
         && let Ok(content) = fs::read_to_string(&path)
@@ -117,7 +117,7 @@ pub fn save_session(username: String) {
     info!("[Session] Setting active user: {}", username);
     *ACTIVE_USER.write().unwrap() = Some(username.clone());
 
-    let mut path = get_yiboflow_global_dir();
+    let mut path = get_yibovibe_global_dir();
     path.push("last_session.json");
     let config = SessionConfig {
         last_username: Some(username),
@@ -136,7 +136,7 @@ pub fn clear_session() {
     info!("[Session] Clearing active user");
     *ACTIVE_USER.write().unwrap() = None;
 
-    let mut path = get_yiboflow_global_dir();
+    let mut path = get_yibovibe_global_dir();
     path.push("last_session.json");
     let config = SessionConfig {
         last_username: None,
@@ -151,7 +151,7 @@ pub fn clear_session() {
 }
 
 pub fn get_users_config_path() -> PathBuf {
-    let mut path = get_yiboflow_global_dir();
+    let mut path = get_yibovibe_global_dir();
     path.push("users.json");
     path
 }
@@ -227,7 +227,7 @@ pub fn rename_local_user(old_username: &str, new_username: &str) -> Result<bool,
     }
 
     // Rename the directory
-    let base = get_yiboflow_global_dir();
+    let base = get_yibovibe_global_dir();
     let old_safe_name = old_username.replace(|c: char| !c.is_alphanumeric(), "_");
     let new_safe_name = new_username.replace(|c: char| !c.is_alphanumeric(), "_");
 

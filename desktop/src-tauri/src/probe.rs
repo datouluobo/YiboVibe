@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use yiboflow_core::config::{
+use yibovibe_core::config::{
     AppConfig, ProbeCredential, ProbeProtocol, ProbeProxyConfig, ProbeRoute, ProbeRouteKind,
     GLOBAL_CONFIG,
 };

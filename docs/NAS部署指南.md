@@ -22,8 +22,8 @@ docker compose version
 推荐直接使用仓库里的 `server/` 目录：
 
 ```bash
-git clone https://github.com/datouluobo/YiboFlow.git
-cd YiboFlow/server
+git clone https://github.com/datouluobo/YiboVibe.git
+cd YiboVibe/server
 ```
 
 如果是上传部署包，也应保证最终目录里至少包含：
@@ -50,7 +50,7 @@ POSTGRES_DB=yiboflow
 REDIS_PASSWORD=change_me_redis_password
 GIN_MODE=release
 GATE_PORT=11434
-YIBOFLOW_API_IMAGE=datouluobo/yiboflow-server:latest
+YIBOVIBE_API_IMAGE=datouluobo/yibovibe-server:latest
 ```
 
 必须修改：
@@ -61,7 +61,7 @@ YIBOFLOW_API_IMAGE=datouluobo/yiboflow-server:latest
 按需修改：
 
 - `GATE_PORT`
-- `YIBOFLOW_API_IMAGE`
+- `YIBOVIBE_API_IMAGE`
 
 ## 4. 启动服务
 
@@ -73,10 +73,10 @@ docker compose up -d
 
 启动后应有 4 个容器：
 
-- `yiboflow_api`
-- `yiboflow_ai_gate`
-- `yiboflow_db`
-- `yiboflow_redis`
+- `yibovibe_api`
+- `yibovibe_ai_gate`
+- `yibovibe_db`
+- `yibovibe_redis`
 
 查看状态：
 

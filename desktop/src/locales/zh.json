@@ -3,6 +3,8 @@
         "with_code": "{{message}}（{{code}}）"
     },
     "nav": {
+        "console": "控制台",
+        "tooltip_console": "Vibe Coding 控制台 - 终端与会话枢纽",
         "flowdeck": "总览",
         "flowmind": "灵思",
         "flowsync": "烽火",
@@ -19,13 +21,13 @@
         "tooltip_flowprobe_relay": "本机兼容接口、当前转发目标与调用统计",
         "tooltip_flowrules": "按应用精细控制每个功能模块的生效范围",
         "tooltip_settings": "主题、语言与全局偏好配置",
-        "tooltip_flowinfo": "关于 YiboFlow 的版本与信息",
+        "tooltip_flowinfo": "关于 YiboVibe 的版本与信息",
         "tooltip_flowkeys": "键盘按键重映射与快捷键配置",
         "admin": "管理",
         "tooltip_admin": "管理员用户管理与设备管理"
     },
     "login": {
-        "title_login": "登录 YiboFlow",
+        "title_login": "登录 YiboVibe",
         "subtitle_login": "输入主密码解锁您的加密缩略语库。",
         "title_register": "初始化新身份",
         "subtitle_register": "创建一个受零知识证明保护的新账户。",
@@ -188,7 +190,6 @@
         "editor_back": "返回",
         "editor_bind_apps": "绑定应用"
     },
-
     "flowrules": {
         "title": "规则 · FlowRules",
         "subtitle": "按应用精细控制每个功能模块的生效策略。",
@@ -381,7 +382,7 @@
         "diag_runtime_fp": "运行时指纹",
         "diag_yes": "是",
         "diag_no": "否"
-      },
+    },
     "flowprobe_sources": {
         "title": "FlowProbe 接入",
         "subtitle": "管理上游 API 资产、测试连通性并维护可用模型。",
@@ -405,7 +406,7 @@
     },
     "flowinfo": {
         "title": "关于 · FlowInfo",
-        "subtitle": "关于 YiboFlow 的一切",
+        "subtitle": "关于 YiboVibe 的一切",
         "hero_desc": "跨设备加密剪贴板同步与智能输入增强平台",
         "feat_e2ee": "端到端加密",
         "feat_speed": "快速同步",

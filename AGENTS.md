@@ -2,16 +2,16 @@
 
 ## 项目定位
 
-YiboFlow 当前是桌面优先的本地生产力工具：
+YiboVibe 当前是桌面优先的本地生产力工具：
 
 - `core/`：Rust 共享能力层
 - `desktop/`：Tauri + React 桌面端
 - `server/`：登录、认证、设备管理、配置保存与同步
-- `YiboFlow-Mobile/`：移动端骨架，当前不应视为完整实现
+- `YiboVibe-Mobile/`：移动端骨架，当前不应视为完整实现
 
 ## 当前产品边界
 
-当前应按 [docs/specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md) 理解产品范围。
+当前应按 [docs/specs.md](/F:/Download/GitHub/YiboVibe/docs/specs.md) 理解产品范围。
 
 保留模块：
 
@@ -37,7 +37,7 @@ YiboFlow 当前是桌面优先的本地生产力工具：
 - `desktop/src/pages/`：桌面产品页面
 - `desktop/src/components/FlowKeys/`：键位映射相关复杂 UI
 - `desktop/src-tauri/`：桌面原生桥接
-- `server/cmd/yiboflow/main.go`：服务端入口
+- `server/cmd/yibovibe/main.go`：服务端入口
 - `server/internal/`：handler、service、repo、ws 等后端实现
 - `docs/`：规格、分析、部署文档
 
@@ -58,6 +58,6 @@ YiboFlow 当前是桌面优先的本地生产力工具：
 
 ## 常用验证
 
-- `cargo check -p yiboflow-core`
+- `cargo check -p yibovibe-core`
 - `cargo check -p tauri-app`
 - `cd desktop && npm run build`

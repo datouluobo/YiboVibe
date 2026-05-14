@@ -1,4 +1,4 @@
-module github.com/datouluobo/YiboFlow/server
+module github.com/datouluobo/YiboVibe/server
 
 go 1.25.0
 
