@@ -1,0 +1,33 @@
+/* Vibe Console - xterm dark theme overrides */
+
+.vibe-console-terminal .xterm {
+  padding: 0;
+  height: 100%;
+  font-variant-ligatures: none;
+}
+
+.vibe-console-terminal .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+.vibe-console-terminal .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.vibe-console-terminal .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vibe-console-terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+
+.vibe-console-terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}
+
+.vibe-console-terminal:focus {
+  outline: none;
+}
