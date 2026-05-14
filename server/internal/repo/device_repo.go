@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/datouluobo/YiboFlow/server/internal/model"
-	"github.com/datouluobo/YiboFlow/server/internal/pkg/config"
+	"github.com/datouluobo/YiboVibe/server/internal/model"
+	"github.com/datouluobo/YiboVibe/server/internal/pkg/config"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

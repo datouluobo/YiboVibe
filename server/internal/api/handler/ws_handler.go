@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
-	"github.com/datouluobo/YiboFlow/server/internal/ws"
+	"github.com/datouluobo/YiboVibe/server/internal/api/middleware"
+	"github.com/datouluobo/YiboVibe/server/internal/ws"
 	"github.com/gin-gonic/gin"
 )
 

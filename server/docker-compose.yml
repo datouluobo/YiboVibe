@@ -1,7 +1,7 @@
 services:
   api:
-    image: ${YIBOFLOW_API_IMAGE:-datouluobo/yiboflow-server:latest}
-    container_name: yiboflow_api
+    image: ${YIBOVIBE_API_IMAGE:-datouluobo/yibovibe-server:latest}
+    container_name: yibovibe_api
     restart: unless-stopped
     environment:
       DB_DSN: host=db user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} port=5432 sslmode=disable TimeZone=Asia/Shanghai
@@ -17,11 +17,11 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - yiboflow_net
+      - yibovibe_net
 
   ai_gateway:
     image: caddy:latest
-    container_name: yiboflow_ai_gate
+    container_name: yibovibe_ai_gate
     restart: unless-stopped
     ports:
       - "${GATE_PORT:-11434}:11434"
@@ -30,11 +30,11 @@ services:
     depends_on:
       - api
     networks:
-      - yiboflow_net
+      - yibovibe_net
 
   db:
     image: postgres:15-alpine
-    container_name: yiboflow_db
+    container_name: yibovibe_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -49,11 +49,11 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - yiboflow_net
+      - yibovibe_net
 
   redis:
     image: redis:7-alpine
-    container_name: yiboflow_redis
+    container_name: yibovibe_redis
     command: redis-server --requirepass ${REDIS_PASSWORD}
     volumes:
       - redisdata:/data
@@ -64,7 +64,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - yiboflow_net
+      - yibovibe_net
 
 volumes:
   pgdata:
@@ -72,5 +72,5 @@ volumes:
   vaultdata:
 
 networks:
-  yiboflow_net:
+  yibovibe_net:
     driver: bridge

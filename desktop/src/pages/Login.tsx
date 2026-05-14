@@ -10,19 +10,19 @@ export default function Login() {
     const navigate = useNavigate();
     const { t } = useTranslation();
     const [serverUrl, setServerUrl] = useState(() => {
-        const hist = localStorage.getItem('yiboflow_server_url_history');
+        const hist = localStorage.getItem('yibovibe_server_url_history');
         if (hist) {
             try {
                 const parsed = JSON.parse(hist);
                 if (parsed.length > 0) return parsed[0];
             } catch { }
         }
-        return localStorage.getItem('yiboflow_server_url') || "http://127.0.0.1:8080";
+        return localStorage.getItem('yibovibe_server_url') || "http://127.0.0.1:8080";
     });
 
     // History dropdown state
     const [urlHistory, setUrlHistory] = useState<string[]>(() => {
-        const hist = localStorage.getItem('yiboflow_server_url_history');
+        const hist = localStorage.getItem('yibovibe_server_url_history');
         if (hist) {
             try { return JSON.parse(hist); } catch { }
         }
@@ -41,16 +41,16 @@ export default function Login() {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    const [username, setUsername] = useState(() => localStorage.getItem('yiboflow_username') || "admin");
-    const [rememberPwd, setRememberPwd] = useState(() => localStorage.getItem('yiboflow_remember_pwd') === 'true');
-    const [autoLogin, setAutoLogin] = useState(() => localStorage.getItem('yiboflow_auto_login') === 'true');
+    const [username, setUsername] = useState(() => localStorage.getItem('yibovibe_username') || "admin");
+    const [rememberPwd, setRememberPwd] = useState(() => localStorage.getItem('yibovibe_remember_pwd') === 'true');
+    const [autoLogin, setAutoLogin] = useState(() => localStorage.getItem('yibovibe_auto_login') === 'true');
     const [password, setPassword] = useState(() => {
-        if (localStorage.getItem('yiboflow_remember_pwd') === 'true') {
-            try { return atob(localStorage.getItem('yiboflow_saved_pwd') || ""); } catch { return ""; }
+        if (localStorage.getItem('yibovibe_remember_pwd') === 'true') {
+            try { return atob(localStorage.getItem('yibovibe_saved_pwd') || ""); } catch { return ""; }
         }
         return "";
     });
-    const [deviceName, setDeviceName] = useState(() => localStorage.getItem('yiboflow_device_name') || "Sim-PC-1");
+    const [deviceName, setDeviceName] = useState(() => localStorage.getItem('yibovibe_device_name') || "Sim-PC-1");
     const [passwordHint, setPasswordHint] = useState("");
     const [loginHint, setLoginHint] = useState<{ attempts: number; hint: string } | null>(null);
     const [loading, setLoading] = useState(false);
@@ -64,7 +64,7 @@ export default function Login() {
 
     useEffect(() => {
         // Auto-login on mount if enabled
-        const shouldAuto = localStorage.getItem('yiboflow_auto_login') === 'true';
+        const shouldAuto = localStorage.getItem('yibovibe_auto_login') === 'true';
         if (shouldAuto && username && password && !isRegistering) {
             // Briefly wait to ensure translations/context are ready if needed
             const timer = setTimeout(() => {
@@ -78,7 +78,7 @@ export default function Login() {
     const updateHistory = (url: string) => {
         const updated = [url, ...urlHistory.filter(h => h !== url)].slice(0, 5);
         setUrlHistory(updated);
-        localStorage.setItem('yiboflow_server_url_history', JSON.stringify(updated));
+        localStorage.setItem('yibovibe_server_url_history', JSON.stringify(updated));
     };
 
     const handleAuth = async (e: React.FormEvent) => {
@@ -124,23 +124,23 @@ export default function Login() {
                 });
 
                 if (result.success) {
-                    localStorage.setItem('yiboflow_server_url', serverUrl);
-                    localStorage.setItem('yiboflow_username', username);
-                    localStorage.setItem('yiboflow_device_name', deviceName);
-                    localStorage.setItem('yiboflow_connected_at', new Date().toISOString());
-                    localStorage.setItem('yiboflow_user_role', result.role);
+                    localStorage.setItem('yibovibe_server_url', serverUrl);
+                    localStorage.setItem('yibovibe_username', username);
+                    localStorage.setItem('yibovibe_device_name', deviceName);
+                    localStorage.setItem('yibovibe_connected_at', new Date().toISOString());
+                    localStorage.setItem('yibovibe_user_role', result.role);
                     if (rememberPwd) {
-                        localStorage.setItem('yiboflow_remember_pwd', 'true');
-                        localStorage.setItem('yiboflow_saved_pwd', btoa(password));
+                        localStorage.setItem('yibovibe_remember_pwd', 'true');
+                        localStorage.setItem('yibovibe_saved_pwd', btoa(password));
                         if (autoLogin) {
-                            localStorage.setItem('yiboflow_auto_login', 'true');
+                            localStorage.setItem('yibovibe_auto_login', 'true');
                         } else {
-                            localStorage.removeItem('yiboflow_auto_login');
+                            localStorage.removeItem('yibovibe_auto_login');
                         }
                     } else {
-                        localStorage.removeItem('yiboflow_remember_pwd');
-                        localStorage.removeItem('yiboflow_saved_pwd');
-                        localStorage.removeItem('yiboflow_auto_login');
+                        localStorage.removeItem('yibovibe_remember_pwd');
+                        localStorage.removeItem('yibovibe_saved_pwd');
+                        localStorage.removeItem('yibovibe_auto_login');
                     }
                     updateHistory(serverUrl);
                     navigate("/app");
@@ -503,7 +503,7 @@ export default function Login() {
                                                 setUsername(renameValue);
                                                 setShowConflictModal(false);
                                                 setSuccessMsg(t("login.rename_success"));
-                                                localStorage.setItem('yiboflow_username', renameValue);
+                                                localStorage.setItem('yibovibe_username', renameValue);
                                             }
                                         } catch (e) {
                                             setErrorMsg(formatOperationError(t, "AUTH_RENAME_LOCAL_FAILED", "login.error_rename_failed", { detail: String(e) }));
@@ -587,12 +587,12 @@ export default function Login() {
                                         password
                                     });
                                     // Once resolved successfully, navigate through
-                                    localStorage.setItem('yiboflow_server_url', serverUrl);
-                                    localStorage.setItem('yiboflow_username', username);
-                                    localStorage.setItem('yiboflow_connected_at', new Date().toISOString());
+                                    localStorage.setItem('yibovibe_server_url', serverUrl);
+                                    localStorage.setItem('yibovibe_username', username);
+                                    localStorage.setItem('yibovibe_connected_at', new Date().toISOString());
                                     if (rememberPwd) {
-                                        localStorage.setItem('yiboflow_remember_pwd', 'true');
-                                        localStorage.setItem('yiboflow_saved_pwd', btoa(password));
+                                        localStorage.setItem('yibovibe_remember_pwd', 'true');
+                                        localStorage.setItem('yibovibe_saved_pwd', btoa(password));
                                     }
                                     updateHistory(serverUrl);
                                     setLoading(false);

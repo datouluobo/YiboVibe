@@ -211,7 +211,7 @@ impl ClipboardMonitor {
             unsafe {
                 let instance =
                     windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
-                let class_name_str = "YiboFlowClipboardListener\0";
+                let class_name_str = "YiboVibeClipboardListener\0";
                 let class_name_u16: Vec<u16> = class_name_str.encode_utf16().collect();
 
                 let wnd_class = WNDCLASSW {

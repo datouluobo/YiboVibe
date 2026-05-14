@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
-	"github.com/datouluobo/YiboFlow/server/internal/service"
+	"github.com/datouluobo/YiboVibe/server/internal/api/middleware"
+	"github.com/datouluobo/YiboVibe/server/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -204,7 +204,7 @@ func AdminDeleteUserVault(c *gin.Context) {
 
 	vaultDir := os.Getenv("VAULT_DATA_DIR")
 	if vaultDir == "" {
-		vaultDir = filepath.Join(os.TempDir(), "yiboflow_vault")
+		vaultDir = filepath.Join(os.TempDir(), "yibovibe_vault")
 	}
 
 	userVaultDir := filepath.Join(vaultDir, fmt.Sprintf("%d", uid))

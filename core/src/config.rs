@@ -214,6 +214,8 @@ pub struct AppConfig {
     pub hint_window: WindowConfig,
     #[serde(default)]
     pub is_window_config_unified: bool,
+    #[serde(default = "default_terminal_shell")]
+    pub terminal_default_shell: String,
     #[serde(default)]
     pub cache: CacheConfig,
 }
@@ -232,6 +234,10 @@ fn default_empty_string() -> String {
 
 fn default_fingerprint() -> String {
     stable_device_fingerprint()
+}
+
+fn default_terminal_shell() -> String {
+    "cmd".to_string()
 }
 
 fn default_probe_timeout() -> u64 {
@@ -491,7 +497,7 @@ fn ensure_probe_defaults(config: &mut AppConfig) -> bool {
 fn stable_device_fingerprint() -> String {
     let mut seed_parts = Vec::new();
 
-    if let Ok(value) = std::env::var("YIBOFLOW_MACHINE_FINGERPRINT") {
+    if let Ok(value) = std::env::var("YIBOVIBE_MACHINE_FINGERPRINT") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             seed_parts.push(format!("env:{trimmed}"));
@@ -637,6 +643,7 @@ impl AppConfig {
             device_fingerprint: default_fingerprint(),
             hint_window: WindowConfig::default(),
             is_window_config_unified: false,
+            terminal_default_shell: default_terminal_shell(),
             cache: CacheConfig::default(),
         };
         cfg.save();

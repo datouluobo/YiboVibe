@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/datouluobo/YiboFlow/server/internal/model"
-	"github.com/datouluobo/YiboFlow/server/internal/repo"
+	"github.com/datouluobo/YiboVibe/server/internal/model"
+	"github.com/datouluobo/YiboVibe/server/internal/repo"
 )
 
 var (
@@ -483,10 +483,10 @@ func maybeRunStagingGC() error {
 }
 
 func resolveStagingDir() string {
-	if v := os.Getenv("YIBOFLOW_STAGING_DIR"); v != "" {
+	if v := os.Getenv("YIBOVIBE_STAGING_DIR"); v != "" {
 		return v
 	}
-	return filepath.Join(os.TempDir(), "yiboflow_staging")
+	return filepath.Join(os.TempDir(), "yibovibe_staging")
 }
 
 func generateStageID() (string, error) {

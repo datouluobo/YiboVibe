@@ -1,4 +1,4 @@
-package utils
+﻿package utils
 
 import (
 	"crypto/rand"
@@ -43,7 +43,7 @@ func GenerateAccessToken(uid, deviceId uint, role, status string) (string, error
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "yiboflow",
+			Issuer: "yibovibe",
 		},
 	}
 
@@ -80,3 +80,4 @@ func ParseAccessToken(tokenStr string) (*CustomClaims, error) {
 
 	return nil, errors.New("invalid token")
 }
+

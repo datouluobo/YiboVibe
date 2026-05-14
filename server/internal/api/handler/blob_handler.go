@@ -13,7 +13,7 @@ import (
 
 const maxBlobSize = 50 * 1024 * 1024 // 50 MB limit
 
-var storageDir = filepath.Join(os.TempDir(), "yiboflow_blobs")
+var storageDir = filepath.Join(os.TempDir(), "yibovibe_blobs")
 
 func init() {
 	_ = os.MkdirAll(storageDir, 0755)

@@ -3,6 +3,9 @@ package ws
 import (
 	"log"
 	"sync"
+
+	"github.com/datouluobo/YiboVibe/server/internal/relay"
+	"github.com/datouluobo/YiboVibe/server/internal/session"
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the
@@ -11,6 +14,18 @@ type Hub struct {
 	// Registered clients split by UID to quickly broadcast to user's devices
 	// uid -> deviceId -> *Client
 	Clients map[uint]map[uint]*Client
+
+	// Session store for active session metadata
+	Sessions *session.SessionStore
+
+	// Command relay for inter-device routing
+	Rly *relay.Relay
+
+	// Heartbeat relay channel
+	Heartbeat chan *relay.RelayMessage
+
+	// Alert relay channel
+	Alert chan *relay.RelayMessage
 
 	// Locks for safely mutating Clients
 	Mu sync.RWMutex
@@ -35,16 +50,37 @@ type Message struct {
 }
 
 func NewHub() *Hub {
+	sessStore := session.NewSessionStore()
+	rly := relay.NewRelay()
 	return &Hub{
 		Broadcast:  make(chan *Message),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Clients:    make(map[uint]map[uint]*Client),
+		Sessions:   sessStore,
+		Rly:        rly,
+		Heartbeat:  make(chan *relay.RelayMessage, 256),
+		Alert:      make(chan *relay.RelayMessage, 64),
 	}
 }
 
 func (h *Hub) Run() {
-	log.Println("WebSocket Hub started.")
+	log.Println("WebSocket Hub started (Signal+Session mode).")
+	go h.Rly.Run()
+	// Heartbeat relay consumer
+	go func() {
+		for msg := range h.Heartbeat {
+			h.routeSignalMessage(msg)
+		}
+	}()
+	// Alert relay consumer
+	go func() {
+		for msg := range h.Alert {
+			log.Printf("[SignalHub] Alert: type=%s session=%s", msg.Type, msg.SessionID)
+			h.routeSignalMessage(msg)
+		}
+	}()
+
 	for {
 		select {
 		case client := <-h.Register:
@@ -123,6 +159,52 @@ func (h *Hub) Run() {
 				}
 				h.Mu.Unlock()
 			}
+		}
+	}
+}
+
+func (h *Hub) routeSignalMessage(msg *relay.RelayMessage) {
+	// Route a signal message to the target device or all user's devices
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+
+	// Determine target UID
+	targetUID := msg.TargetUID
+	if targetUID == 0 {
+		targetUID = msg.SenderUID
+	}
+
+	devices, hasUser := h.Clients[targetUID]
+	if !hasUser {
+		log.Printf("[SignalHub] No active clients for UID %d, dropping signal", targetUID)
+		return
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		log.Printf("[SignalHub] Failed to marshal signal: %v", err)
+		return
+	}
+
+	wsMsg := &Message{
+		SenderUID:      msg.SenderUID,
+		SenderDeviceID: msg.SenderDev,
+		Type:           string(msg.Type),
+		Payload:        string(data),
+	}
+
+	for did, client := range devices {
+		if msg.TargetDev > 0 && did != msg.TargetDev {
+			continue
+		}
+		if did == msg.SenderDev && msg.TargetDev == 0 {
+			// Skip sender unless explicitly targeted
+			continue
+		}
+		select {
+		case client.Send <- wsMsg:
+		default:
+			log.Printf("[SignalHub] Client buffer full for UID %d Dev %d", targetUID, did)
 		}
 	}
 }

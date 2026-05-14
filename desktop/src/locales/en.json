@@ -3,6 +3,8 @@
         "with_code": "{{message}} ({{code}})"
     },
     "nav": {
+        "console": "Console",
+        "tooltip_console": "Vibe Coding console - terminal and session hub",
         "flowdeck": "FlowDeck",
         "flowmind": "FlowMind",
         "flowsync": "FlowSync",
@@ -19,13 +21,13 @@
         "tooltip_flowprobe_relay": "Manage local compatible endpoints, current relay targets, and usage stats",
         "tooltip_flowrules": "Per-app fine-grained control over all modules",
         "tooltip_settings": "Theme, language and global preferences",
-        "tooltip_flowinfo": "About YiboFlow — version, credits & info",
+        "tooltip_flowinfo": "About YiboVibe — version, credits & info",
         "tooltip_flowkeys": "Keyboard key remapping and shortcut configuration",
         "admin": "Admin",
         "tooltip_admin": "User and device management for administrators"
     },
     "login": {
-        "title_login": "Login to YiboFlow",
+        "title_login": "Login to YiboVibe",
         "subtitle_login": "Enter your Master Password to unlock encrypted snippets.",
         "title_register": "Initialize New Account",
         "subtitle_register": "Creating a new Zero-Knowledge encrypted identity.",
@@ -188,7 +190,6 @@
         "editor_back": "Back",
         "editor_bind_apps": "Bind Applications"
     },
-
     "flowrules": {
         "title": "FlowRules",
         "subtitle": "Per-app fine-grained control for every feature module.",
@@ -380,7 +381,7 @@
         "diag_runtime_fp": "Runtime Fingerprint",
         "diag_yes": "Yes",
         "diag_no": "No"
-      },
+    },
     "flowprobe_sources": {
         "title": "FlowProbe Sources",
         "subtitle": "Manage upstream API assets, connectivity checks, and available models.",
@@ -404,7 +405,7 @@
     },
     "flowinfo": {
         "title": "FlowInfo",
-        "subtitle": "Everything about YiboFlow",
+        "subtitle": "Everything about YiboVibe",
         "hero_desc": "Cross-device encrypted clipboard sync & smart input enhancement",
         "feat_e2ee": "End-to-End Encrypted",
         "feat_speed": "Fast Sync",

@@ -1,8 +1,8 @@
 # FlowProbe IDE 兼容矩阵
 
-更新日期：2026-05-08
+更新日期：2026-05-11
 
-本文档用于说明 `FlowProbe` 作为本机 `OpenAI-compatible / Anthropic-compatible` 代理时，各类 AI IDE 或编码助手对“本机 / 局域网 provider 直连”的支持情况。
+本文档用于说明 `FlowProbe` 作为本机 `OpenAI-compatible / Anthropic-compatible` 固定中转入口时，各类 AI IDE 或编码助手对“本机 / 局域网 provider 直连”的支持情况。
 
 `FlowProbe` 当前对外推荐的固定模型别名为：
 
@@ -10,6 +10,11 @@
 - `flowprobe-anthropic`
 
 支持模型发现的客户端也可以直接从 `FlowProbe` 的 `/models` 接口拉取这两个别名。
+
+当前产品结构中：
+
+- `接入` 页负责上游 API 资产管理、测试、模型池与目标指派
+- `转发` 页负责监听地址、本地 token、固定入口与调用统计
 
 ## WSL / 容器 / 虚拟机场景
 

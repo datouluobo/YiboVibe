@@ -1,4 +1,4 @@
-package handler
+﻿package handler
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
-	"github.com/datouluobo/YiboFlow/server/internal/model"
-	"github.com/datouluobo/YiboFlow/server/internal/service"
+	"github.com/datouluobo/YiboVibe/server/internal/api/middleware"
+	"github.com/datouluobo/YiboVibe/server/internal/model"
+	"github.com/datouluobo/YiboVibe/server/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -246,8 +246,8 @@ func DownloadStagedObject(c *gin.Context) {
 		return
 	}
 	c.Header("Content-Type", "application/octet-stream")
-	c.Header("X-YiboFlow-Stage-ID", object.ID)
-	c.Header("X-YiboFlow-Stage-Kind", object.Kind)
+	c.Header("X-YiboVibe-Stage-ID", object.ID)
+	c.Header("X-YiboVibe-Stage-Kind", object.Kind)
 	c.File(object.StoragePath)
 }
 
@@ -313,11 +313,12 @@ func DownloadSharedObject(c *gin.Context) {
 	}
 	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
-	c.Header("X-YiboFlow-Share-Link-ID", fmt.Sprintf("%d", link.ID))
-	c.Header("X-YiboFlow-Stage-ID", object.ID)
+	c.Header("X-YiboVibe-Share-Link-ID", fmt.Sprintf("%d", link.ID))
+	c.Header("X-YiboVibe-Stage-ID", object.ID)
 	if err := service.MarkShareLinkDownloaded(link); err != nil {
 		respondStageError(c, err)
 		return
 	}
 	c.File(object.StoragePath)
 }
+

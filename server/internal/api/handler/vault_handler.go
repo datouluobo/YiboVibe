@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
+	"github.com/datouluobo/YiboVibe/server/internal/api/middleware"
 )
 
 // Use a persistent storage path. In Docker, this maps to a volume mount.
@@ -19,7 +19,7 @@ var vaultStorageDir = func() string {
 	if dir := os.Getenv("VAULT_DATA_DIR"); dir != "" {
 		return dir
 	}
-	return filepath.Join(os.TempDir(), "yiboflow_vault")
+	return filepath.Join(os.TempDir(), "yibovibe_vault")
 }()
 
 func init() {

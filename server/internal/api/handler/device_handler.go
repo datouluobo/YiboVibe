@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/datouluobo/YiboFlow/server/internal/api/middleware"
-	"github.com/datouluobo/YiboFlow/server/internal/repo"
-	"github.com/datouluobo/YiboFlow/server/internal/ws"
+	"github.com/datouluobo/YiboVibe/server/internal/api/middleware"
+	"github.com/datouluobo/YiboVibe/server/internal/repo"
+	"github.com/datouluobo/YiboVibe/server/internal/ws"
 	"github.com/gin-gonic/gin"
 )
 

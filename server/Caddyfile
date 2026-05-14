@@ -1,16 +1,16 @@
 :11434 {
     # 同步服务分流：探测到路径包含 /api/ 则直接转发给后端服务
     handle /api/* {
-        reverse_proxy yiboflow_api:8080
+        reverse_proxy yibovibe_api:8080
     }
 
     # NAS 外链下载入口
     handle /share/* {
-        reverse_proxy yiboflow_api:8080
+        reverse_proxy yibovibe_api:8080
     }
 
     # 兜底处理 (防止误访问其他路径)
     handle {
-        respond "YiboFlow Sync Gateway is Active" 200
+        respond "YiboVibe Sync Gateway is Active" 200
     }
 }

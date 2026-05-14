@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-    LayoutDashboard, Sparkles,
-    Flame, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield, Database, ArrowRightLeft
+    LayoutDashboard, Flame, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield, Database,
+    ArrowRightLeft, Monitor, Sparkles
 } from "lucide-react";
 
 interface NavItem {
@@ -18,20 +18,21 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-    // Group 1: Dashboard
+    // Group 1: Vibe Coding Console (前置)
+    { id: "console", path: "/app/console", icon: Monitor, labelKey: "nav.console", tooltipKey: "nav.tooltip_console" },
+
+    // Group 2: Dashboard
     { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
-
-    // Group 2: Core Features
     { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
-    { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
-    { id: "flowkeys", path: "/app/flowkeys", icon: Keyboard, labelKey: "nav.flowkeys", tooltipKey: "nav.tooltip_flowkeys" },
 
-    // Group 3: Tools
+    // Group 3: Capability Layer (原有模块继续存在)
     { id: "flowprobe-sources", path: "/app/flowprobe-sources", icon: Database, labelKey: "nav.flowprobe_sources", tooltipKey: "nav.tooltip_flowprobe_sources" },
     { id: "flowprobe-relay", path: "/app/flowprobe-relay", icon: ArrowRightLeft, labelKey: "nav.flowprobe_relay", tooltipKey: "nav.tooltip_flowprobe_relay" },
+    { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
+    { id: "flowkeys", path: "/app/flowkeys", icon: Keyboard, labelKey: "nav.flowkeys", tooltipKey: "nav.tooltip_flowkeys" },
+    { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
 
     // Group 4: System
-    { id: "flowrules", path: "/app/flowrules", icon: ShieldCheck, labelKey: "nav.flowrules", tooltipKey: "nav.tooltip_flowrules" },
     { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
 ];
 
@@ -47,7 +48,7 @@ export default function Layout() {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const location = useLocation();
-    const [userRole, setUserRole] = useState(() => localStorage.getItem('yiboflow_user_role') || 'user');
+    const [userRole, setUserRole] = useState(() => localStorage.getItem('yibovibe_user_role') || 'user');
     const isAdmin = userRole === 'admin';
 
     useEffect(() => {
@@ -59,10 +60,10 @@ export default function Layout() {
                 if (!mounted) return;
                 const normalizedRole = role || "user";
                 setUserRole(normalizedRole);
-                localStorage.setItem('yiboflow_user_role', normalizedRole);
+                localStorage.setItem('yibovibe_user_role', normalizedRole);
             } catch {
                 if (!mounted) return;
-                const fallbackRole = localStorage.getItem('yiboflow_user_role') || 'user';
+                const fallbackRole = localStorage.getItem('yibovibe_user_role') || 'user';
                 setUserRole(fallbackRole);
             }
         };
@@ -85,11 +86,11 @@ export default function Layout() {
             // Keep client logout resilient even if native state reset fails.
         }
 
-        localStorage.removeItem('yiboflow_server_url');
-        localStorage.removeItem('yiboflow_username');
-        localStorage.removeItem('yiboflow_connected_at');
-        localStorage.removeItem('yiboflow_auto_login');
-        localStorage.removeItem('yiboflow_user_role');
+        localStorage.removeItem('yibovibe_server_url');
+        localStorage.removeItem('yibovibe_username');
+        localStorage.removeItem('yibovibe_connected_at');
+        localStorage.removeItem('yibovibe_auto_login');
+        localStorage.removeItem('yibovibe_user_role');
         setUserRole('user');
         navigate("/");
     }, [navigate]);
@@ -109,7 +110,7 @@ export default function Layout() {
                     letterSpacing: '0.5px'
                 }}>
                     <LayoutDashboard size={20} color="var(--color-primary)" />
-                    YiboFlow
+                    YiboVibe
                 </div>
 
                 {/* Nav Items */}
@@ -117,7 +118,7 @@ export default function Layout() {
                     {navItems.map((item, idx) => {
                         const isActive = location.pathname === item.path;
                         // Insert divider between groups
-                        const groupDividers = [1, 4, 6]; // before these indices
+                        const groupDividers = [2, 7]; // before these indices
                         const showDivider = groupDividers.includes(idx);
                         return (
                             <div key={item.id}>

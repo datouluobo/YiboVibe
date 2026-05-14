@@ -43,7 +43,7 @@ export default function FlowInfo() {
                     <Zap size={32} color="var(--color-primary)" />
                 </div>
                 <h2 style={{ margin: '0 0 4px', fontSize: '24px', fontWeight: 700, letterSpacing: '0.5px' }}>
-                    YiboFlow
+                    YiboVibe
                 </h2>
                 <p style={{ color: 'var(--color-text-muted)', fontSize: '13px', margin: '0 0 16px' }}>
                     {t('flowinfo.hero_desc')}
@@ -117,7 +117,7 @@ export default function FlowInfo() {
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {[
-                        { label: 'GitHub', url: 'https://github.com/user/yiboflow' },
+                        { label: 'GitHub', url: 'https://github.com/datouluobo/YiboVibe' },
                         { label: t('flowinfo.link_docs'), url: '#' },
                         { label: t('flowinfo.link_feedback'), url: '#' },
                     ].map((link, i) => (
@@ -143,10 +143,10 @@ export default function FlowInfo() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
                     color: 'var(--color-text-dim)', fontSize: '12px', margin: 0
                 }}>
-                    {t('flowinfo.made_with')} <Heart size={12} color="#ef4444" fill="#ef4444" /> YiboFlow Team
+                    {t('flowinfo.made_with')} <Heart size={12} color="#ef4444" fill="#ef4444" /> YiboVibe Team
                 </p>
                 <p style={{ color: 'var(--color-text-dim)', fontSize: '11px', marginTop: '6px', opacity: 0.6 }}>
-                    &copy; {new Date().getFullYear()} YiboFlow. {t('flowinfo.copyright')}
+                    &copy; {new Date().getFullYear()} YiboVibe. {t('flowinfo.copyright')}
                 </p>
             </div>
         </div>

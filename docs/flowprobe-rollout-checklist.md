@@ -1,15 +1,18 @@
 # FlowProbe 收口上线清单
 
-更新时间：2026-05-09
+更新时间：2026-05-11
 
 ## 1. 目标
 
-本次上线目标是把 AI 相关能力收口为 `FlowProbe` 本机直连测试工具，并让服务端职责回归：
+本次上线目标是把 AI 相关能力收口为 `FlowProbe` 本机 API 资产管理与固定中转工具，并让服务端职责回归：
 
 - 登录
 - 认证
-- 配置保存
-- 配置同步
+- 设备会话
+- Vault / 配置保存
+- Vault / 配置同步
+- WebSocket 通知
+- `FlowSync` NAS 暂存 / 外链
 
 ## 2. 必须更新的组件
 
@@ -18,6 +21,7 @@
 必须更新桌面客户端。原因：
 
 - `FlowProbe` 页面和交互已重做
+- `FlowProbe` 已拆分为 `接入` / `转发` 两页
 - Tauri 命令集已替换
 - AI 配置结构已改成 `probe_tool`
 - 新增了本机密钥存储与直连测试逻辑
@@ -57,13 +61,24 @@
 - 构建通过：`npm run build`
 - Rust 核心检查通过：`cargo check -p yiboflow-core`
 - Tauri 检查通过：`cargo check -p tauri-app`
-- `FlowProbe` 可新增测试目标
+- `FlowProbe 接入` 页可新增测试目标
+- `FlowProbe 接入` 页修改表单后自动保存
+- `FlowProbe 接入` 页包含 API 详情、模型池与诊断日志
+- `FlowProbe 接入` 页可将当前 API 设为 `OpenAI` / `Anthropic` 目标
 - `FlowProbe` 可直接测试：
   - OpenAI Compatible
   - Ollama
   - Gemini OpenAI Compatible
   - Anthropic
   - Custom
+- `FlowProbe 转发` 页可查看并复制：
+  - OpenAI 本机入口
+  - Anthropic 本机入口
+  - 本地 Token
+- `FlowProbe 转发` 页可切换监听地址：
+  - `127.0.0.1`
+  - `0.0.0.0`
+  - 自定义主机 IP
 - 测试结果正确输出：
   - `code`
   - `summary`
@@ -109,6 +124,8 @@
 6. 在 Sources 页面拉取模型后，刷新页面仍能看到相同模型列表。
 7. 将 `collect_usage` 关闭后，调用代理接口不会继续累加近期活动和统计。
 8. 将 `is_enabled` 关闭并保存后，已运行的 Probe 会停止，且不能再次启动直到重新启用。
+9. `FlowProbe 接入` 页默认模型可从模型池直接点击回填，并可复制。
+10. `FlowProbe 转发` 页的 OpenAI / Anthropic 固定别名分别为 `flowprobe-openai` 与 `flowprobe-anthropic`。
 
 ## 7. 上线后观察项
 

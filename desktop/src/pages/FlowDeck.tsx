@@ -200,12 +200,12 @@ export default function FlowDeck() {
     const [dictionaryCount, setDictionaryCount] = useState(0);
     const [runtimeDeviceName, setRuntimeDeviceName] = useState<string | null>(null);
 
-    const serverUrl = localStorage.getItem("yiboflow_server_url") || "";
-    const username = localStorage.getItem("yiboflow_username") || "";
-    const savedPwdB64 = localStorage.getItem("yiboflow_saved_pwd") || "";
-    const currentDeviceName = runtimeDeviceName || localStorage.getItem("yiboflow_device_name") || t("flowdeck.unknown_device");
-    const connectedAt = localStorage.getItem("yiboflow_connected_at");
-    const userRole = localStorage.getItem("yiboflow_user_role") || "user";
+    const serverUrl = localStorage.getItem("yibovibe_server_url") || "";
+    const username = localStorage.getItem("yibovibe_username") || "";
+    const savedPwdB64 = localStorage.getItem("yibovibe_saved_pwd") || "";
+    const currentDeviceName = runtimeDeviceName || localStorage.getItem("yibovibe_device_name") || t("flowdeck.unknown_device");
+    const connectedAt = localStorage.getItem("yibovibe_connected_at");
+    const userRole = localStorage.getItem("yibovibe_user_role") || "user";
     const isRemote = !!serverUrl && serverUrl !== "local";
     const rememberPassword = !!savedPwdB64;
 
@@ -313,7 +313,7 @@ export default function FlowDeck() {
 
     const keyProfiles = useMemo(() => {
         try {
-            const raw = localStorage.getItem("yiboflow_key_profiles");
+            const raw = localStorage.getItem("yibovibe_key_profiles");
             const parsed = raw ? JSON.parse(raw) : [];
             return Array.isArray(parsed) ? parsed : [];
         } catch {
