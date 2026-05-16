@@ -1,0 +1,28 @@
+name: yibovibe_mobile
+description: "YiboVibe Mobile - Remote Console for Vibe Coding Tools"
+publish_to: 'none'
+version: 0.2.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  web_socket_channel: ^3.0.2
+  provider: ^6.1.4
+  shared_preferences: ^2.3.5
+  intl: ^0.20.2
+  http: ^1.3.0
+  json_annotation: ^4.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  json_serializable: ^6.9.2
+  build_runner: ^2.4.15
+
+flutter:
+  uses-material-design: true
