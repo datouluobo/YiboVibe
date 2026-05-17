@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -9,21 +10,18 @@ import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 强制竖屏
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
-
-  // 沉浸式状态栏
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    systemNavigationBarColor: AppTheme.bgSecondary,
-    systemNavigationBarIconBrightness: Brightness.light,
-  ));
-
+  if (!kIsWeb) {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: AppTheme.bgSecondary,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ));
+  }
   runApp(const YiboVibeApp());
 }
 
@@ -44,13 +42,29 @@ class YiboVibeApp extends StatelessWidget {
         title: 'YiboVibe Mobile',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
+        builder: kIsWeb ? _webFrameBuilder : null,
         home: const _AuthGate(),
       ),
     );
   }
 }
 
-/// 认证网关 — 自动登录或跳到登录页
+/// Web 宽度限制: 居中显示在桌面浏览器，模拟手机屏幕
+Widget _webFrameBuilder(BuildContext context, Widget? child) {
+  return Material(
+    color: const Color(0xFF1A1A1E),
+    child: Center(
+      child: ClipRRect(
+        child: SizedBox(
+          width: 420,
+          child: child,
+        ),
+      ),
+    ),
+  );
+}
+
+/// 认证网关
 class _AuthGate extends StatefulWidget {
   const _AuthGate();
 
@@ -70,9 +84,7 @@ class _AuthGateState extends State<_AuthGate> {
   Future<void> _tryAutoLogin() async {
     final auth = context.read<AuthProvider>();
     await auth.tryAutoLogin();
-    if (mounted) {
-      setState(() => _checking = false);
-    }
+    if (mounted) setState(() => _checking = false);
   }
 
   @override
@@ -84,8 +96,7 @@ class _AuthGateState extends State<_AuthGate> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.developer_mode,
-                  size: 48, color: AppTheme.brandPurpleLight),
+              Icon(Icons.developer_mode, size: 48, color: AppTheme.brandPurpleLight),
               SizedBox(height: 16),
               Text('YiboVibe',
                   style: TextStyle(
@@ -106,12 +117,9 @@ class _AuthGateState extends State<_AuthGate> {
         ),
       );
     }
-
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
-        if (auth.isLoggedIn) {
-          return const ConsolePage();
-        }
+        if (auth.isLoggedIn) return const ConsolePage();
         return const LoginPage();
       },
     );
