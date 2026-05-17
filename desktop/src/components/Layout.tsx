@@ -17,15 +17,15 @@ interface NavItem {
     group?: string;
 }
 
-const NAV_ITEMS: NavItem[] = [
-    // Group 1: Vibe Coding Console (前置)
+const BASE_NAV: NavItem[] = [
+    // Group 1: Vibe Coding Console
     { id: "console", path: "/app/console", icon: Monitor, labelKey: "nav.console", tooltipKey: "nav.tooltip_console" },
 
     // Group 2: Dashboard
     { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
     { id: "flowmind", path: "/app/flowmind", icon: Sparkles, labelKey: "nav.flowmind", tooltipKey: "nav.tooltip_flowmind" },
 
-    // Group 3: Capability Layer (原有模块继续存在)
+    // Group 3: Capability Layer
     { id: "flowprobe-sources", path: "/app/flowprobe-sources", icon: Database, labelKey: "nav.flowprobe_sources", tooltipKey: "nav.tooltip_flowprobe_sources" },
     { id: "flowprobe-relay", path: "/app/flowprobe-relay", icon: ArrowRightLeft, labelKey: "nav.flowprobe_relay", tooltipKey: "nav.tooltip_flowprobe_relay" },
     { id: "flowsync", path: "/app/flowsync", icon: Flame, labelKey: "nav.flowsync", tooltipKey: "nav.tooltip_flowsync" },
@@ -36,11 +36,11 @@ const NAV_ITEMS: NavItem[] = [
     { id: "settings", path: "/app/settings", icon: Settings, labelKey: "nav.settings", tooltipKey: "nav.tooltip_settings" },
 ];
 
-const ADMIN_NAV_ITEM: NavItem = {
+const ADMIN_ITEM: NavItem = {
     id: "admin", path: "/app/admin", icon: Shield, labelKey: "nav.admin", tooltipKey: "nav.tooltip_admin"
 };
 
-const FLOWINFO_NAV_ITEM: NavItem = {
+const FLOWINFO_ITEM: NavItem = {
     id: "flowinfo", path: "/app/flowinfo", icon: BookOpen, labelKey: "nav.flowinfo", tooltipKey: "nav.tooltip_flowinfo"
 };
 
@@ -75,8 +75,8 @@ export default function Layout() {
     }, []);
 
     const navItems = useMemo(() => {
-        if (!isAdmin) return [...NAV_ITEMS, FLOWINFO_NAV_ITEM];
-        return [...NAV_ITEMS, ADMIN_NAV_ITEM, FLOWINFO_NAV_ITEM];
+        if (!isAdmin) return [...BASE_NAV, FLOWINFO_ITEM];
+        return [...BASE_NAV, ADMIN_ITEM, FLOWINFO_ITEM];
     }, [isAdmin]);
 
     const handleLogout = useCallback(async () => {
@@ -117,7 +117,7 @@ export default function Layout() {
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', padding: '0 12px', overflowY: 'auto' }}>
                     {navItems.map((item, idx) => {
                         const isActive = location.pathname === item.path;
-                        // Insert divider between groups
+                        // groupDividers 基于 BASE_NAV 末尾索引
                         const groupDividers = [2, 7]; // before these indices
                         const showDivider = groupDividers.includes(idx);
                         return (

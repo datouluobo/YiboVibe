@@ -1,76 +1,108 @@
-# YiboFlow 服务端更新方法
+# YiboVibe 服务端更新指南
 
-更新时间：2026-05-11
+更新时间：2026-05-14
 
 ## 1. 适用范围
 
-本文档用于更新当前 `server/` 目录下的服务端部署，包括：
+本文档用于更新当前仓库 `server/` 目录下的服务端部署，覆盖：
 
-- Go 后端镜像
+- Go API 服务
 - Caddy 网关
 - PostgreSQL
 - Redis
-- Docker Compose 部署
+- Docker Compose 栈
 
 适用场景：
 
 - 本机联调
-- NAS 上的 Docker 部署
-- 预发布 / 正式更新
+- NAS 上的 Docker/Compose 部署
+- 修复后快速替换线上容器
 
-## 2. 当前服务端边界
+如果在 Windows 桌面环境执行本机构建、导出镜像或 Compose 更新命令，先手动启动 `Docker Desktop`，并确认它已经进入运行状态。
 
-当前服务端负责：
+## 2. 当前更新策略
 
-- 用户注册、登录、认证
-- Token 刷新
-- 设备管理
-- Vault / 配置读写
-- WebSocket 通知
-- `FlowSync` 的 NAS 暂存与外链下载
+当前日常更新默认不要走下面这条路径：
 
-当前服务端不负责：
+- 本机构建
+- 推送 Docker Hub
+- 等待 NAS `docker pull`
 
-- 第三方 AI API 网关
-- `FlowProbe` 代理调用
+原因：
+
+- Hub 新标签在 NAS 上可能延迟可见
+- `latest` 容易掩盖版本差异
+- 紧急修复时回路太长
+
+当前默认主路径只保留两条：
+
+1. 本机把最新源码同步到 NAS，然后在 NAS 本地构建并更新
+2. 本机先构建镜像并导出 tar，再把 tar 传到 NAS 导入并更新
+3. 当怀疑本地旧镜像或本地联调状态影响判断时，先在本机删除本轮构建产物，再强制全新构建后传到 NAS 更新
+
+Docker Hub 发布只保留给正式对外发版，不作为默认修复流程。
+
+## 2.1 镜像命名约定
+
+当前统一保留两类命名：
+
+- 日期标签：用于日常调试、修复验证、临时镜像
+- 版本号标签：用于正式发布、对外分发、稳定归档
+
+示例：
+
+- 日常调试：`yibovibe-server:local-2026-05-14`
+- 日常调试重建：`yibovibe-server:local-2026-05-14-clean`
+- 正式发布：`datouluobo/yibovibe-server:0.9.5`
+
+规则：
+
+- 本机与 NAS 日常更新优先使用日期标签
+- Docker Hub 发布优先使用版本号标签
+- `latest` 只作为附加发布标签，不作为日常修复默认依据
 
 ## 3. 更新前确认
 
-更新前先确认以下事项：
+更新前先确认：
 
-1. 客户端与服务端版本边界一致。
-2. 线上不再依赖旧的 AI 代理入口。
-3. 现有 `.env` 中数据库与 Redis 密码可用。
-4. 已知晓当前更新会影响 `FlowSync` 的 NAS 暂存 / 外链能力。
+1. 客户端与服务端边界一致。
+2. `.env` 中数据库和 Redis 密码仍然有效。
+3. 当前更新会影响登录、WebSocket、配置同步或 `FlowSync` 能力时，已安排验证时间。
+4. 已准备好 NAS 上的回滚点或卷快照。
+5. 如果在 Windows 本机执行 `docker build`、`docker save` 或 `docker compose`，`Docker Desktop` 已启动且 Engine running。
 
 ## 4. 关键文件
 
-更新服务端时，优先关注这些文件：
+优先关注：
 
-- [server/docker-compose.yml](/F:/Download/GitHub/YiboFlow/server/docker-compose.yml)
-- [server/Dockerfile](/F:/Download/GitHub/YiboFlow/server/Dockerfile)
-- [server/Caddyfile](/F:/Download/GitHub/YiboFlow/server/Caddyfile)
-- [server/.env.example](/F:/Download/GitHub/YiboFlow/server/.env.example)
-- [server/cmd/yiboflow/main.go](/F:/Download/GitHub/YiboFlow/server/cmd/yiboflow/main.go)
-- [server/internal/model/staging.go](/F:/Download/GitHub/YiboFlow/server/internal/model/staging.go)
-- [server/internal/api/handler/staging_handler.go](/F:/Download/GitHub/YiboFlow/server/internal/api/handler/staging_handler.go)
+- [server/docker-compose.yml](/F:/Download/GitHub/YiboVibe/server/docker-compose.yml)
+- [server/Dockerfile](/F:/Download/GitHub/YiboVibe/server/Dockerfile)
+- [server/Caddyfile](/F:/Download/GitHub/YiboVibe/server/Caddyfile)
+- [server/.env.example](/F:/Download/GitHub/YiboVibe/server/.env.example)
+- [server/cmd/yibovibe/main.go](/F:/Download/GitHub/YiboVibe/server/cmd/yibovibe/main.go)
+- [server/internal/api/middleware/auth_middleware.go](/F:/Download/GitHub/YiboVibe/server/internal/api/middleware/auth_middleware.go)
+
+补充约定：
+
+- 每次服务端更新时，同步更新 [server/cmd/yibovibe/main.go](/F:/Download/GitHub/YiboVibe/server/cmd/yibovibe/main.go) 里的 `serverVersion`
+- `/api/v1/ping` 返回的 `version` 以 `serverVersion` 为准，用于判断 NAS 是否真的切到目标服务端版本
 
 ## 5. 更新前备份
 
-更新前至少备份以下内容：
+至少备份：
 
-1. 当前 `server/.env`
-2. 当前 `server/Caddyfile`
-3. 当前 `server/docker-compose.yml`
-4. PostgreSQL 数据卷
-5. Redis 数据卷
-6. Vault 数据卷
+1. `server/.env`
+2. `server/Caddyfile`
+3. `server/docker-compose.yml`
+4. `pgdata`
+5. `redisdata`
+6. `vaultdata`
 
 如果运行在 NAS 上，优先做卷级快照或目录级快照。
 
 ## 6. 环境变量检查
 
-当前公开部署最基本的环境变量来自 `.env`：
+当前部署最关键的环境变量有：
 
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
@@ -78,220 +110,252 @@
 - `REDIS_PASSWORD`
 - `GIN_MODE`
 - `GATE_PORT`
-- `YIBOFLOW_API_IMAGE`
+- `YIBOVIBE_API_IMAGE`
 
 检查原则：
 
-- `POSTGRES_PASSWORD` 必须是有效值
-- `REDIS_PASSWORD` 必须是有效值
-- `GIN_MODE` 生产环境使用 `release`
-- `GATE_PORT` 与外部端口映射一致，默认 `11434`
-- `YIBOFLOW_API_IMAGE` 应明确指向目标版本，而不是长期盲跟未知镜像
-
-## 6.1 镜像与容器命名约定
-
-统一规则：
-
-- Docker Hub 仓库固定为 `datouluobo/yiboflow-server`
-- 发布时推两个标签：`<version>` 与 `latest`
-- 本机与 NAS 的实际运行镜像只使用明确版本号，例如 `datouluobo/yiboflow-server:0.9.3`
-- 本机与 NAS 不长期保留 `latest`
-- 本机与 NAS 不长期保留 `server-api:*`、`yiboflow-server:local-*` 这类本地别名
-- Compose 容器名固定为：
-  - `yiboflow_api`
-  - `yiboflow_ai_gate`
-  - `yiboflow_db`
-  - `yiboflow_redis`
-
-操作原则：
-
-- 统一从 `server/docker-compose.yml` 所在目录执行更新
-- 不通过 UI 复制或临时新建容器来更新服务端
-- 如果容器名出现 `8d52..._yiboflow_api` 这类随机前缀，说明更新路径偏离了标准 Compose 方式
+- `POSTGRES_PASSWORD` 必须有效
+- `REDIS_PASSWORD` 必须有效
+- 生产环境使用 `GIN_MODE=release`
+- `GATE_PORT` 与实际暴露端口一致
+- `YIBOVIBE_API_IMAGE` 必须指向本次准备上线的明确镜像名
 
 ## 7. 网关配置要求
 
-当前 `Caddyfile` 的正确状态应为：
+当前 `Caddyfile` 应满足：
 
-- 将 `/api/*` 反向代理到 `yiboflow_api:8080`
-- 将 `/share/*` 反向代理到 `yiboflow_api:8080`
+- `/api/*` 反向代理到 `yibovibe_api:8080`
+- `/share/*` 反向代理到 `yibovibe_api:8080`
 - 其它路径只做简单响应
 
-当前网关不应再包含：
+当前网关不应承担：
 
-- `/v1/*` AI 代理
-- Ollama 反向代理
-- 第三方模型 API 转发入口
+- 第三方模型 API 转发
+- Ollama 网关
+- AI 代理职责
 
-如果线上 `Caddyfile` 仍缺少 `/share/*` 转发，`FlowSync` 外链将无法被公网或局域网用户下载。
+## 8. 推荐更新路径 A
 
-## 8. Docker 更新步骤
+### 场景
 
-推荐在 `server/` 目录执行。
+- NAS 上已有最新源码
+- 或你可以把最新 `server/` 目录同步到 NAS
+- 希望在 NAS 本地构建
 
-### 8.1 拉取最新代码
+### 步骤
 
-确保当前服务端代码已更新到目标版本。
-
-### 8.2 检查配置文件
-
-确认：
-
-- `.env` 已存在且内容正确
-- `Caddyfile` 为当前版本
-- `docker-compose.yml` 与当前代码一致
-
-### 8.3 选择更新路径
-
-当前 Compose 的 `api` 服务默认走 `image:` 模式，不是 `build:` 模式。
-
-如果使用已发布镜像：
+在 NAS 的 `server/` 目录执行：
 
 ```powershell
-docker pull datouluobo/yiboflow-server:0.9.3
-$env:YIBOFLOW_API_IMAGE='datouluobo/yiboflow-server:0.9.3'
+docker build -t yibovibe-server:local-2026-05-14 .
+
+$env:YIBOVIBE_API_IMAGE='yibovibe-server:local-2026-05-14'
 docker compose up -d api
 ```
 
-如果仅做临时本地验证，可以先从源码构建：
+如果希望后续重启仍固定使用该镜像，把 `.env` 改成：
 
-```powershell
-docker build -t datouluobo/yiboflow-server:0.9.3 .
+```env
+YIBOVIBE_API_IMAGE=yibovibe-server:local-2026-05-14
 ```
 
-然后用同一个版本号更新 `api` 容器：
+然后再次执行：
 
 ```powershell
-$env:YIBOFLOW_API_IMAGE='datouluobo/yiboflow-server:0.9.3'
 docker compose up -d api
 ```
 
-更新完成后，如不希望当前 shell 保留该变量，可执行：
+### 优点
+
+- 更新闭环最短
+- 不依赖 Docker Hub 可见性
+- 最适合修复类更新
+
+## 9. 推荐更新路径 B
+
+### 场景
+
+- 不想在 NAS 上同步完整源码
+- 本机构建更方便
+- 只想把镜像结果传到 NAS
+
+### 步骤 1. 本机构建镜像
+
+先确认 `Docker Desktop` 已经启动。
+
+推荐先执行：
 
 ```powershell
-Remove-Item Env:YIBOFLOW_API_IMAGE
+docker version
 ```
 
-### 8.4 不要误用的命令
-
-当前这套 Compose 下，不应把下面命令当成默认更新方法：
+如果这里出现 `failed to connect to the docker API`、`dockerDesktopLinuxEngine` 或类似报错，先打开 `Docker Desktop`，等它进入运行状态后再继续。
 
 ```powershell
-docker compose build api
+cd F:\Download\GitHub\YiboVibe\server
+docker build -t yibovibe-server:local-2026-05-14 .
 ```
 
-因为 `api` 服务当前没有 `build:` 段，默认更新路径是拉取版本镜像，或先手动 `docker build` 出同名版本标签再通过 `YIBOFLOW_API_IMAGE` 切换。
+### 步骤 2. 本机导出镜像 tar
 
-### 8.5 更新后的清理
+```powershell
+docker save -o F:\Download\yibovibe-server-local-2026-05-14.tar yibovibe-server:local-2026-05-14
+```
 
-更新完成并确认无误后，清理原则如下：
+### 步骤 3. 把 tar 传到 NAS
 
-- 本机与 NAS 只保留当前运行中的版本号镜像
-- 删除旧的 `yiboflow-server:local-*`
-- 删除旧的 `server-api:*`
-- 删除本机/NAS 上的 `datouluobo/yiboflow-server:latest`
-- Docker Hub 远端保留 `latest` 与当前版本号，旧版本标签按需删除
+需要传输的文件：
 
-## 9. 更新后验证
+- `yibovibe-server-local-2026-05-14.tar`
 
-更新后至少验证以下内容：
+### 步骤 4. NAS 导入并更新
 
-1. `api` 容器正常启动
-2. `db` 容器健康检查通过
-3. `redis` 容器健康检查通过
-4. `/api/*` 请求可达
-5. `/share/*` 可达
-6. 登录、认证、设备、Vault 相关接口可用
-7. NAS 暂存与外链能力可用
-8. 不存在旧的 `/v1/*` AI 代理行为
+NAS shell 通常不是 PowerShell，请使用 Linux shell 写法：
 
-建议验证命令：
+```bash
+docker load -i /actual/path/yibovibe-server-local-2026-05-14.tar
+
+cd /actual/path/YiboVibe/server
+YIBOVIBE_API_IMAGE='yibovibe-server:local-2026-05-14' docker compose up -d api
+```
+
+如需固化，同样修改 `.env`：
+
+```env
+YIBOVIBE_API_IMAGE=yibovibe-server:local-2026-05-14
+```
+
+## 10. 推荐更新路径 C
+
+### 场景
+
+- 怀疑本地已有旧镜像导致误判
+- 本地 Compose / 数据库状态影响联调结果
+- 希望直接生成一份“全新重建”的镜像 tar 提交给 NAS
+
+### 步骤 1. 清理本地本轮构建产物
+
+```powershell
+cd F:\Download\GitHub\YiboVibe\server
+
+docker compose down -v
+docker image rm yibovibe-server:local-2026-05-14 -f
+docker image rm yibovibe-server:local-2026-05-14-wsfix -f
+```
+
+### 步骤 2. 强制全新构建
+
+```powershell
+docker build --no-cache --pull -t yibovibe-server:local-2026-05-14-clean .
+```
+
+### 步骤 3. 导出 tar
+
+```powershell
+docker save -o F:\Download\yibovibe-server-local-2026-05-14-clean.tar yibovibe-server:local-2026-05-14-clean
+```
+
+### 步骤 4. NAS 导入并更新
+
+```bash
+docker load -i /actual/path/yibovibe-server-local-2026-05-14-clean.tar
+
+cd /actual/path/YiboVibe/server
+YIBOVIBE_API_IMAGE='yibovibe-server:local-2026-05-14-clean' docker compose up -d api ai_gateway
+
+docker compose logs api --tail=120
+curl --noproxy '*' http://127.0.0.1:11434/api/v1/ping
+```
+
+如果返回：
+
+```json
+{"message":"pong","version":"server-2026-05-18-r1"}
+```
+
+则说明新镜像已在 NAS 生效。
+
+## 11. 不推荐作为默认更新路径的方案
+
+下面方案不要再当作修复类更新默认路径：
+
+```powershell
+docker pull datouluobo/yibovibe-server:latest
+docker compose up -d api
+```
+
+以及：
+
+```powershell
+docker push datouluobo/yibovibe-server:latest
+```
+
+再等待 NAS 上 `pull`。
+
+原因：
+
+- 传播延迟不可控
+- `latest` 不利于核对实际版本
+- 紧急修复时排障成本更高
+
+## 12. 更新后验证
+
+至少执行：
 
 ```powershell
 docker compose ps
-```
-
-预期容器名固定为：
-
-- `yiboflow_api`
-- `yiboflow_ai_gate`
-- `yiboflow_db`
-- `yiboflow_redis`
-
-```powershell
 docker compose logs api --tail=200
-```
-
-```powershell
-docker compose logs db --tail=100
-```
-
-```powershell
-docker compose logs redis --tail=100
-```
-
-```powershell
+docker compose logs ai_gateway --tail=100
 curl http://127.0.0.1:11434/
-```
-
-```powershell
 curl http://127.0.0.1:11434/api/v1/ping
 ```
 
-## 10. 与客户端联调的检查点
+如果有公网入口，再执行：
 
-服务端更新后，再联调客户端：
-
-1. 登录正常
-2. Token 刷新正常
-3. 配置保存正常
-4. 配置同步正常
-5. `FlowSync` 的 NAS 暂存可创建
-6. `FlowSync` 外链可生成
-7. `FlowSync` 外链可下载
-8. `FlowProbe` 的 API Key 没有被同步到服务端配置
-9. `FlowProbe` 已拉取模型列表只保存在桌面端本地配置，不依赖服务端保存
-10. `FlowProbe` 本机代理关闭后，不会通过服务端兜底转发第三方模型请求
-
-## 11. PostgreSQL 兼容性注意项
-
-当前 `FlowSync` NAS 暂存模型里，`manifest_json` 必须保持为 PostgreSQL 可接受的类型。
-
-本轮已经修正为：
-
-- [server/internal/model/staging.go](/F:/Download/GitHub/YiboFlow/server/internal/model/staging.go)
-  - `ManifestJSON string 'gorm:"type:text"'`
-
-如果线上代码仍是 `longtext`，服务启动建表会报：
-
-```text
-ERROR: type "longtext" does not exist (SQLSTATE 42704)
+```powershell
+curl https://your-domain:your-port/api/v1/ping
 ```
 
-## 12. 回滚方法
+如果是 WebSocket 相关修复，再补测：
 
-如果更新后出现问题，按以下顺序回滚：
+1. 移动端登录
+2. WebSocket 握手
+3. 会话列表拉取
+4. 指令下发
 
-1. 停止新容器
-2. 恢复上一个可用版本的镜像标签或本地镜像
-3. 恢复上一个可用版本的 `Caddyfile`
-4. 用原来的 `.env` 重新启动
-5. 如果问题涉及数据结构，再从快照恢复卷
+## 13. 与客户端联调检查点
+
+服务端更新后至少确认：
+
+1. 登录正常
+2. Token 鉴权正常
+3. WebSocket 握手正常
+4. 配置同步正常
+5. `FlowSync` 暂存正常
+6. `FlowSync` 外链可下载
+7. `FlowProbe` 不会误走服务端代理
+
+## 14. 回滚方法
+
+如果更新后出现问题：
+
+1. 停掉新 `api` 容器
+2. 切回上一个可用镜像名
+3. 恢复上一个可用 `.env`
+4. 必要时恢复 `Caddyfile`
+5. 如果涉及结构或数据问题，再从快照恢复卷
 
 最小回滚目标是先恢复：
 
-- 登录可用
-- 配置同步可用
-- WebSocket 可用
-- `/share/*` 外链下载可用
+- 登录
+- 鉴权
+- WebSocket
+- `FlowSync` 下载
 
-## 13. 当前版本的明确限制
+## 15. 注意事项
 
-当前服务端更新文档有三个明确前提：
-
-1. 不考虑兼容旧的 AI 网关行为。
-2. 不考虑为 `FlowProbe` 提供任何服务端代理支持。
-3. `FlowSync` 外链能力依赖网关正确放行 `/share/*`。
-4. `FlowProbe` 的模型资产、调用日志与费用统计都以桌面本机为准，不以服务端为准。
-
-如果未来重新引入新的网关职责，必须先更新 [docs/specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md)，再改此文档。
+- 统一从 `server/` 目录执行命令
+- 不通过 NAS 界面临时复制容器来更新
+- 不使用 `docker compose down -v` 作为常规更新命令
+- 遇到“本地已修但线上行为不变”时，先检查 `/api/v1/ping` 是否已反映新版本响应
+- 文档中的 `/actual/path/...` 只是占位符，执行前必须替换成 NAS 上的真实路径

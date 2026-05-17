@@ -129,7 +129,7 @@ class _UserBubble extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: AppTheme.brandPurple.withAlpha(40),
+          color: AppTheme.brand.withAlpha(40),
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(16),
             topRight: Radius.circular(4),
@@ -137,7 +137,7 @@ class _UserBubble extends StatelessWidget {
             bottomRight: Radius.circular(16),
           ),
           border: Border.all(
-              color: AppTheme.brandPurple.withAlpha(60)),
+              color: AppTheme.brand.withAlpha(60)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,

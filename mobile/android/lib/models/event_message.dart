@@ -3,6 +3,7 @@ enum EventType {
   userInput,
   terminalOutput,
   sessionState,
+  sessionListUpdate,
   promptRequest,
   resourceEvent,
   controlEvent,

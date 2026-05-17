@@ -1,13 +1,13 @@
-﻿use log::{info, warn};
+use log::{info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
+mod agent_bridge;
 mod probe;
 mod terminal;
-mod agent_bridge;
 
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
@@ -380,8 +380,7 @@ async fn connect_engine(
                     *runtime_username = Some(username.clone());
                     let mut runtime_device_name = state.runtime_device_name.lock().await;
                     *runtime_device_name = Some(device_name.clone());
-                    let mut runtime_remote_device_id =
-                        state.runtime_remote_device_id.lock().await;
+                    let mut runtime_remote_device_id = state.runtime_remote_device_id.lock().await;
                     *runtime_remote_device_id = Some(login_device_id);
                     let mut runtime_access_token = state.runtime_access_token.lock().await;
                     *runtime_access_token = Some(access_token.clone());
@@ -506,7 +505,17 @@ async fn connect_engine(
                             device_name.clone(),
                         );
                         cb_monitor.start_monitoring();
-                        cb_monitor.start_receiving(ws_rx);
+                        // Create broker to split WS stream: clipboard + remote session commands
+                        let (clipboard_tx, clipboard_rx) = tokio::sync::mpsc::channel(100);
+                        let sm_for_broker = state.session_manager.clone();
+                        spawn_ws_broker(
+                            ws_rx,
+                            clipboard_tx,
+                            ws_client.tx.clone(),
+                            sm_for_broker,
+                            app.clone(),
+                        );
+                        cb_monitor.start_receiving(clipboard_rx);
 
                         let mut connected_flag = state.is_connected.lock().await;
                         *connected_flag = true;
@@ -658,7 +667,9 @@ async fn test_probe_credential(
 }
 
 #[tauri::command]
-async fn test_probe_route(kind: yibovibe_core::config::ProbeRouteKind) -> Result<probe::ProbeResult, String> {
+async fn test_probe_route(
+    kind: yibovibe_core::config::ProbeRouteKind,
+) -> Result<probe::ProbeResult, String> {
     probe::test_route(kind).await
 }
 
@@ -2160,18 +2171,25 @@ async fn get_flowsync_diagnostics(
         .clone()
         .unwrap_or_else(|| resolve_runtime_device_fingerprint(&config_fingerprint));
     let (activity_total_entries, activity_sample_query_count, activity_query_error) = {
-        let flow_store_lock = yibovibe_core::flow_store::FLOW_STORE_MANAGER.read().unwrap();
+        let flow_store_lock = yibovibe_core::flow_store::FLOW_STORE_MANAGER
+            .read()
+            .unwrap();
         if let Some(flow_store) = flow_store_lock.as_ref() {
             let total_entries = flow_store.history_stats_compat().map(|(total, _, _)| total);
-            let sample_count =
-                flow_store.query_history_compat(None, None, None, None, 5, 0).map(|entries| entries.len());
+            let sample_count = flow_store
+                .query_history_compat(None, None, None, None, 5, 0)
+                .map(|entries| entries.len());
             match (total_entries, sample_count) {
                 (Ok(total), Ok(sample)) => (Some(total), Some(sample), None),
                 (Err(err), _) => (None, None, Some(err)),
                 (_, Err(err)) => (None, None, Some(err)),
             }
         } else {
-            (None, None, Some("FlowSync store not initialized ".to_string()))
+            (
+                None,
+                None,
+                Some("FlowSync store not initialized ".to_string()),
+            )
         }
     };
 
@@ -3054,7 +3072,7 @@ async fn get_user_role(state: tauri::State<'_, AppState>) -> Result<String, Stri
         .lock()
         .await
         .clone()
-        .unwrap_or_else(|| "user ".to_string());
+        .unwrap_or_else(|| "user".to_string());
     Ok(role)
 }
 
@@ -3234,16 +3252,23 @@ pub struct ConsoleAdminStatus {
 
 #[tauri::command]
 async fn get_terminal_prefs() -> Result<TerminalPrefs, String> {
-    let cfg = yibovibe_core::config::GLOBAL_CONFIG.read().map_err(|e| e.to_string())?;
+    let cfg = yibovibe_core::config::GLOBAL_CONFIG
+        .read()
+        .map_err(|e| e.to_string())?;
     Ok(TerminalPrefs {
         default_shell: cfg.terminal_default_shell.clone(),
     })
 }
 
 #[tauri::command]
-async fn set_terminal_prefs(state: tauri::State<'_, AppState>, prefs: TerminalPrefs) -> Result<(), String> {
+async fn set_terminal_prefs(
+    state: tauri::State<'_, AppState>,
+    prefs: TerminalPrefs,
+) -> Result<(), String> {
     {
-        let mut cfg = yibovibe_core::config::GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
+        let mut cfg = yibovibe_core::config::GLOBAL_CONFIG
+            .write()
+            .map_err(|e| e.to_string())?;
         cfg.terminal_default_shell = prefs.default_shell.clone();
         cfg.save();
     }
@@ -3255,53 +3280,333 @@ async fn set_terminal_prefs(state: tauri::State<'_, AppState>, prefs: TerminalPr
 }
 
 #[tauri::command]
-async fn start_terminal(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
+async fn start_terminal(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let mut mgr = state.session_manager.lock().await;
     let sid = mgr.create_session(None, None).await;
     mgr.start_session(&sid, &app).await?;
     Ok(sid)
 }
 
+/* ----- Remote session sync helpers (desktop <-> server Signal Hub) ----- */
+
+fn build_session_sync_payload(
+    session_id: &str,
+    session_info: Option<terminal::SessionInfo>,
+    extra: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "session_id": session_id,
+    });
+    if let Some(info) = session_info {
+        let status_str = match info.status {
+            terminal::SessionStatus::Running => "running",
+            terminal::SessionStatus::Exited(_) => "stopped",
+            terminal::SessionStatus::Error(_) => "crashed",
+        };
+        payload["status"] = serde_json::json!(status_str);
+        payload["state"] = serde_json::json!(status_str);
+        payload["shell_kind"] = serde_json::json!(info.shell_kind);
+        payload["cwd"] = serde_json::json!(info.cwd);
+        payload["started_at"] = serde_json::json!(info.started_at);
+        payload["last_output_at"] = serde_json::json!(info.last_output_at);
+        payload["exit_code"] = serde_json::json!(info.exit_code);
+    }
+    if let Some(e) = extra {
+        if let Some(obj) = e.as_object() {
+            for (k, v) in obj {
+                payload[k] = v.clone();
+            }
+        }
+    }
+    payload
+}
+
+/// Push session state to the server Signal Hub via the existing WS connection.
+async fn sync_session_to_server(
+    state: &tauri::State<'_, AppState>,
+    msg_type: &str,
+    session_id: &str,
+    extra: Option<serde_json::Value>,
+) {
+    let ws_tx = state.ws_tx.lock().await.clone();
+    let Some(tx) = ws_tx else { return };
+
+    let session_info = {
+        let mgr = state.session_manager.lock().await;
+        mgr.get_session_info(session_id).await
+    };
+
+    let msg = yibovibe_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![],
+        r#type: msg_type.to_string(),
+        payload: build_session_sync_payload(session_id, session_info, extra),
+    };
+    let _ = tx.send(msg).await;
+}
+
+/// Spawn a broker task that splits the WS receive stream:
+/// 1. Forwards all messages to the clipboard monitor
+/// 2. Handles remote session commands
+fn spawn_ws_broker(
+    ws_rx: tokio::sync::mpsc::Receiver<yibovibe_core::ws::WsMessage>,
+    clipboard_tx: tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>,
+    ws_tx: tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>,
+    session_manager: terminal::SharedSessionManager,
+    app_handle: tauri::AppHandle,
+) {
+    tokio::spawn(async move {
+        let mut rx = ws_rx;
+        let clipboard = clipboard_tx;
+        let sync_tx = ws_tx;
+        let sm = session_manager;
+        let app = app_handle;
+
+        while let Some(msg) = rx.recv().await {
+            let _ = clipboard.send(msg.clone()).await;
+
+            match msg.r#type.as_str() {
+                "session:start" | "session:resume" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    let shell_kind = msg.payload["shell_kind"].as_str();
+                    if !session_id.is_empty() {
+                        let mut mgr = sm.lock().await;
+                        if !mgr.session_exists(session_id).await {
+                            mgr.create_session_with_id(session_id.to_string(), shell_kind, None)
+                                .await;
+                            info!("[WS Broker] Remote create session {}", session_id);
+                            let session_info = mgr.get_session_info(session_id).await;
+                            let _ = sync_tx
+                                .send(yibovibe_core::ws::WsMessage {
+                                    sender_uid: 0,
+                                    sender_device_id: 0,
+                                    target_devices: vec![],
+                                    r#type: "session:register".to_string(),
+                                    payload: build_session_sync_payload(
+                                        session_id,
+                                        session_info,
+                                        None,
+                                    ),
+                                })
+                                .await;
+                        }
+                        if let Err(e) = mgr
+                            .start_session_with_ws(session_id, &app, sync_tx.clone())
+                            .await
+                        {
+                            warn!(
+                                "[WS Broker] Remote start session {} failed: {}",
+                                session_id, e
+                            );
+                        } else {
+                            info!("[WS Broker] Remote started session {}", session_id);
+                            let session_info = mgr.get_session_info(session_id).await;
+                            let _ = sync_tx
+                                .send(yibovibe_core::ws::WsMessage {
+                                    sender_uid: 0,
+                                    sender_device_id: 0,
+                                    target_devices: vec![],
+                                    r#type: "session:update".to_string(),
+                                    payload: build_session_sync_payload(
+                                        session_id,
+                                        session_info,
+                                        None,
+                                    ),
+                                })
+                                .await;
+                        }
+                    }
+                }
+                "session:stop" | "session:pause" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    let confirmed = msg.payload["confirmed"].as_bool().unwrap_or(false);
+                    if !session_id.is_empty() {
+                        if msg.r#type == "session:stop" && !confirmed {
+                            warn!(
+                                "[WS Broker] Rejected remote stop for {} because confirmation was missing",
+                                session_id
+                            );
+                            let _ = sync_tx
+                                .send(yibovibe_core::ws::WsMessage {
+                                    sender_uid: 0,
+                                    sender_device_id: 0,
+                                    target_devices: vec![],
+                                    r#type: "session:warning".to_string(),
+                                    payload: serde_json::json!({
+                                        "session_id": session_id,
+                                        "message": "Remote stop rejected because confirmation was missing.",
+                                    }),
+                                })
+                                .await;
+                            continue;
+                        }
+                        let mut mgr = sm.lock().await;
+                        if let Err(e) = mgr.kill_session(session_id).await {
+                            warn!(
+                                "[WS Broker] Remote kill session {} failed: {}",
+                                session_id, e
+                            );
+                        } else {
+                            info!("[WS Broker] Remote killed session {}", session_id);
+                            let session_info = mgr.get_session_info(session_id).await;
+                            let _ = sync_tx
+                                .send(yibovibe_core::ws::WsMessage {
+                                    sender_uid: 0,
+                                    sender_device_id: 0,
+                                    target_devices: vec![],
+                                    r#type: "session:update".to_string(),
+                                    payload: build_session_sync_payload(
+                                        session_id,
+                                        session_info,
+                                        Some(serde_json::json!({
+                                            "status": "stopped",
+                                            "state": "stopped"
+                                        })),
+                                    ),
+                                })
+                                .await;
+                        }
+                    }
+                }
+                "session:remove" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    if !session_id.is_empty() {
+                        let mut mgr = sm.lock().await;
+                        let _ = mgr.kill_session(session_id).await;
+                        if let Err(e) = mgr.remove_session(session_id).await {
+                            warn!(
+                                "[WS Broker] Remote remove session {} failed: {}",
+                                session_id, e
+                            );
+                        } else {
+                            info!("[WS Broker] Remote removed session {}", session_id);
+                            let _ = sync_tx
+                                .send(yibovibe_core::ws::WsMessage {
+                                    sender_uid: 0,
+                                    sender_device_id: 0,
+                                    target_devices: vec![],
+                                    r#type: "session:unregister".to_string(),
+                                    payload: serde_json::json!({
+                                        "session_id": session_id,
+                                    }),
+                                })
+                                .await;
+                        }
+                    }
+                }
+                "session:stdin" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    let text = msg.payload["text"].as_str().unwrap_or("");
+                    if !session_id.is_empty() && !text.is_empty() {
+                        let mut mgr = sm.lock().await;
+                        if let Err(e) = mgr.write_session(session_id, text).await {
+                            warn!("[WS Broker] Remote stdin to {} failed: {}", session_id, e);
+                        }
+                    }
+                }
+                "session:resize" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    let cols = msg.payload["cols"].as_u64().unwrap_or(80) as u16;
+                    let rows = msg.payload["rows"].as_u64().unwrap_or(24) as u16;
+                    if !session_id.is_empty() {
+                        let mut mgr = sm.lock().await;
+                        let _ = mgr.resize_session(session_id, cols, rows).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+        info!("[WS Broker] WS receive stream ended, broker shutting down");
+    });
+}
+
 #[tauri::command]
-async fn write_terminal(state: tauri::State<'_, AppState>, session_id: String, text: String) -> Result<(), String> {
+async fn write_terminal(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    text: String,
+) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
     mgr.write_session(&session_id, &text).await
 }
 
 #[tauri::command]
-async fn kill_terminal(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+async fn kill_terminal(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
-    mgr.kill_session(&session_id).await
+    mgr.kill_session(&session_id).await?;
+    drop(mgr);
+    sync_session_to_server(&state, "session:update", &session_id, None).await;
+    Ok(())
 }
 
-
 #[tauri::command]
-async fn create_session(state: tauri::State<'_, AppState>, shell_kind: Option<String>, cwd: Option<String>) -> Result<String, String> {
+async fn create_session(
+    state: tauri::State<'_, AppState>,
+    shell_kind: Option<String>,
+    cwd: Option<String>,
+) -> Result<String, String> {
     let mut mgr = state.session_manager.lock().await;
-    let sid = mgr.create_session(shell_kind.as_deref(), cwd.as_deref()).await;
+    let sid = mgr
+        .create_session(shell_kind.as_deref(), cwd.as_deref())
+        .await;
+    let sid_clone = sid.clone();
+    drop(mgr);
+    sync_session_to_server(&state, "session:register", &sid_clone, None).await;
     Ok(sid)
 }
 
 #[tauri::command]
-async fn start_session(app: tauri::AppHandle, state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+async fn start_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
-    mgr.start_session(&session_id, &app).await
+    // If WS is connected, use the WS-aware variant so output is forwarded to server
+    if let Some(ws_tx) = state.ws_tx.lock().await.clone() {
+        mgr.start_session_with_ws(&session_id, &app, ws_tx).await?;
+    } else {
+        mgr.start_session(&session_id, &app).await?;
+    }
+    drop(mgr);
+    sync_session_to_server(&state, "session:update", &session_id, None).await;
+    Ok(())
 }
 
 #[tauri::command]
-async fn list_sessions(state: tauri::State<'_, AppState>) -> Result<Vec<terminal::SessionInfo>, String> {
+async fn list_sessions(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<terminal::SessionInfo>, String> {
     let mgr = state.session_manager.lock().await;
     Ok(mgr.list_sessions().await)
 }
 
 #[tauri::command]
-async fn remove_session(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+async fn remove_session(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
-    mgr.remove_session(&session_id).await
+    mgr.remove_session(&session_id).await?;
+    drop(mgr);
+    sync_session_to_server(&state, "session:unregister", &session_id, None).await;
+    Ok(())
 }
 
 #[tauri::command]
-async fn resize_session(state: tauri::State<'_, AppState>, session_id: String, cols: u16, rows: u16) -> Result<(), String> {
+async fn resize_session(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
     mgr.resize_session(&session_id, cols, rows).await
 }
@@ -3309,7 +3614,9 @@ async fn resize_session(state: tauri::State<'_, AppState>, session_id: String, c
 #[cfg(target_os = "windows")]
 fn current_process_is_elevated() -> Result<bool, String> {
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     unsafe {
@@ -3355,7 +3662,7 @@ async fn request_console_admin(app: tauri::AppHandle) -> Result<(), String> {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
         use windows::core::PCWSTR;
-        use windows::Win32::Foundation::{HWND, HINSTANCE};
+        use windows::Win32::Foundation::{HINSTANCE, HWND};
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -3364,8 +3671,15 @@ async fn request_console_admin(app: tauri::AppHandle) -> Result<(), String> {
         }
 
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe_wide: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        let runas: Vec<u16> = OsStr::new("runas").encode_wide().chain(std::iter::once(0)).collect();
+        let exe_wide: Vec<u16> = exe
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let runas: Vec<u16> = OsStr::new("runas")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
 
         let args: Vec<u16> = OsStr::new("--elevated-relaunch")
             .encode_wide()
@@ -3384,7 +3698,10 @@ async fn request_console_admin(app: tauri::AppHandle) -> Result<(), String> {
         };
 
         if result.0 as isize <= 32 {
-            return Err(format!("ShellExecuteW failed with code {}", result.0 as isize));
+            return Err(format!(
+                "ShellExecuteW failed with code {}",
+                result.0 as isize
+            ));
         }
 
         std::thread::spawn(move || {
@@ -3402,7 +3719,6 @@ async fn request_console_admin(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 pub fn run() {
-
     // Intialize Rust logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -3845,4 +4161,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

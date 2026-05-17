@@ -161,7 +161,7 @@ Upstream Tools
 
 - `session_manager`
 - `wsl_launcher`
-- `conpty_bridge`
+- `pty_bridge`
 - `stdio_parser`
 - `prompt_detector`
 - `artifact_harvester`
@@ -177,6 +177,7 @@ Upstream Tools
 - 可通过 Tauri command 或内部 service 调用
 - 同时支持单会话和多会话
 - 对异常退出、读流阻塞、僵死无响应有统一判定模型
+- 交互式终端固定基于 PTY，问题优先在既定 PTY 路线内修复，不在排障过程中临时切换终端方案
 
 ## 5. WslAgentBridge
 
@@ -208,6 +209,12 @@ Upstream Tools
 - `SessionProcess` 负责具体进程句柄
 - `SessionTransport` 负责流读写
 - `SessionTelemetry` 负责状态采样
+
+当前约束：
+
+- 交互式 shell / CLI / TUI 统一走 PTY
+- WSL、PowerShell、cmd 共享同一条 PTY 会话托管路线
+- 如果出现补全、回删、提示符、布局错乱等问题，默认视为 PTY 实现问题并在该层修复
 
 ### 5.3 关键能力
 

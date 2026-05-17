@@ -24,13 +24,23 @@ class AuthProvider extends ChangeNotifier {
   Future<void> tryAutoLogin() async {
     await _api.loadFromStorage();
     if (_api.isLoggedIn) {
-      final uidStr = await _api.getSavedUid();
-      final deviceIdStr = await _api.getSavedDeviceId();
-      _uid = uidStr != null ? int.tryParse(uidStr) : null;
-      _deviceId = deviceIdStr != null ? int.tryParse(deviceIdStr) : null;
-      _serverUrl = _api.baseUrl;
-      _token = _api.token;
-      _isLoggedIn = true;
+      try {
+        await _api.validateToken();
+        final uidStr = await _api.getSavedUid();
+        final deviceIdStr = await _api.getSavedDeviceId();
+        _uid = uidStr != null ? int.tryParse(uidStr) : null;
+        _deviceId = deviceIdStr != null ? int.tryParse(deviceIdStr) : null;
+        _serverUrl = _api.baseUrl;
+        _token = _api.token;
+        _isLoggedIn = true;
+      } catch (_) {
+        await _api.logout();
+        _isLoggedIn = false;
+        _uid = null;
+        _deviceId = null;
+        _serverUrl = null;
+        _token = null;
+      }
       notifyListeners();
     }
   }
@@ -57,6 +67,7 @@ class AuthProvider extends ChangeNotifier {
       _serverUrl = _api.baseUrl;
       _token = _api.token;
       _isLoggedIn = true;
+      _error = null;
       _isLoading = false;
       notifyListeners();
       return true;
@@ -73,7 +84,9 @@ class AuthProvider extends ChangeNotifier {
     _isLoggedIn = false;
     _uid = null;
     _deviceId = null;
+    _serverUrl = null;
     _token = null;
+    _error = null;
     notifyListeners();
   }
 }

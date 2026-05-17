@@ -2,8 +2,8 @@ use bytes::Bytes;
 use encoding_rs::Encoding;
 use futures_util::StreamExt;
 use http_body_util::{BodyExt, Full, StreamBody};
-use hyper::body::Incoming;
 use hyper::body::Frame;
+use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -436,19 +436,29 @@ pub async fn save_probe_config(payload: ProbeConfigPayload) -> Result<(), String
             .input_price_per_million
             .is_some_and(|value| !value.is_finite() || value < 0.0)
         {
-            return Err(format!("Input price cannot be negative for API '{}'.", credential.name));
+            return Err(format!(
+                "Input price cannot be negative for API '{}'.",
+                credential.name
+            ));
         }
         if credential
             .output_price_per_million
             .is_some_and(|value| !value.is_finite() || value < 0.0)
         {
-            return Err(format!("Output price cannot be negative for API '{}'.", credential.name));
+            return Err(format!(
+                "Output price cannot be negative for API '{}'.",
+                credential.name
+            ));
         }
     }
 
     {
         let mut cfg = GLOBAL_CONFIG.write().map_err(|e| e.to_string())?;
-        cfg.probe_tool.credentials = credentials.iter().cloned().map(ProbeCredential::from).collect();
+        cfg.probe_tool.credentials = credentials
+            .iter()
+            .cloned()
+            .map(ProbeCredential::from)
+            .collect();
         cfg.probe_tool.routes = payload.routes;
         cfg.probe_tool.proxy = payload.proxy.clone();
         cfg.probe_tool.timeout_ms = payload.timeout_ms.max(1000);
@@ -465,8 +475,8 @@ pub async fn save_probe_config(payload: ProbeConfigPayload) -> Result<(), String
     }
     save_probe_secrets(&secrets)?;
 
-    let should_restart =
-        old_proxy.listen_host != payload.proxy.listen_host || old_proxy.listen_port != payload.proxy.listen_port;
+    let should_restart = old_proxy.listen_host != payload.proxy.listen_host
+        || old_proxy.listen_port != payload.proxy.listen_port;
     let is_running = {
         let runtime = runtime_lock()?;
         runtime.is_running
@@ -583,9 +593,18 @@ pub async fn proxy_status() -> Result<ProbeProxyStatusPayload, String> {
 pub async fn probe_dashboard() -> Result<ProbeDashboardPayload, String> {
     let status = proxy_status().await?;
     let runtime = runtime_lock()?;
-    let logs: Vec<ProbeLogEntryPayload> = runtime.logs.iter().rev().map(ProbeLogEntryPayload::from).collect();
+    let logs: Vec<ProbeLogEntryPayload> = runtime
+        .logs
+        .iter()
+        .rev()
+        .map(ProbeLogEntryPayload::from)
+        .collect();
     let stats = build_stats(&runtime.logs);
-    Ok(ProbeDashboardPayload { status, logs, stats })
+    Ok(ProbeDashboardPayload {
+        status,
+        logs,
+        stats,
+    })
 }
 
 pub async fn clear_proxy_logs() -> Result<(), String> {
@@ -623,7 +642,9 @@ pub async fn test_route(kind: ProbeRouteKind) -> Result<ProbeResult, String> {
     probe_credential(payload).await
 }
 
-pub async fn list_credential_models(credential: ProbeCredentialPayload) -> Result<Vec<String>, String> {
+pub async fn list_credential_models(
+    credential: ProbeCredentialPayload,
+) -> Result<Vec<String>, String> {
     list_models_for_credential(credential).await
 }
 
@@ -682,9 +703,8 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
         .unwrap_or(path_and_query.as_str())
         .to_string();
 
-    let route_kind = detect_route_kind(&normalized_path, req.headers()).ok_or_else(|| {
-        "Unknown FlowProbe endpoint.".to_string()
-    })?;
+    let route_kind = detect_route_kind(&normalized_path, req.headers())
+        .ok_or_else(|| "Unknown FlowProbe endpoint.".to_string())?;
 
     let route = resolve_route(route_kind.clone())?;
     let cfg = GLOBAL_CONFIG.read().map_err(|e| e.to_string())?.clone();
@@ -700,11 +720,12 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
 
     if is_local_models_request(&route_kind, &normalized_path) {
         let current_model = route.model.trim();
-        let model_count = if current_model.is_empty() || current_model == route_model_alias(&route.kind) {
-            1
-        } else {
-            2
-        };
+        let model_count =
+            if current_model.is_empty() || current_model == route_model_alias(&route.kind) {
+                1
+            } else {
+                2
+            };
         log_local_proxy_activity(
             &route,
             &route_kind,
@@ -752,8 +773,12 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
     let (prepared_body, request_model) =
         prepare_request_body(&route, &upstream_path, &original_content_type, &body_bytes)?;
     let prepared_body_bytes = Bytes::from(prepared_body.clone());
-    let request_diagnostics =
-        inspect_request_diagnostics(&route_kind, &upstream_path, &original_content_type, &prepared_body_bytes);
+    let request_diagnostics = inspect_request_diagnostics(
+        &route_kind,
+        &upstream_path,
+        &original_content_type,
+        &prepared_body_bytes,
+    );
 
     let client = build_http_client(cfg.probe_tool.timeout_ms)?;
     let mut request = client.request(parts.method.clone(), upstream_url);
@@ -813,7 +838,9 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
                 error_message: None,
                 request_kind: request_diagnostics.kind.clone(),
                 request_signature: request_diagnostics.signature.clone(),
-                response_signature: Some("content_type=text/event-stream; streaming=true".to_string()),
+                response_signature: Some(
+                    "content_type=text/event-stream; streaming=true".to_string(),
+                ),
                 diagnostic_flags: request_diagnostics.flags.clone(),
             })?;
             Some(log_id)
@@ -849,27 +876,24 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
         }
         let stream_log_id_for_body = stream_log_id;
         let stream_diagnostics_for_body = stream_diagnostics.clone();
-        let body_stream = upstream_response
-            .bytes_stream()
-            .filter_map(move |item| {
-                let stream_diagnostics = stream_diagnostics_for_body.clone();
-                async move {
-                    item.ok().map(|chunk| {
-                        if let (Some(log_id), Some(diagnostics)) =
-                            (stream_log_id_for_body, stream_diagnostics.as_ref())
-                        {
-                            if let Ok(mut diagnostics) = diagnostics.lock() {
-                                diagnostics.ingest_chunk(chunk.as_ref());
-                                let signature = diagnostics.response_signature();
-                                let flags = diagnostics.diagnostic_flags();
-                                let _ =
-                                    update_proxy_log_diagnostics(log_id, Some(signature), &flags);
-                            }
+        let body_stream = upstream_response.bytes_stream().filter_map(move |item| {
+            let stream_diagnostics = stream_diagnostics_for_body.clone();
+            async move {
+                item.ok().map(|chunk| {
+                    if let (Some(log_id), Some(diagnostics)) =
+                        (stream_log_id_for_body, stream_diagnostics.as_ref())
+                    {
+                        if let Ok(mut diagnostics) = diagnostics.lock() {
+                            diagnostics.ingest_chunk(chunk.as_ref());
+                            let signature = diagnostics.response_signature();
+                            let flags = diagnostics.diagnostic_flags();
+                            let _ = update_proxy_log_diagnostics(log_id, Some(signature), &flags);
                         }
-                        Ok(Frame::data(chunk))
-                    })
-                }
-            });
+                    }
+                    Ok(Frame::data(chunk))
+                })
+            }
+        });
         builder
             .body(BodyExt::boxed(StreamBody::new(body_stream)))
             .map_err(|e| format!("Failed to build streaming proxy response: {e}"))
@@ -891,7 +915,11 @@ async fn process_proxy_request(req: Request<Incoming>) -> Result<Response<ProxyB
         let error_message = if success {
             None
         } else {
-            Some(extract_error_message(&response_bytes, &headers, &upstream_path))
+            Some(extract_error_message(
+                &response_bytes,
+                &headers,
+                &upstream_path,
+            ))
         };
 
         if should_log && collect_usage {
@@ -1116,7 +1144,10 @@ fn classify_request_kind(route_kind: &ProbeRouteKind, request_path: &str) -> Str
         ProbeRouteKind::Anthropic => {
             if request_path.starts_with("/v1/messages") {
                 "anthropic.messages".to_string()
-            } else if matches!(request_path, "/v1/models" | "/anthropic/v1/models" | "/anthropic/models") {
+            } else if matches!(
+                request_path,
+                "/v1/models" | "/anthropic/v1/models" | "/anthropic/models"
+            ) {
                 "anthropic.models".to_string()
             } else if request_path.starts_with("/v1/models/")
                 || request_path.starts_with("/anthropic/v1/models/")
@@ -1177,7 +1208,15 @@ fn append_text_fragments(value: &Value, fragments: &mut Vec<String>, limit: usiz
             }
         }
         Value::Object(map) => {
-            for key in ["text", "input_text", "content", "value", "prompt", "message", "system"] {
+            for key in [
+                "text",
+                "input_text",
+                "content",
+                "value",
+                "prompt",
+                "message",
+                "system",
+            ] {
                 if let Some(child) = map.get(key) {
                     append_text_fragments(child, fragments, limit);
                 }
@@ -1232,7 +1271,10 @@ fn inspect_request_diagnostics(
     body_bytes: &Bytes,
 ) -> ProxyRequestDiagnostics {
     let kind = classify_request_kind(route_kind, request_path);
-    let mut signature_parts = vec![format!("content_type={}", summarize_content_type(content_type))];
+    let mut signature_parts = vec![format!(
+        "content_type={}",
+        summarize_content_type(content_type)
+    )];
     let mut flags = Vec::new();
 
     if body_bytes.is_empty() || !content_type.contains("application/json") {
@@ -1308,9 +1350,12 @@ fn inspect_request_diagnostics(
     let is_short_aux_call = max_tokens.map(|value| value <= 128).unwrap_or(false)
         && message_count.unwrap_or(input_count.unwrap_or(0)) <= 2
         && tools_count == 0;
-    let has_title_marker = markers
-        .iter()
-        .any(|marker| matches!(*marker, "title" | "title_zh" | "summary" | "summary_zh" | "headline"));
+    let has_title_marker = markers.iter().any(|marker| {
+        matches!(
+            *marker,
+            "title" | "title_zh" | "summary" | "summary_zh" | "headline"
+        )
+    });
     if is_generation_endpoint && (has_title_marker || is_short_aux_call) {
         flags.push("aux-title-candidate".to_string());
     }
@@ -1331,7 +1376,10 @@ fn inspect_response_signature(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    let mut parts = vec![format!("content_type={}", summarize_content_type(content_type))];
+    let mut parts = vec![format!(
+        "content_type={}",
+        summarize_content_type(content_type)
+    )];
 
     if response_bytes.is_empty() {
         parts.push("body=empty".to_string());
@@ -1383,8 +1431,12 @@ fn inspect_response_signature(
             if input_tokens.is_some() || output_tokens.is_some() {
                 parts.push(format!(
                     "usage={}/{}",
-                    input_tokens.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-                    output_tokens.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string())
+                    input_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    output_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string())
                 ));
             }
         }
@@ -1430,8 +1482,8 @@ fn prepare_request_body(
         return Ok((body_bytes.to_vec(), model));
     }
 
-    let mut value: Value =
-        serde_json::from_slice(body_bytes).map_err(|e| format!("Invalid JSON request body: {e}"))?;
+    let mut value: Value = serde_json::from_slice(body_bytes)
+        .map_err(|e| format!("Invalid JSON request body: {e}"))?;
     let is_openai_model_path = route.kind == ProbeRouteKind::OpenAi
         && (upstream_path.contains("/chat/completions")
             || upstream_path.contains("/responses")
@@ -1508,19 +1560,35 @@ fn should_log_proxy_activity(
 ) -> bool {
     !matches!(
         (route_kind, request_path, status),
-        (ProbeRouteKind::OpenAi, "/v1/props", reqwest::StatusCode::NOT_FOUND)
-            | (ProbeRouteKind::Anthropic, "/v1/props", reqwest::StatusCode::NOT_FOUND)
-            | (ProbeRouteKind::Anthropic, "/props", reqwest::StatusCode::NOT_FOUND)
-            | (ProbeRouteKind::Anthropic, "/version", reqwest::StatusCode::NOT_FOUND)
-            | (ProbeRouteKind::Anthropic, "/api/tags", reqwest::StatusCode::NOT_FOUND)
-            | (ProbeRouteKind::Anthropic, "/api/v1/models", reqwest::StatusCode::NOT_FOUND)
+        (
+            ProbeRouteKind::OpenAi,
+            "/v1/props",
+            reqwest::StatusCode::NOT_FOUND
+        ) | (
+            ProbeRouteKind::Anthropic,
+            "/v1/props",
+            reqwest::StatusCode::NOT_FOUND
+        ) | (
+            ProbeRouteKind::Anthropic,
+            "/props",
+            reqwest::StatusCode::NOT_FOUND
+        ) | (
+            ProbeRouteKind::Anthropic,
+            "/version",
+            reqwest::StatusCode::NOT_FOUND
+        ) | (
+            ProbeRouteKind::Anthropic,
+            "/api/tags",
+            reqwest::StatusCode::NOT_FOUND
+        ) | (
+            ProbeRouteKind::Anthropic,
+            "/api/v1/models",
+            reqwest::StatusCode::NOT_FOUND
+        )
     )
 }
 
-fn detect_route_kind(
-    normalized_path: &str,
-    headers: &hyper::HeaderMap,
-) -> Option<ProbeRouteKind> {
+fn detect_route_kind(normalized_path: &str, headers: &hyper::HeaderMap) -> Option<ProbeRouteKind> {
     let has_anthropic_header = headers.contains_key("anthropic-version");
     let has_x_api_key = headers.contains_key("x-api-key");
     let has_openai_auth = headers.contains_key(AUTHORIZATION);
@@ -1696,12 +1764,13 @@ fn parse_usage(
                 .get("completion_tokens")
                 .and_then(Value::as_u64)
                 .or_else(|| usage.get("output_tokens").and_then(Value::as_u64));
-            let total = usage.get("total_tokens").and_then(Value::as_u64).or_else(|| {
-                match (input, output) {
+            let total = usage
+                .get("total_tokens")
+                .and_then(Value::as_u64)
+                .or_else(|| match (input, output) {
                     (Some(input), Some(output)) => Some(input + output),
                     _ => None,
-                }
-            });
+                });
             (input, output, total)
         }
     }
@@ -1723,7 +1792,11 @@ fn estimate_cost(
         total += price * tokens as f64 / 1_000_000.0;
         has_any = true;
     }
-    if has_any { Some(total) } else { None }
+    if has_any {
+        Some(total)
+    } else {
+        None
+    }
 }
 
 fn extract_error_message(
@@ -1762,19 +1835,16 @@ fn decode_error_text(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    let charset = content_type
-        .split(';')
-        .skip(1)
-        .find_map(|segment| {
-            let mut parts = segment.trim().splitn(2, '=');
-            let key = parts.next()?.trim();
-            let value = parts.next()?.trim().trim_matches('"').trim_matches('\'');
-            if key.eq_ignore_ascii_case("charset") && !value.is_empty() {
-                Some(value.to_string())
-            } else {
-                None
-            }
-        });
+    let charset = content_type.split(';').skip(1).find_map(|segment| {
+        let mut parts = segment.trim().splitn(2, '=');
+        let key = parts.next()?.trim();
+        let value = parts.next()?.trim().trim_matches('"').trim_matches('\'');
+        if key.eq_ignore_ascii_case("charset") && !value.is_empty() {
+            Some(value.to_string())
+        } else {
+            None
+        }
+    });
 
     if let Some(label) = charset {
         if let Some(encoding) = Encoding::for_label(label.as_bytes()) {
@@ -1834,7 +1904,11 @@ fn update_proxy_log_diagnostics(
         entry.response_signature = Some(signature);
     }
     for flag in extra_flags {
-        if !entry.diagnostic_flags.iter().any(|existing| existing == flag) {
+        if !entry
+            .diagnostic_flags
+            .iter()
+            .any(|existing| existing == flag)
+        {
             entry.diagnostic_flags.push(flag.clone());
         }
     }
@@ -1967,7 +2041,10 @@ impl AnthropicStreamDiagnostics {
     }
 
     fn response_signature(&self) -> String {
-        let mut parts = vec!["content_type=text/event-stream".to_string(), "streaming=true".to_string()];
+        let mut parts = vec![
+            "content_type=text/event-stream".to_string(),
+            "streaming=true".to_string(),
+        ];
         if !self.event_sequence.is_empty() {
             parts.push(format!("events={}", self.event_sequence.join("|")));
         }
@@ -1978,7 +2055,10 @@ impl AnthropicStreamDiagnostics {
             parts.push(format!("role={role}"));
         }
         if !self.content_block_types.is_empty() {
-            parts.push(format!("block_types={}", self.content_block_types.join("|")));
+            parts.push(format!(
+                "block_types={}",
+                self.content_block_types.join("|")
+            ));
         }
         if !self.delta_types.is_empty() {
             parts.push(format!("delta_types={}", self.delta_types.join("|")));
@@ -2017,7 +2097,10 @@ where
     let input_tokens: u64 = entries.iter().filter_map(|entry| entry.input_tokens).sum();
     let output_tokens: u64 = entries.iter().filter_map(|entry| entry.output_tokens).sum();
     let total_tokens: u64 = entries.iter().filter_map(|entry| entry.total_tokens).sum();
-    let estimated_cost_sum: f64 = entries.iter().filter_map(|entry| entry.estimated_cost).sum();
+    let estimated_cost_sum: f64 = entries
+        .iter()
+        .filter_map(|entry| entry.estimated_cost)
+        .sum();
     let has_cost = entries.iter().any(|entry| entry.estimated_cost.is_some());
 
     ProbeStatsPayload {
@@ -2028,7 +2111,11 @@ where
         input_tokens,
         output_tokens,
         total_tokens,
-        estimated_cost: if has_cost { Some(estimated_cost_sum) } else { None },
+        estimated_cost: if has_cost {
+            Some(estimated_cost_sum)
+        } else {
+            None
+        },
     }
 }
 
@@ -2063,15 +2150,20 @@ where
     let mut grouped: HashMap<(String, u8), ProbeTargetStatsPayload> = HashMap::new();
     let entries: Vec<&ProxyLogEntry> = logs.clone().into_iter().collect();
     for entry in &entries {
-        let key = (entry.credential_id.clone(), route_sort_key(&entry.route_kind));
-        grouped.entry(key).or_insert_with(|| ProbeTargetStatsPayload {
-            route_kind: entry.route_kind.clone(),
-            credential_id: entry.credential_id.clone(),
-            credential_name: entry.credential_name.clone(),
-            provider: entry.provider.clone(),
-            protocol: entry.protocol.clone(),
-            stats: ProbeStatsPayload::default(),
-        });
+        let key = (
+            entry.credential_id.clone(),
+            route_sort_key(&entry.route_kind),
+        );
+        grouped
+            .entry(key)
+            .or_insert_with(|| ProbeTargetStatsPayload {
+                route_kind: entry.route_kind.clone(),
+                credential_id: entry.credential_id.clone(),
+                credential_name: entry.credential_name.clone(),
+                provider: entry.provider.clone(),
+                protocol: entry.protocol.clone(),
+                stats: ProbeStatsPayload::default(),
+            });
     }
 
     let mut by_target: Vec<ProbeTargetStatsPayload> = grouped
@@ -2142,7 +2234,10 @@ fn resolve_route(kind: ProbeRouteKind) -> Result<ProxyResolvedRoute, String> {
         return Err("The selected FlowProbe credential is disabled.".to_string());
     }
     if !protocol_is_compatible(&kind, &credential.protocol) {
-        return Err("The selected upstream protocol is not compatible with this fixed FlowProbe route.".to_string());
+        return Err(
+            "The selected upstream protocol is not compatible with this fixed FlowProbe route."
+                .to_string(),
+        );
     }
 
     Ok(ProxyResolvedRoute {
@@ -2169,7 +2264,9 @@ fn protocol_is_compatible(kind: &ProbeRouteKind, protocol: &ProbeProtocol) -> bo
                 | ProbeProtocol::GeminiOpenAiCompatible
                 | ProbeProtocol::Custom
         ),
-        ProbeRouteKind::Anthropic => matches!(protocol, ProbeProtocol::Anthropic | ProbeProtocol::Custom),
+        ProbeRouteKind::Anthropic => {
+            matches!(protocol, ProbeProtocol::Anthropic | ProbeProtocol::Custom)
+        }
     }
 }
 
@@ -2180,7 +2277,9 @@ async fn probe_credential(target: ProbeCredentialPayload) -> Result<ProbeResult,
     let result = match target.protocol {
         ProbeProtocol::Ollama => probe_ollama(&client, &target, start).await,
         ProbeProtocol::OpenAiCompatible => probe_openai_compatible(&client, &target, start).await,
-        ProbeProtocol::GeminiOpenAiCompatible => probe_openai_compatible(&client, &target, start).await,
+        ProbeProtocol::GeminiOpenAiCompatible => {
+            probe_openai_compatible(&client, &target, start).await
+        }
         ProbeProtocol::Anthropic => probe_anthropic(&client, &target, start).await,
         ProbeProtocol::Custom => probe_custom(&client, &target, start).await,
     };
@@ -2251,7 +2350,9 @@ fn load_probe_secrets() -> Result<ProbeSecretsFile, String> {
                     .map(|object| {
                         object
                             .iter()
-                            .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_string())))
+                            .filter_map(|(key, value)| {
+                                value.as_str().map(|v| (key.clone(), v.to_string()))
+                            })
                             .collect::<HashMap<String, String>>()
                     })
                     .unwrap_or_default()
@@ -2268,7 +2369,11 @@ fn save_probe_secrets(secrets: &ProbeSecretsFile) -> Result<(), String> {
     fs::write(path, json).map_err(|e| format!("Failed to save probe secrets: {e}"))
 }
 
-async fn probe_custom(client: &Client, target: &ProbeCredentialPayload, start: Instant) -> ProbeResult {
+async fn probe_custom(
+    client: &Client,
+    target: &ProbeCredentialPayload,
+    start: Instant,
+) -> ProbeResult {
     let ollama = probe_ollama(client, target, start).await;
     if ollama.success || ollama.code == "ERR_UNAUTHORIZED" {
         return ollama;
@@ -2295,7 +2400,11 @@ async fn probe_custom(client: &Client, target: &ProbeCredentialPayload, start: I
     )
 }
 
-async fn probe_ollama(client: &Client, target: &ProbeCredentialPayload, start: Instant) -> ProbeResult {
+async fn probe_ollama(
+    client: &Client,
+    target: &ProbeCredentialPayload,
+    start: Instant,
+) -> ProbeResult {
     let version_url = ollama_version_url(&target.base_url);
     match client.get(version_url).send().await {
         Ok(response) if response.status().is_success() => {
@@ -2323,7 +2432,9 @@ async fn probe_ollama(client: &Client, target: &ProbeCredentialPayload, start: I
                 ),
             }
         }
-        Ok(response) => http_failure_result(response.status(), start, Some("ollama"), "not_required"),
+        Ok(response) => {
+            http_failure_result(response.status(), start, Some("ollama"), "not_required")
+        }
         Err(err) => network_failure_result(err.to_string(), start, Some("ollama")),
     }
 }
@@ -2736,9 +2847,11 @@ mod tests {
                         ProbeRouteKind::OpenAi => {
                             if request.contains("/models") {
                                 if request.contains("purpose=test-query") {
-                                    serde_json::json!({ "data": [{ "id": "query-ok-model" }] }).to_string()
+                                    serde_json::json!({ "data": [{ "id": "query-ok-model" }] })
+                                        .to_string()
                                 } else {
-                                    serde_json::json!({ "data": [{ "id": "mock-openai-model" }] }).to_string()
+                                    serde_json::json!({ "data": [{ "id": "mock-openai-model" }] })
+                                        .to_string()
                                 }
                             } else if request.contains("/responses") {
                                 serde_json::json!({
@@ -2766,14 +2879,16 @@ mod tests {
                             } else if !request.contains("\"max_tokens\"") {
                                 serde_json::json!({
                                     "error": { "message": "missing max_tokens" }
-                                }).to_string()
+                                })
+                                .to_string()
                             } else {
                                 serde_json::json!({
                                     "id": "msg_mock",
                                     "type": "message",
                                     "content": [{ "type": "text", "text": "ok-anthropic" }],
                                     "usage": { "input_tokens": 9, "output_tokens": 6 }
-                                }).to_string()
+                                })
+                                .to_string()
                             }
                         }
                     };
@@ -2951,9 +3066,13 @@ mod tests {
             "upgrade",
             "http2-settings",
         ] {
-            assert!(should_skip_upstream_header(&HeaderName::from_static(header)));
+            assert!(should_skip_upstream_header(&HeaderName::from_static(
+                header
+            )));
         }
-        assert!(!should_skip_upstream_header(&HeaderName::from_static("accept")));
+        assert!(!should_skip_upstream_header(&HeaderName::from_static(
+            "accept"
+        )));
     }
 
     #[tokio::test]
@@ -3012,24 +3131,20 @@ mod tests {
 
         assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
         let body: Value = response.json().await.unwrap();
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("FlowProbe upstream request failed")
-        );
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("FlowProbe upstream request failed"));
 
         let dashboard = probe_dashboard().await.unwrap();
         assert_eq!(dashboard.logs.len(), 1);
         assert!(!dashboard.logs[0].success);
         assert_eq!(dashboard.logs[0].status_code, 502);
-        assert!(
-            dashboard.logs[0]
-                .error_message
-                .as_deref()
-                .unwrap_or_default()
-                .contains("FlowProbe upstream request failed")
-        );
+        assert!(dashboard.logs[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("FlowProbe upstream request failed"));
 
         let _ = stop_proxy().await;
         {
@@ -3060,10 +3175,7 @@ mod tests {
         let bytes = Bytes::from_static(&[0, 159, 146, 150, 0, 1, 2, 3]);
 
         let message = extract_error_message(&bytes, &headers, "/chat/completions");
-        assert_eq!(
-            message,
-            "/chat/completions -> [non-text response: 8 bytes]"
-        );
+        assert_eq!(message, "/chat/completions -> [non-text response: 8 bytes]");
     }
 
     #[test]
@@ -3109,13 +3221,11 @@ mod tests {
         );
 
         assert_eq!(diagnostics.kind, "anthropic.messages");
-        assert!(
-            diagnostics
-                .signature
-                .as_deref()
-                .unwrap_or_default()
-                .contains("markers=")
-        );
+        assert!(diagnostics
+            .signature
+            .as_deref()
+            .unwrap_or_default()
+            .contains("markers="));
         assert!(diagnostics
             .flags
             .iter()
@@ -3169,7 +3279,9 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         );
 
         let signature = diagnostics.response_signature();
-        assert!(signature.contains("events=message_start|content_block_start|content_block_delta|message_delta"));
+        assert!(signature.contains(
+            "events=message_start|content_block_start|content_block_delta|message_delta"
+        ));
         assert!(signature.contains("message_start.content=array"));
         assert!(signature.contains("role=assistant"));
         assert!(signature.contains("block_types=text"));
@@ -3272,7 +3384,10 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         with_test_probe_config(ProbeRouteKind::OpenAi, |status| async move {
             let client = reqwest::Client::new();
             let response = client
-                .get(format!("{}/models?purpose=test-query", status.openai_endpoint))
+                .get(format!(
+                    "{}/models?purpose=test-query",
+                    status.openai_endpoint
+                ))
                 .header("Authorization", format!("Bearer {}", status.local_token))
                 .send()
                 .await
@@ -3508,7 +3623,10 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
     fn detect_route_kind_treats_anthropic_v1_messages_as_anthropic() {
         let mut headers = hyper::HeaderMap::new();
         headers.insert("x-api-key", HeaderValue::from_static("test"));
-        headers.insert("anthropic-version", HeaderValue::from_static(ANTHROPIC_VERSION));
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
         assert_eq!(
             detect_route_kind("/v1/messages", &headers),
             Some(ProbeRouteKind::Anthropic)
@@ -3554,7 +3672,10 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         with_test_probe_config(ProbeRouteKind::OpenAi, |status| async move {
             let client = reqwest::Client::new();
             let response = client
-                .get(format!("{}/models/{}", status.openai_endpoint, OPENAI_MODEL_ALIAS))
+                .get(format!(
+                    "{}/models/{}",
+                    status.openai_endpoint, OPENAI_MODEL_ALIAS
+                ))
                 .header("Authorization", format!("Bearer {}", status.local_token))
                 .send()
                 .await
@@ -3572,7 +3693,10 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         with_test_probe_config(ProbeRouteKind::Anthropic, |status| async move {
             let client = reqwest::Client::new();
             let response = client
-                .get(format!("{}/models/{}", status.anthropic_endpoint, ANTHROPIC_MODEL_ALIAS))
+                .get(format!(
+                    "{}/models/{}",
+                    status.anthropic_endpoint, ANTHROPIC_MODEL_ALIAS
+                ))
                 .header("x-api-key", status.local_token.clone())
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .send()

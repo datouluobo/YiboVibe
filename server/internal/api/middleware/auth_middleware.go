@@ -11,33 +11,43 @@ import (
 const (
 	authorizationHeader = "Authorization"
 	bearerPrefix        = "Bearer "
+	queryTokenKey       = "token"
 	CtxUIDKey           = "UID"
 	CtxDeviceIDKey      = "DeviceID"
 	CtxRoleKey          = "Role"
 	CtxStatusKey        = "Status"
 )
 
+func extractAccessToken(c *gin.Context) (string, string) {
+	authHeader := c.GetHeader(authorizationHeader)
+	if authHeader != "" {
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			return "", "Authorization header format must be Bearer {token}"
+		}
+		return strings.TrimPrefix(authHeader, bearerPrefix), ""
+	}
+
+	// WebSocket clients and browser-based debuggers commonly authenticate
+	// the initial upgrade request via query string because setting headers
+	// is not uniformly available across platforms.
+	if token := strings.TrimSpace(c.Query(queryTokenKey)); token != "" {
+		return token, ""
+	}
+
+	return "", "Authorization header is missing"
+}
+
 // JWTAuth middleware ensures that a valid JWT Token is present in the Authorization header
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader(authorizationHeader)
-		if authHeader == "" {
+		tokenString, tokenErr := extractAccessToken(c)
+		if tokenErr != "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"code": 401,
-				"msg":  "Authorization header is missing",
+				"msg":  tokenErr,
 			})
 			return
 		}
-
-		if !strings.HasPrefix(authHeader, bearerPrefix) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"code": 401,
-				"msg":  "Authorization header format must be Bearer {token}",
-			})
-			return
-		}
-
-		tokenString := strings.TrimPrefix(authHeader, bearerPrefix)
 
 		claims, err := utils.ParseAccessToken(tokenString)
 		if err != nil {

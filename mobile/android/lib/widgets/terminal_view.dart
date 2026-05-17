@@ -114,8 +114,9 @@ class _MiniButton extends StatelessWidget {
     return Tooltip(
       message: label,
       child: Material(
-        color: AppTheme.bgHover.withAlpha(200),
+        color: AppTheme.bgPrimary,
         borderRadius: BorderRadius.circular(6),
+        elevation: 1,
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
@@ -141,7 +142,7 @@ class _TerminalLine extends StatelessWidget {
     String prefix;
 
     if (event.isUserMessage) {
-      textColor = AppTheme.brandPurpleLight;
+      textColor = AppTheme.brand;
       prefix = '> ';
     } else if (event.stream == OutputStream.stderr) {
       textColor = AppTheme.statusRed;

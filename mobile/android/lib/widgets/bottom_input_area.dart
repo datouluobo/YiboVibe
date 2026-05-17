@@ -27,7 +27,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
   void _send() {
     final t = _ctrl.text.trim();
     if (t.isEmpty) return;
-    context.read<SessionProvider>().sendInput(t);
+    context.read<SessionProvider>().sendInput('$t\n');
     _ctrl.clear();
     _focus.requestFocus();
   }
@@ -40,65 +40,68 @@ class _BottomInputAreaState extends State<BottomInputArea> {
 
         return Container(
           decoration: BoxDecoration(
-            color: AppTheme.bgSecondary,
-            border: Border(top: BorderSide(color: AppTheme.borderColor.withAlpha(60))),
+            color: AppTheme.bgPrimary,
+            border: Border(top: BorderSide(color: AppTheme.borderColor)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 输入行
+              // 输入行 — 统一 36px 高度
               Padding(
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 2),
+                padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // 模式指示 (终端/对话)
                     _ModeToggle(p: p),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 6),
                     // 输入框
                     Expanded(
-                      child: TextField(
-                        controller: _ctrl,
-                        focusNode: _focus,
-                        enabled: running,
-                        maxLines: 1,
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 13,
-                          fontFamily: 'monospace',
-                          height: 1.3,
-                        ),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          hintText: running ? '输入命令…' : 'Session 未运行',
-                          hintStyle: const TextStyle(
-                            color: AppTheme.textTertiary,
+                      child: SizedBox(
+                        height: 36,
+                        child: TextField(
+                          controller: _ctrl,
+                          focusNode: _focus,
+                          enabled: running,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: AppTheme.textPrimary,
                             fontSize: 13,
                             fontFamily: 'monospace',
+                            height: 1.2,
                           ),
-                          filled: true,
-                          fillColor: AppTheme.bgTertiary,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide: BorderSide.none,
+                          decoration: InputDecoration(
+                            isDense: false,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                            hintText: running ? '输入命令…' : 'Session 未运行',
+                            hintStyle: const TextStyle(
+                              color: AppTheme.textTertiary,
+                              fontSize: 13,
+                              fontFamily: 'monospace',
+                            ),
+                            filled: true,
+                            fillColor: AppTheme.bgTertiary,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide.none,
+                            ),
+                            suffixIcon: _ctrl.text.isNotEmpty
+                                ? GestureDetector(
+                                    onTap: () => _ctrl.clear(),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(8),
+                                      child: Icon(Icons.close, size: 14, color: AppTheme.textTertiary),
+                                    ),
+                                  )
+                                : null,
                           ),
-                          suffixIcon: _ctrl.text.isNotEmpty
-                              ? GestureDetector(
-                                  onTap: () => _ctrl.clear(),
-                                  child: const Padding(
-                                    padding: EdgeInsets.all(6),
-                                    child: Icon(Icons.close, size: 14, color: AppTheme.textTertiary),
-                                  ),
-                                )
-                              : null,
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) => _send(),
                         ),
-                        onChanged: (_) => setState(() {}),
-                        onSubmitted: (_) => _send(),
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    // 发送
+                    const SizedBox(width: 6),
+                    // 发送按钮 — 36x36
                     GestureDetector(
                       onTap: running && _ctrl.text.trim().isNotEmpty ? _send : null,
                       child: Container(
@@ -106,15 +109,15 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                         height: 36,
                         decoration: BoxDecoration(
                           color: running && _ctrl.text.trim().isNotEmpty
-                              ? AppTheme.brandPurple
+                              ? AppTheme.brand
                               : AppTheme.bgTertiary,
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Icon(
                           Icons.arrow_upward_rounded,
-                          size: 16,
+                          size: 18,
                           color: running && _ctrl.text.trim().isNotEmpty
-                              ? AppTheme.textPrimary
+                              ? Colors.white
                               : AppTheme.textTertiary,
                         ),
                       ),
@@ -124,7 +127,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
               ),
               // 工具行 — 关键操作
               Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
                 child: Row(
                   children: [
                     _ToolBtn(Icons.dns_outlined, 'Sessions', () => Scaffold.of(context).openDrawer()),
@@ -147,7 +150,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
   void _openFlowMind(BuildContext ctx) {
     showModalBottomSheet(
       context: ctx,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: AppTheme.bgPrimary,
       builder: (_) => _FlowMindPanel(provider: context.read<SessionProvider>()),
     );
   }
@@ -155,7 +158,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
   void _openActions(BuildContext ctx, SessionProvider p) {
     showModalBottomSheet(
       context: ctx,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: AppTheme.bgPrimary,
       builder: (_) => Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -194,7 +197,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: AppTheme.brandPurpleLight),
+            Icon(icon, size: 14, color: AppTheme.brand),
             const SizedBox(width: 4),
             Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12)),
           ],
@@ -206,7 +209,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
   void _openMore(BuildContext ctx, SessionProvider p) {
     showModalBottomSheet(
       context: ctx,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: AppTheme.bgPrimary,
       builder: (_) => Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -265,12 +268,12 @@ class _ModeToggle extends StatelessWidget {
         height: 36,
         decoration: BoxDecoration(
           color: AppTheme.bgTertiary,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Icon(
           isDialog ? Icons.chat_bubble_outline : Icons.terminal,
-          size: 16,
-          color: AppTheme.brandPurpleLight,
+          size: 18,
+          color: AppTheme.brand,
         ),
       ),
     );

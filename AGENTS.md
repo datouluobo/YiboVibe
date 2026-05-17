@@ -11,7 +11,7 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 
 ## 当前产品边界
 
-当前应按 [docs/specs.md](/F:/Download/GitHub/YiboVibe/docs/specs.md) 理解产品范围。
+当前应按 [docs/specs-v2.md](/F:/Download/GitHub/YiboVibe/docs/specs-v2.md) 理解产品范围。
 
 保留模块：
 
@@ -43,7 +43,7 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 
 ## 协作规则
 
-1. 修改功能边界前，先对齐 `docs/specs.md`。
+1. 修改功能边界前，先对齐 `docs/specs-v2.md`。
 2. 需要判断真实入口时，优先看 manifest、router 和实际入口文件，不要猜。
 3. 评估项目规模时，区分源码和构建产物；`target/`、`node_modules/` 不代表业务复杂度。
 4. 非必要不要扩展 AI 相关范围；当前 AI 能力只收敛在 `FlowProbe`。

@@ -1,4 +1,4 @@
-﻿package handler
+package handler
 
 import (
 	"net/http"
@@ -41,6 +41,95 @@ func GetSession(hub *ws.Hub) gin.HandlerFunc {
 	}
 }
 
+// StopSession asks the owner desktop device to stop a session.
+func StopSession(hub *ws.Hub) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := c.MustGet(middleware.CtxUIDKey).(uint)
+		sessionID := c.Param("id")
+
+		sess := hub.Sessions.Get(sessionID)
+		if sess == nil || sess.OwnerUID != uid {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "session not found"})
+			return
+		}
+
+		hub.Broadcast <- &ws.Message{
+			SenderUID:      uid,
+			SenderDeviceID: 0,
+			TargetDevices:  []uint{sess.OwnerDevice},
+			Type:           "session:stop",
+			Payload: gin.H{
+				"session_id": sessionID,
+				"confirmed":  true,
+			},
+		}
+
+		c.JSON(http.StatusAccepted, gin.H{
+			"code": 202,
+			"msg":  "stop requested",
+		})
+	}
+}
+
+// RemoveSession asks the owner desktop device to remove a session, or deletes it
+// immediately if the owner device is already offline.
+func RemoveSession(hub *ws.Hub) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := c.MustGet(middleware.CtxUIDKey).(uint)
+		sessionID := c.Param("id")
+
+		sess := hub.Sessions.Get(sessionID)
+		if sess == nil || sess.OwnerUID != uid {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "session not found"})
+			return
+		}
+
+		hub.Mu.RLock()
+		userClients := hub.Clients[uid]
+		targetOnline := false
+		if userClients != nil {
+			_, targetOnline = userClients[sess.OwnerDevice]
+		}
+		hub.Mu.RUnlock()
+
+		if targetOnline {
+			hub.Broadcast <- &ws.Message{
+				SenderUID:      uid,
+				SenderDeviceID: 0,
+				TargetDevices:  []uint{sess.OwnerDevice},
+				Type:           "session:remove",
+				Payload: gin.H{
+					"session_id": sessionID,
+				},
+			}
+			c.JSON(http.StatusAccepted, gin.H{
+				"code": 202,
+				"msg":  "remove requested",
+			})
+			return
+		}
+
+		hub.Sessions.Delete(sessionID)
+		select {
+		case hub.Broadcast <- &ws.Message{
+			SenderUID:      uid,
+			SenderDeviceID: 0,
+			Type:           "session:list_update",
+			Payload: gin.H{
+				"action":     "deleted",
+				"session_id": sessionID,
+			},
+		}:
+		default:
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"msg":  "session removed",
+		})
+	}
+}
+
 // GetOnlineDevices is a pass-through to the existing handler
 // We extend it to also include relay diagnostics
 func GetSignalDiagnostics(hub *ws.Hub) gin.HandlerFunc {
@@ -63,12 +152,11 @@ func GetSignalDiagnostics(hub *ws.Hub) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 200,
 			"data": gin.H{
-				"active_users":  userCount,
+				"active_users":   userCount,
 				"active_clients": clientCount,
 				"your_sessions":  sessCount,
-				"mode":          "signal+session",
+				"mode":           "signal+session",
 			},
 		})
 	}
 }
-

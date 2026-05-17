@@ -3,6 +3,7 @@ package ws
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/datouluobo/YiboVibe/server/internal/relay"
 	"github.com/datouluobo/YiboVibe/server/internal/session"
@@ -81,6 +82,10 @@ func (h *Hub) Run() {
 		}
 	}()
 
+	// Periodic session TTL cleanup — every 60 seconds
+	cleanupTicker := time.NewTicker(60 * time.Second)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case client := <-h.Register:
@@ -110,6 +115,7 @@ func (h *Hub) Run() {
 			}
 			h.Mu.Unlock()
 
+			h.Sessions.DeleteByOwnerDevice(client.UID, client.DeviceID)
 			_ = MarkDeviceOffline(client.UID, client.DeviceID)
 			log.Printf("Client Unregistered: UID %d / Device %d\n", client.UID, client.DeviceID)
 
@@ -159,6 +165,9 @@ func (h *Hub) Run() {
 				}
 				h.Mu.Unlock()
 			}
+
+		case <-cleanupTicker.C:
+			h.Sessions.CleanupStaleSessions()
 		}
 	}
 }

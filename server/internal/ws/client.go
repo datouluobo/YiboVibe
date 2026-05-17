@@ -165,13 +165,62 @@ func handleSignalMessage(c *Client, msg *Message) {
 			OwnerDevice: c.DeviceID,
 			State:       newState,
 		}
+		// Extract additional fields from payload map
+		if data, ok := msg.Payload.(map[string]interface{}); ok {
+			if sk, ok := data["shell_kind"].(string); ok {
+				s.ShellKind = sk
+			}
+			if cwd, ok := data["cwd"].(string); ok {
+				s.CWD = cwd
+			}
+			if sa, ok := data["started_at"].(float64); ok {
+				s.StartedAt = int64(sa)
+			}
+			if la, ok := data["last_output_at"].(float64); ok {
+				s.LastActiveAt = int64(la)
+			}
+		}
 		c.Hub.Sessions.Upsert(s)
 		log.Printf("[SignalHub] Session %s state=%s from UID=%d Dev=%d",
 			payload.SessionID, newState, c.UID, c.DeviceID)
 
+		// Broadcast session update to other WS clients (mobile)
+		select {
+		case c.Hub.Broadcast <- &Message{
+			SenderUID:      c.UID,
+			SenderDeviceID: c.DeviceID,
+			Type:           "session:list_update",
+			Payload: map[string]interface{}{
+				"action":  "upserted",
+				"session": s,
+			},
+		}:
+		default:
+		}
+
 	case "session:unregister":
+		// Capture session before deleting, so we can broadcast the removal
+		oldSess := c.Hub.Sessions.Get(payload.SessionID)
 		c.Hub.Sessions.Delete(payload.SessionID)
 		log.Printf("[SignalHub] Session %s unregistered by UID=%d", payload.SessionID, c.UID)
+
+		// Broadcast deletion to other WS clients
+		deletedPayload := map[string]interface{}{
+			"action":     "deleted",
+			"session_id": payload.SessionID,
+		}
+		if oldSess != nil {
+			deletedPayload["session"] = oldSess
+		}
+		select {
+		case c.Hub.Broadcast <- &Message{
+			SenderUID:      c.UID,
+			SenderDeviceID: c.DeviceID,
+			Type:           "session:list_update",
+			Payload:        deletedPayload,
+		}:
+		default:
+		}
 
 	case "host:heartbeat":
 		rm := relay.NewRelayMessage(relay.CmdHeartbeat, payload.SessionID, c.UID, c.DeviceID, msg.Payload)

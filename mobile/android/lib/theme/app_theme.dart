@@ -1,32 +1,32 @@
 import 'package:flutter/material.dart';
 
-/// YiboVibe Mobile 暗色主题 — Linear/Vercel 风格，极简暗色
+/// YiboVibe Mobile 白色主题 — 干净、专业，无 AI 味
 class AppTheme {
-  // 品牌色
-  static const Color brandPurple = Color(0xFF7C3AED); // 主色调
-  static const Color brandPurpleLight = Color(0xFFA78BFA);
-  static const Color brandPurpleDark = Color(0xFF5B21B6);
+  // 品牌色 — 纯净蓝
+  static const Color brand = Color(0xFF2563EB);       // blue-600
+  static const Color brandLight = Color(0xFF60A5FA);   // blue-400
+  static const Color brandDark = Color(0xFF1D4ED8);    // blue-700
 
   // 背景层级
-  static const Color bgPrimary = Color(0xFF0A0A0B); // 最深背景
-  static const Color bgSecondary = Color(0xFF141416); // 卡片/面板
-  static const Color bgTertiary = Color(0xFF1C1C1F); // 输入区/高亮
-  static const Color bgHover = Color(0xFF252529);
+  static const Color bgPrimary = Color(0xFFFFFFFF);    // 纯白
+  static const Color bgSecondary = Color(0xFFF8F9FA);  // 卡片/面板
+  static const Color bgTertiary = Color(0xFFF1F3F5);   // 输入区/高亮
+  static const Color bgHover = Color(0xFFE9ECEF);      // hover
 
   // 文字
-  static const Color textPrimary = Color(0xFFF5F5F6);
-  static const Color textSecondary = Color(0xFFA1A1AA);
-  static const Color textTertiary = Color(0xFF71717A);
+  static const Color textPrimary = Color(0xFF212529);
+  static const Color textSecondary = Color(0xFF6C757D);
+  static const Color textTertiary = Color(0xFFADB5BD);
 
   // 语义色 — session 状态
   static const Color statusGreen = Color(0xFF22C55E);
   static const Color statusYellow = Color(0xFFEAB308);
   static const Color statusRed = Color(0xFFEF4444);
-  static const Color statusGray = Color(0xFF52525B);
+  static const Color statusGray = Color(0xFF9CA3AF);
 
   // 边框
-  static const Color borderColor = Color(0xFF27272A);
-  static const Color borderFocus = Color(0xFF7C3AED);
+  static const Color borderColor = Color(0xFFDEE2E6);
+  static const Color borderFocus = Color(0xFF2563EB);
 
   /// Session 状态颜色映射
   static Color sessionStatusColor(String status) {
@@ -38,19 +38,21 @@ class AppTheme {
         return statusYellow;
       case 'crashed':
         return statusRed;
+      case 'stale':
+        return statusGray;
       case 'stopped':
       default:
         return statusGray;
     }
   }
 
-  static ThemeData get darkTheme {
+  static ThemeData get lightTheme {
     return ThemeData(
-      brightness: Brightness.dark,
+      brightness: Brightness.light,
       scaffoldBackgroundColor: bgPrimary,
-      colorScheme: const ColorScheme.dark(
-        primary: brandPurple,
-        secondary: brandPurpleLight,
+      colorScheme: const ColorScheme.light(
+        primary: brand,
+        secondary: brandLight,
         surface: bgSecondary,
         error: statusRed,
       ),
@@ -76,7 +78,7 @@ class AppTheme {
         filled: true,
         fillColor: bgTertiary,
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: borderColor),
@@ -89,12 +91,13 @@ class AppTheme {
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: borderFocus, width: 1.5),
         ),
+        labelStyle: const TextStyle(color: textSecondary, fontSize: 14),
         hintStyle: const TextStyle(color: textTertiary, fontSize: 14),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: brandPurple,
-          foregroundColor: textPrimary,
+          backgroundColor: brand,
+          foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
@@ -108,7 +111,7 @@ class AppTheme {
         ),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: bgSecondary,
+        backgroundColor: bgPrimary,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: const BorderSide(color: borderColor),
@@ -121,7 +124,7 @@ class AppTheme {
         behavior: SnackBarBehavior.floating,
       ),
       bottomSheetTheme: const BottomSheetThemeData(
-        backgroundColor: bgSecondary,
+        backgroundColor: bgPrimary,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
         ),

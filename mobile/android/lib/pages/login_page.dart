@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../theme/app_theme.dart';
-import 'console_page.dart';
 
 /// 登录页 — 输入服务端地址、账号密码、设备名
 class LoginPage extends StatefulWidget {
@@ -39,13 +38,7 @@ class _LoginPageState extends State<LoginPage> {
       password: _passwordController.text,
       deviceName: _deviceNameController.text.trim(),
     );
-
-    if (success && mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ConsolePage()),
-      );
-    }
+    if (!success || !mounted) return;
   }
 
   @override
@@ -67,7 +60,7 @@ class _LoginPageState extends State<LoginPage> {
                       const Icon(
                         Icons.developer_mode,
                         size: 48,
-                        color: AppTheme.brandPurpleLight,
+                        color: AppTheme.brandLight,
                       ),
                       const SizedBox(height: 16),
                       const Text(

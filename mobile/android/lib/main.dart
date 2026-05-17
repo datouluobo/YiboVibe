@@ -17,9 +17,9 @@ void main() {
     ]);
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppTheme.bgSecondary,
-      systemNavigationBarIconBrightness: Brightness.light,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: AppTheme.bgPrimary,
+      systemNavigationBarIconBrightness: Brightness.dark,
     ));
   }
   runApp(const YiboVibeApp());
@@ -41,7 +41,7 @@ class YiboVibeApp extends StatelessWidget {
       child: MaterialApp(
         title: 'YiboVibe Mobile',
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.darkTheme,
+        theme: AppTheme.lightTheme,
         builder: kIsWeb ? _webFrameBuilder : null,
         home: const _AuthGate(),
       ),
@@ -52,7 +52,7 @@ class YiboVibeApp extends StatelessWidget {
 /// Web 宽度限制: 居中显示在桌面浏览器，模拟手机屏幕
 Widget _webFrameBuilder(BuildContext context, Widget? child) {
   return Material(
-    color: const Color(0xFF1A1A1E),
+    color: const Color(0xFFF0F0F3),
     child: Center(
       child: ClipRRect(
         child: SizedBox(
@@ -96,7 +96,7 @@ class _AuthGateState extends State<_AuthGate> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.developer_mode, size: 48, color: AppTheme.brandPurpleLight),
+              Icon(Icons.developer_mode, size: 48, color: AppTheme.brandLight),
               SizedBox(height: 16),
               Text('YiboVibe',
                   style: TextStyle(
@@ -109,7 +109,7 @@ class _AuthGateState extends State<_AuthGate> {
                 height: 24,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: AppTheme.brandPurpleLight,
+                  color: AppTheme.brandLight,
                 ),
               ),
             ],

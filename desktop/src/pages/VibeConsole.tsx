@@ -105,6 +105,7 @@ export default function VibeConsole() {
   const terminalBundlesRef = useRef<Map<string, TerminalBundle>>(new Map());
   const terminalHostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
+  const lastResizeDimsRef = useRef<Map<string, { cols: number; rows: number }>>(new Map());
 
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => a.started_at - b.started_at),
@@ -147,8 +148,13 @@ export default function VibeConsole() {
     bundle.fitAddon.fit();
     const dims = bundle.fitAddon.proposeDimensions();
     if (dims) {
+      const lastDims = lastResizeDimsRef.current.get(sid);
+      if (lastDims && lastDims.cols === dims.cols && lastDims.rows === dims.rows) {
+        return;
+      }
       try {
         await invoke("resize_session", { sessionId: sid, cols: dims.cols, rows: dims.rows });
+        lastResizeDimsRef.current.set(sid, { cols: dims.cols, rows: dims.rows });
       } catch {
         // ignore
       }
@@ -168,6 +174,7 @@ export default function VibeConsole() {
       terminalBundlesRef.current.delete(sid);
     }
     terminalHostsRef.current.delete(sid);
+    lastResizeDimsRef.current.delete(sid);
   }, []);
 
   const appendOutput = useCallback((sid: string, text: string) => {
