@@ -1,4 +1,4 @@
-﻿use std::env;
+use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,4 +53,3 @@ fn main() {
 
     tauri_build::build()
 }
-

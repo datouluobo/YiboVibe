@@ -22,6 +22,8 @@ var (
 	newPass       = flag.String("new-pass", "", "New password for admin reset")
 )
 
+const serverVersion = "server-2026-05-18-r1"
+
 func main() {
 	flag.Parse()
 	log.Println("--- YiboVibe Server Start ---")
@@ -69,6 +71,7 @@ func main() {
 	go hub.Run()
 
 	r := gin.Default()
+	r.Use(corsMiddleware())
 	r.UseRawPath = true
 	r.UnescapePathValues = false
 	r.GET("/share/:token", handler.DownloadSharedObject)
@@ -79,7 +82,7 @@ func main() {
 		api.GET("/ping", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"message": "pong",
-				"version": "v2-signal",
+				"version": serverVersion,
 			})
 		})
 		// ── Public auth endpoints ──
@@ -116,6 +119,8 @@ func main() {
 			protectedGrp.GET("/signal/diag", handler.GetSignalDiagnostics(hub))
 			protectedGrp.GET("/signal/sessions", handler.ListSessions(hub))
 			protectedGrp.GET("/signal/sessions/:id", handler.GetSession(hub))
+			protectedGrp.POST("/signal/sessions/:id/stop", handler.StopSession(hub))
+			protectedGrp.DELETE("/signal/sessions/:id", handler.RemoveSession(hub))
 			protectedGrp.GET("/devices", handler.ListDevices)
 			protectedGrp.GET("/staging/policy", handler.GetStagingPolicy)
 			protectedGrp.GET("/staging/preferences", handler.GetStagingPreferences)
@@ -179,6 +184,26 @@ func main() {
 
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+		}
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Requested-With")
+		c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Type")
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
 	}
 }
 

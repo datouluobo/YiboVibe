@@ -1,30 +1,18 @@
-// ConPTY-based terminal backend
-// Windows Pseudo Console (ConPTY) for true terminal emulation support
+// PTY-based terminal backend.
+// Use a real pseudo terminal so interactive shells and TUIs keep prompts,
+// completion, cursor movement, and full-screen layouts.
 
 use encoding_rs::GBK;
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
-
-use windows::Win32::Foundation::{
-    HANDLE, CloseHandle, WAIT_OBJECT_0,
-};
-use windows::Win32::System::Console::{
-    CreatePseudoConsole, ClosePseudoConsole, ResizePseudoConsole, HPCON, COORD,
-};
-use windows::Win32::System::Pipes::CreatePipe;
-use windows::Win32::System::Threading::{
-    CreateProcessW, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
-    DeleteProcThreadAttributeList, WaitForSingleObject, GetExitCodeProcess,
-    PROCESS_INFORMATION, STARTUPINFOEXW, EXTENDED_STARTUPINFO_PRESENT,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-};
-use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 
 pub type SessionId = String;
 
@@ -86,7 +74,7 @@ fn resolve_session_cwd(cwd: &str) -> String {
 }
 
 fn to_wsl_path(path: &str) -> Option<String> {
-    let normalized = path.replace("\\", "/");
+    let normalized = path.replace('\\', "/");
     let bytes = normalized.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' {
         let drive = normalized.chars().next()?.to_ascii_lowercase();
@@ -114,85 +102,114 @@ fn decode_terminal_bytes(shell_kind: &str, bytes: &[u8]) -> String {
     }
 }
 
-fn build_command_line(shell_kind: &str, cwd: &str) -> Vec<u16> {
-    match shell_kind {
-        "wsl" => {
-            if let Some(wsl_cwd) = to_wsl_path(cwd) {
-                format!(
-                    "wsl.exe --cd \"{}\" --exec /usr/bin/script -qfec \"/bin/bash -i\" /dev/null",
-                    wsl_cwd
-                )
-            } else {
-                "wsl.exe --cd ~ --exec /usr/bin/script -qfec \"/bin/bash -i\" /dev/null".to_string()
-            }
-        }
-        "pwsh" => "pwsh.exe -NoLogo -NoExit".to_string(),
-        _ => {
-            let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
-            format!("{comspec} /D /Q /K")
-        }
-    }
-    .encode_utf16()
-    .chain(std::iter::once(0))
-    .collect()
-}
-
 fn debug_preview(text: &str) -> String {
     let preview: String = text.chars().take(120).collect();
-    preview
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
+    preview.replace('\r', "\\r").replace('\n', "\\n")
 }
 
-fn shell_init_input(shell_kind: &str) -> Option<&'static str> {
-    match shell_kind {
-        _ => None,
-    }
+fn normalize_terminal_input(text: &str) -> String {
+    text.replace("\r\n", "\r").replace('\n', "\r")
 }
 
-struct PtyHandle(HANDLE);
-
-impl PtyHandle {
-    fn new(h: HANDLE) -> Self {
-        PtyHandle(h)
-    }
-}
-
-unsafe impl Send for PtyHandle {}
-unsafe impl Sync for PtyHandle {}
-
-impl Drop for PtyHandle {
-    fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            unsafe { let _ = CloseHandle(self.0); }
+fn build_command(shell_kind: &str, cwd: &str) -> CommandBuilder {
+    match normalize_shell_kind(shell_kind).as_str() {
+        "pwsh" => {
+            let mut command = CommandBuilder::new("pwsh.exe");
+            command.arg("-NoLogo");
+            command.arg("-NoExit");
+            command.cwd(cwd);
+            command.env("TERM", "xterm-256color");
+            command.env("COLORTERM", "truecolor");
+            command
+        }
+        "wsl" => {
+            let mut command = CommandBuilder::new("wsl.exe");
+            if let Some(wsl_cwd) = to_wsl_path(cwd) {
+                command.arg("--cd");
+                command.arg(wsl_cwd);
+            }
+            command.arg("--exec");
+            command.arg("/bin/bash");
+            command.arg("-i");
+            command.env("TERM", "xterm-256color");
+            command.env("COLORTERM", "truecolor");
+            command
+        }
+        _ => {
+            let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+            let mut command = CommandBuilder::new(comspec);
+            command.arg("/D");
+            command.arg("/Q");
+            command.arg("/K");
+            command.cwd(cwd);
+            command.env("TERM", "xterm-256color");
+            command
         }
     }
 }
 
-fn create_pipe_pair() -> Result<(HANDLE, HANDLE), String> {
-    let mut read_h = HANDLE::default();
-    let mut write_h = HANDLE::default();
-    unsafe {
-        CreatePipe(
-            &mut read_h as *mut HANDLE,
-            &mut write_h as *mut HANDLE,
-            None,
-            0,
-        )
-        .map_err(|e| format!("CreatePipe failed: {e}"))?;
+fn describe_command(shell_kind: &str, cwd: &str) -> String {
+    match normalize_shell_kind(shell_kind).as_str() {
+        "pwsh" => format!("pwsh.exe -NoLogo -NoExit @ {cwd}"),
+        "wsl" => {
+            if let Some(wsl_cwd) = to_wsl_path(cwd) {
+                format!("wsl.exe --cd {wsl_cwd} --exec /bin/bash -i")
+            } else {
+                "wsl.exe --cd ~ --exec /bin/bash -i".to_string()
+            }
+        }
+        _ => {
+            let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+            format!("{comspec} /D /Q /K @ {cwd}")
+        }
     }
-    Ok((read_h, write_h))
 }
 
-struct ConPtySession {
+fn shell_init_input(_shell_kind: &str) -> Option<&'static str> {
+    None
+}
+
+fn spawn_output_reader(
+    shell_kind: String,
+    mut reader: Box<dyn Read + Send>,
+    is_running: Arc<AtomicBool>,
+    last_output_at: Arc<AtomicU64>,
+    on_output: Arc<dyn Fn(String) + Send + Sync>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let chunk = decode_terminal_bytes(&shell_kind, &buffer[..n]);
+                    if shell_kind == "wsl" {
+                        eprintln!(
+                            "[VibeConsole][WSL][stdout] preview={}",
+                            debug_preview(&chunk)
+                        );
+                    }
+                    last_output_at.store(now_secs(), Ordering::SeqCst);
+                    on_output(chunk);
+                }
+                Err(err) => {
+                    if is_running.load(Ordering::SeqCst) {
+                        eprintln!("[VibeConsole][{shell_kind}][pty-read-error] {err}");
+                    }
+                    break;
+                }
+            }
+        }
+    })
+}
+
+struct PtySession {
     session_id: SessionId,
     shell_kind: String,
     cwd: String,
-    hpc: Option<HPCON>,
-    input_read: Option<PtyHandle>,
-    output_write: Option<PtyHandle>,
-    input_write: Option<PtyHandle>,
-    output_read: Option<PtyHandle>,
+    master: Option<Arc<StdMutex<Box<dyn MasterPty + Send>>>>,
+    writer: Option<Arc<StdMutex<Box<dyn Write + Send>>>>,
+    child: Option<Arc<StdMutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
     output_thread: Option<thread::JoinHandle<()>>,
     wait_thread: Option<thread::JoinHandle<()>>,
     is_running: Arc<AtomicBool>,
@@ -202,17 +219,19 @@ struct ConPtySession {
     error_message: Arc<StdMutex<Option<String>>>,
 }
 
-impl ConPtySession {
+impl PtySession {
     fn new(shell_kind: String, cwd: String) -> Self {
-        ConPtySession {
-            session_id: generate_session_id(),
+        Self::new_with_id(generate_session_id(), shell_kind, cwd)
+    }
+
+    fn new_with_id(session_id: SessionId, shell_kind: String, cwd: String) -> Self {
+        Self {
+            session_id,
             shell_kind: normalize_shell_kind(&shell_kind),
             cwd: resolve_session_cwd(&cwd),
-            hpc: None,
-            input_read: None,
-            output_write: None,
-            input_write: None,
-            output_read: None,
+            master: None,
+            writer: None,
+            child: None,
             output_thread: None,
             wait_thread: None,
             is_running: Arc::new(AtomicBool::new(false)),
@@ -244,183 +263,121 @@ impl ConPtySession {
         }
     }
 
+    fn is_running(&self) -> bool {
+        self.is_running.load(Ordering::SeqCst)
+    }
+
+    fn cleanup_runtime_resources(&mut self) {
+        self.is_running.store(false, Ordering::SeqCst);
+        if let Some(child) = self.child.take() {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
+        self.writer = None;
+        self.master = None;
+        let _ = self.output_thread.take();
+        let _ = self.wait_thread.take();
+    }
+
     fn start_with_callbacks<FStdout, FExit>(
         &mut self,
         on_stdout: FStdout,
         on_exit: FExit,
     ) -> Result<(), String>
     where
-        FStdout: Fn(String) + Send + 'static,
+        FStdout: Fn(String) + Send + Sync + 'static,
         FExit: Fn(i32) + Send + 'static,
     {
-        if self.is_running.load(Ordering::SeqCst) {
+        if self.is_running() {
             return Err("Session already running".to_string());
         }
 
+        self.cleanup_runtime_resources();
         self.started_at = now_secs();
         self.last_output_at.store(self.started_at, Ordering::SeqCst);
-        if let Ok(mut g) = self.exit_code.lock() { *g = None; }
-        if let Ok(mut g) = self.error_message.lock() { *g = None; }
+        if let Ok(mut g) = self.exit_code.lock() {
+            *g = None;
+        }
+        if let Ok(mut g) = self.error_message.lock() {
+            *g = None;
+        }
 
-        // 1. Create pipes
-        let (h_input_read, h_input_write) = create_pipe_pair()?;
-        let (h_output_read, h_output_write) = create_pipe_pair()?;
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 32,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("openpty failed: {e}"))?;
 
-        // 2. Create pseudo console (80x24 initial)
-        let coord = COORD { X: 80, Y: 24 };
-        let hpc = unsafe {
-            CreatePseudoConsole(coord, h_input_read, h_output_write, 0)
-                .map_err(|e| format!("CreatePseudoConsole failed: {e}"))?
-        };
-
-        // 3. Build command line
-        let cmd_line = build_command_line(&self.shell_kind, &self.cwd);
         if self.shell_kind == "wsl" {
-            let command = String::from_utf16_lossy(
-                &cmd_line.iter().copied().take_while(|unit| *unit != 0).collect::<Vec<u16>>(),
-            );
             eprintln!(
                 "[VibeConsole][WSL][start] session={} cwd={} command={}",
                 self.session_id,
                 self.cwd,
-                command
+                describe_command(&self.shell_kind, &self.cwd)
             );
         }
 
-        // 4. Initialize attribute list (two-call pattern)
-        let mut attr_list_size: usize = 0;
-        unsafe {
-            let _ = InitializeProcThreadAttributeList(
-                None, 1, None, &mut attr_list_size,
-            );
-        }
+        let command = build_command(&self.shell_kind, &self.cwd);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|e| format!("spawn pty command failed: {e}"))?;
 
-        let mut attr_list_buf = vec![0u8; attr_list_size];
-        let lpp_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_list_buf.as_mut_ptr() as *mut _);
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| format!("clone pty reader failed: {e}"))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| format!("take pty writer failed: {e}"))?;
 
-        unsafe {
-            InitializeProcThreadAttributeList(
-                Some(lpp_list), 1, None, &mut attr_list_size,
-            )
-            .map_err(|e| format!("InitializeProcThreadAttributeList failed: {e}"))?;
-        }
-
-        // 5. Set pseudo console attribute
-        unsafe {
-            UpdateProcThreadAttribute(
-                lpp_list, 0,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-                Some(hpc.0 as *const _),
-                std::mem::size_of::<HPCON>(),
-                None, None,
-            )
-            .map_err(|e| format!("UpdateProcThreadAttribute failed: {e}"))?;
-        }
-
-        // 6. Prepare startup info
-        let mut startup_info = STARTUPINFOEXW {
-            StartupInfo: unsafe { std::mem::zeroed() },
-            lpAttributeList: lpp_list,
-        };
-        startup_info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-
-        let mut process_info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        let mut cmd_mut = cmd_line.clone();
-
-        let cwd_wide: Vec<u16> = if self.shell_kind != "wsl" && !self.cwd.is_empty() {
-            self.cwd.encode_utf16().chain(std::iter::once(0)).collect()
-        } else {
-            vec![]
-        };
-
-        // 7. Create process with ConPTY
-        unsafe {
-            CreateProcessW(
-                windows::core::PCWSTR::null(),
-                Some(windows::core::PWSTR(cmd_mut.as_mut_ptr())),
-                None, None,
-                false,
-                EXTENDED_STARTUPINFO_PRESENT,
-                None,
-                if cwd_wide.is_empty() {
-                    windows::core::PCWSTR::null()
-                } else {
-                    windows::core::PCWSTR(cwd_wide.as_ptr())
-                },
-                &startup_info.StartupInfo as *const _ as *const _,
-                &mut process_info,
-            )
-            .map_err(|e| format!("CreateProcessW failed: {e}"))?;
-        }
-
-        // 8. Clean up attribute list
-        unsafe { DeleteProcThreadAttributeList(lpp_list); }
-
-        if !process_info.hThread.is_invalid() {
-            unsafe { let _ = CloseHandle(process_info.hThread); }
-        }
-
-        self.hpc = Some(hpc);
-        self.input_read = Some(PtyHandle::new(h_input_read));
-        self.output_write = Some(PtyHandle::new(h_output_write));
-        self.input_write = Some(PtyHandle::new(h_input_write));
-        self.output_read = Some(PtyHandle::new(h_output_read));
+        let master = pair.master;
+        let child = Arc::new(StdMutex::new(child));
+        let writer = Arc::new(StdMutex::new(writer));
+        self.master = Some(Arc::new(StdMutex::new(master)));
+        self.child = Some(child.clone());
+        self.writer = Some(writer);
         self.is_running.store(true, Ordering::SeqCst);
 
-        // 9. Spawn output reader thread
-        let sk = self.shell_kind.clone();
-        let out_h_val = h_output_read.0 as isize;
-        let is_run = self.is_running.clone();
-        let last_out = self.last_output_at.clone();
+        let stdout_cb: Arc<dyn Fn(String) + Send + Sync> = Arc::new(on_stdout);
+        let output_thread = spawn_output_reader(
+            self.shell_kind.clone(),
+            reader,
+            self.is_running.clone(),
+            self.last_output_at.clone(),
+            stdout_cb,
+        );
 
-        let out_th = thread::spawn(move || {
-            let mut buf = vec![0u8; 4096];
-            loop {
-                let mut br: u32 = 0;
-                let r = unsafe {
-                    ReadFile(HANDLE(out_h_val as *mut _), Some(&mut buf), Some(&mut br as *mut u32), None)
+        let is_running = self.is_running.clone();
+        let exit_code = self.exit_code.clone();
+        let wait_child = child.clone();
+        let wait_thread = thread::spawn(move || {
+            let code = {
+                let mut child = match wait_child.lock() {
+                    Ok(child) => child,
+                    Err(_) => return,
                 };
-                if r.is_err() || br == 0 {
-                    break;
-                }
-                last_out.store(now_secs(), Ordering::SeqCst);
-                let decoded = decode_terminal_bytes(&sk, &buf[..br as usize]);
-                if sk == "wsl" {
-                    eprintln!(
-                        "[VibeConsole][WSL][stdout] bytes={} preview={}",
-                        br,
-                        debug_preview(&decoded)
-                    );
-                }
-                on_stdout(decoded);
-                if !is_run.load(Ordering::SeqCst) {
-                    break;
-                }
+                child
+                    .wait()
+                    .ok()
+                    .map(|status| status.exit_code() as i32)
+                    .unwrap_or(-1)
+            };
+            is_running.store(false, Ordering::SeqCst);
+            if let Ok(mut g) = exit_code.lock() {
+                *g = Some(code);
             }
-        });
-
-        // 10. Spawn process wait thread
-        let proc_h_val = process_info.hProcess.0 as isize;
-        let is_run2 = self.is_running.clone();
-        let ec2 = self.exit_code.clone();
-        let wait_th = thread::spawn(move || {
-            let wr = unsafe { WaitForSingleObject(HANDLE(proc_h_val as *mut _), u32::MAX) };
-            let code = if wr == WAIT_OBJECT_0 {
-                let mut ec: u32 = 0;
-                if unsafe { GetExitCodeProcess(HANDLE(proc_h_val as *mut _), &mut ec) }.is_ok() {
-                    ec as i32
-                } else { -1 }
-            } else { -1 };
-
-            is_run2.store(false, Ordering::SeqCst);
-            if let Ok(mut g) = ec2.lock() { *g = Some(code); }
-
             on_exit(code);
         });
 
-        self.output_thread = Some(out_th);
-        self.wait_thread = Some(wait_th);
-
+        self.output_thread = Some(output_thread);
+        self.wait_thread = Some(wait_thread);
         Ok(())
     }
 
@@ -440,70 +397,60 @@ impl ConPtySession {
     }
 
     fn write_input(&self, text: &str) -> Result<(), String> {
-        let input = self.input_write.as_ref().ok_or("Session not started")?;
+        let writer = self.writer.as_ref().ok_or("Session not started")?;
+        let normalized = normalize_terminal_input(text);
         if self.shell_kind == "wsl" {
             eprintln!(
                 "[VibeConsole][WSL][stdin] session={} preview={}",
                 self.session_id,
-                debug_preview(text)
+                debug_preview(&normalized)
             );
         }
-        let mut written = 0u32;
-        unsafe {
-            WriteFile(input.0, Some(text.as_bytes()), Some(&mut written), None)
-                .map_err(|e| format!("WriteFile error: {e}"))?;
-        }
+        let mut writer = writer
+            .lock()
+            .map_err(|_| "pty writer lock poisoned".to_string())?;
+        writer
+            .write_all(normalized.as_bytes())
+            .map_err(|e| format!("pty write error: {e}"))?;
+        writer.flush().map_err(|e| format!("pty flush error: {e}"))?;
         self.last_output_at.store(now_secs(), Ordering::SeqCst);
         Ok(())
     }
 
     fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-        let hpc = self.hpc.ok_or("Session not started")?;
-        unsafe {
-            ResizePseudoConsole(hpc, COORD { X: cols as i16, Y: rows as i16 })
-                .map_err(|e| format!("ResizePseudoConsole failed: {e}"))
-        }
+        let master = self.master.as_ref().ok_or("Session not started")?;
+        let master = master
+            .lock()
+            .map_err(|_| "pty master lock poisoned".to_string())?;
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("pty resize failed: {e}"))
     }
 
     fn kill(&mut self) {
-        self.is_running.store(false, Ordering::SeqCst);
-        // Close pseudo console first — this breaks ReadFile (output thread exits)
-        // and causes the child process to exit (wait thread exits)
-        if let Some(hpc) = self.hpc.take() {
-            unsafe { ClosePseudoConsole(hpc); }
-        }
-        // Join threads before closing handles to avoid races
-        if let Some(th) = self.output_thread.take() {
-            let _ = th.join();
-        }
-        if let Some(th) = self.wait_thread.take() {
-            let _ = th.join();
-        }
-        // Now safe to close handles — no threads are using them
-        self.input_read = None;
-        self.output_write = None;
-        self.input_write = None;
-        self.output_read = None;
+        self.cleanup_runtime_resources();
     }
 }
 
-impl Drop for ConPtySession {
+impl Drop for PtySession {
     fn drop(&mut self) {
-        self.is_running.store(false, Ordering::SeqCst);
-        if let Some(hpc) = self.hpc.take() {
-            unsafe { ClosePseudoConsole(hpc); }
-        }
+        self.cleanup_runtime_resources();
     }
 }
 
 pub struct SessionManager {
-    sessions: HashMap<SessionId, ConPtySession>,
+    sessions: HashMap<SessionId, PtySession>,
     default_shell: String,
 }
 
 impl SessionManager {
     pub fn new(default_shell: &str) -> Self {
-        SessionManager {
+        Self {
             sessions: HashMap::new(),
             default_shell: normalize_shell_kind(default_shell),
         }
@@ -513,18 +460,41 @@ impl SessionManager {
         self.default_shell = normalize_shell_kind(shell);
     }
 
-    pub async fn create_session(&mut self, shell_kind: Option<&str>, cwd: Option<&str>) -> SessionId {
+    pub async fn create_session(
+        &mut self,
+        shell_kind: Option<&str>,
+        cwd: Option<&str>,
+    ) -> SessionId {
+        self.create_session_with_id(generate_session_id(), shell_kind, cwd)
+            .await
+    }
+
+    pub async fn create_session_with_id(
+        &mut self,
+        session_id: SessionId,
+        shell_kind: Option<&str>,
+        cwd: Option<&str>,
+    ) -> SessionId {
         let shell = normalize_shell_kind(shell_kind.unwrap_or(&self.default_shell));
         let dir = cwd.unwrap_or(".").to_string();
-        let session = ConPtySession::new(shell, dir);
+        let session = PtySession::new_with_id(session_id.clone(), shell, dir);
         let id = session.session_id.clone();
         self.sessions.insert(id.clone(), session);
         id
     }
 
-    pub async fn start_session(&mut self, session_id: &str, app_handle: &AppHandle) -> Result<(), String> {
-        let session = self.sessions.get_mut(session_id)
+    pub async fn start_session(
+        &mut self,
+        session_id: &str,
+        app_handle: &AppHandle,
+    ) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        if session.is_running() {
+            return Ok(());
+        }
         session.start(app_handle)?;
         if let Some(init) = shell_init_input(&session.shell_kind) {
             let _ = session.write_input(init);
@@ -532,20 +502,88 @@ impl SessionManager {
         Ok(())
     }
 
+    pub async fn start_session_with_ws(
+        &mut self,
+        session_id: &str,
+        app_handle: &AppHandle,
+        ws_tx: tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>,
+    ) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        if session.is_running() {
+            return Ok(());
+        }
+        let stdout_sid = session.session_id.clone();
+        let stdout_app = app_handle.clone();
+        let exit_sid = session.session_id.clone();
+        let exit_app = app_handle.clone();
+        let ws_tx_out = ws_tx.clone();
+        session.start_with_callbacks(
+            move |text| {
+                let _ = stdout_app.emit(&format!("term:stdout:{stdout_sid}"), &text);
+                let ws_msg = yibovibe_core::ws::WsMessage {
+                    sender_uid: 0,
+                    sender_device_id: 0,
+                    target_devices: vec![],
+                    r#type: "session:output".to_string(),
+                    payload: serde_json::json!({
+                        "session_id": stdout_sid,
+                        "text": text,
+                    }),
+                };
+                let _ = ws_tx_out.try_send(ws_msg);
+            },
+            move |code| {
+                let _ = exit_app.emit(&format!("term:exit:{exit_sid}"), code);
+                let ws_msg = yibovibe_core::ws::WsMessage {
+                    sender_uid: 0,
+                    sender_device_id: 0,
+                    target_devices: vec![],
+                    r#type: "session:update".to_string(),
+                    payload: serde_json::json!({
+                        "session_id": exit_sid,
+                        "state": "stopped",
+                        "exit_code": code,
+                    }),
+                };
+                let _ = ws_tx.try_send(ws_msg);
+            },
+        )?;
+        let mgr = self;
+        let session = mgr.sessions.get(session_id).unwrap();
+        if let Some(init) = shell_init_input(&session.shell_kind) {
+            let _ = session.write_input(init);
+        }
+        Ok(())
+    }
+
     pub async fn write_session(&mut self, session_id: &str, text: &str) -> Result<(), String> {
-        let session = self.sessions.get(session_id)
+        let session = self
+            .sessions
+            .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         session.write_input(text)
     }
 
-    pub async fn resize_session(&mut self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let session = self.sessions.get(session_id)
+    pub async fn resize_session(
+        &mut self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         session.resize(cols, rows)
     }
 
     pub async fn kill_session(&mut self, session_id: &str) -> Result<(), String> {
-        let session = self.sessions.get_mut(session_id)
+        let session = self
+            .sessions
+            .get_mut(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         session.kill();
         Ok(())
@@ -555,7 +593,8 @@ impl SessionManager {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.kill();
         }
-        self.sessions.remove(session_id)
+        self.sessions
+            .remove(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         Ok(())
     }
@@ -615,7 +654,7 @@ mod tests {
     }
 
     fn verify_shell_command(shell_kind: &str, command: &str, token: &str) {
-        let mut session = ConPtySession::new(shell_kind.to_string(), ".".to_string());
+        let mut session = PtySession::new(shell_kind.to_string(), ".".to_string());
         let (stdout_tx, stdout_rx) = mpsc::channel::<String>();
         let (exit_tx, exit_rx) = mpsc::channel::<i32>();
 
@@ -641,7 +680,7 @@ mod tests {
             "expected token {token:?} in output {output:?}"
         );
 
-        let _ = session.write_input("exit\r");
+        let _ = session.write_input("exit\n");
         session.kill();
     }
 

@@ -16,6 +16,12 @@ class ApiService {
   String? get token => _token;
   bool get isLoggedIn => _token != null && _baseUrl != null;
 
+  /// 直接设置认证凭据（避免异步加载 SharedPrefs 的时序问题）
+  void setBaseUrl(String url, String token) {
+    _baseUrl = url.endsWith('/') ? url : '$url/';
+    _token = token;
+  }
+
   Future<void> loadFromStorage() async {
     final prefs = await SharedPreferences.getInstance();
     _baseUrl = prefs.getString(_keyServerUrl);
@@ -85,7 +91,16 @@ class ApiService {
     return list.cast<Map<String, dynamic>>();
   }
 
-  /// 获取 session 列表
+  /// 获取在线设备列表
+  /// GET /api/v1/sync/online
+  Future<List<int>> getOnlineDevices() async {
+    final response = await _authGet('api/v1/sync/online');
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (body['code'] != 200) throw Exception(body['msg']);
+    final data = body['data'] as Map<String, dynamic>? ?? {};
+    final list = data['online_devices'] as List<dynamic>? ?? [];
+    return list.map((e) => (e as num).toInt()).toList();
+  }
   /// GET /api/v1/sync/signal/sessions
   Future<List<Map<String, dynamic>>> getSessions() async {
     final response = await _authGet('api/v1/sync/signal/sessions');
@@ -94,6 +109,38 @@ class ApiService {
     final raw = body['data'] as List<dynamic>?;
     if (raw != null) return raw.cast<Map<String, dynamic>>();
     return [];
+  }
+
+  Future<void> validateToken() async {
+    final response = await _authGet('api/v1/sync/me');
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (body['code'] != 200) {
+      throw Exception(body['msg'] ?? '认证校验失败');
+    }
+  }
+
+  Future<void> stopSession(String sessionId) async {
+    final response = await http.post(
+      Uri.parse('${_baseUrl!}api/v1/sync/signal/sessions/$sessionId/stop'),
+      headers: _authHeaders(),
+    ).timeout(const Duration(seconds: 10));
+    _checkAuth(response);
+    if (response.statusCode != 200 && response.statusCode != 202) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      throw Exception(body['msg'] ?? '停止 Session 失败');
+    }
+  }
+
+  Future<void> removeSession(String sessionId) async {
+    final response = await http.delete(
+      Uri.parse('${_baseUrl!}api/v1/sync/signal/sessions/$sessionId'),
+      headers: _authHeaders(),
+    ).timeout(const Duration(seconds: 10));
+    _checkAuth(response);
+    if (response.statusCode != 200 && response.statusCode != 202) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      throw Exception(body['msg'] ?? '关闭 Session 失败');
+    }
   }
 
   Future<String?> getSavedUid() async {
@@ -111,7 +158,32 @@ class ApiService {
     await prefs.remove(_keyToken);
     await prefs.remove(_keyUid);
     await prefs.remove(_keyDeviceId);
+    await prefs.remove(_keyServerUrl);
     _token = null;
+    _baseUrl = null;
+  }
+
+  /// 管理员: 获取所有设备
+  /// GET /api/v1/admin/devices
+  Future<List<Map<String, dynamic>>> adminGetDevices() async {
+    final response = await _authGet('api/v1/admin/devices');
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (body['code'] != 200) throw Exception(body['msg']);
+    final list = body['data'] as List<dynamic>? ?? [];
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// 管理员: 踢掉设备
+  /// DELETE /api/v1/admin/devices/:id
+  Future<void> adminKickDevice(int deviceId) async {
+    final response = await http.delete(
+      Uri.parse('${_baseUrl!}api/v1/admin/devices/$deviceId'),
+      headers: _authHeaders(),
+    ).timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      throw Exception(body['msg'] ?? '操作失败');
+    }
   }
 
   Future<http.Response> _authGet(String path) async {

@@ -1,4 +1,6 @@
-﻿import "dart:convert";
+import sys
+
+content = r'''import "dart:convert";
 import "dart:async";
 import "package:web_socket_channel/web_socket_channel.dart";
 import "package:shared_preferences/shared_preferences.dart";
@@ -15,18 +17,31 @@ class SignalClient {
   String? _serverUrl;
   int _uid = 0;
   int _deviceId = 0;
+  bool _connected = false;
 
   final StreamController<SignalEvent> _eventController =
       StreamController<SignalEvent>.broadcast();
 
   Stream<SignalEvent> get events => _eventController.stream;
-  bool get isConnected => _channel != null;
+  bool get isConnected => _connected;
+  int get uid => _uid;
+  int get deviceId => _deviceId;
+  String? get token => _token;
+  String? get serverUrl => _serverUrl;
 
   Future<void> connect(String serverUrl, String token, int uid, int deviceId) async {
+    // Save auth state
     _serverUrl = serverUrl;
     _token = token;
     _uid = uid;
     _deviceId = deviceId;
+
+    // Persist auth for reconnection
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("auth_server_url", serverUrl);
+    await prefs.setString("auth_token", token);
+    await prefs.setInt("auth_uid", uid);
+    await prefs.setInt("auth_device_id", deviceId);
 
     final wsUrl = serverUrl.replaceAll("http://", "ws://").replaceAll("https://", "wss://");
     final uri = Uri.parse("$wsUrl/api/v1/sync/ws?token=$token");
@@ -34,35 +49,41 @@ class SignalClient {
     try {
       _channel = WebSocketChannel.connect(uri);
       await _channel!.ready;
+      _connected = true;
       _eventController.add(SignalEvent.connected());
 
       // Listen for incoming messages
       _channel!.stream.listen(
         (data) {
           try {
-            final msg = jsonDecode(data as String);
+            final msg = jsonDecode(data as String) as Map<String, dynamic>;
             _eventController.add(SignalEvent.message(msg));
           } catch (e) {
             // ignore malformed messages
           }
         },
         onError: (error) {
+          _connected = false;
           _eventController.add(SignalEvent.disconnected(error.toString()));
           _channel = null;
         },
         onDone: () {
+          _connected = false;
           _eventController.add(SignalEvent.disconnected("Connection closed"));
           _channel = null;
         },
       );
     } catch (e) {
+      _connected = false;
       _eventController.add(SignalEvent.disconnected(e.toString()));
     }
   }
 
   void send(Map<String, dynamic> message) {
-    if (_channel != null) {
-      _channel!.sink.add(jsonEncode(message));
+    if (_channel != null && _connected) {
+      try {
+        _channel!.sink.add(jsonEncode(message));
+      } catch (_) {}
     }
   }
 
@@ -77,7 +98,19 @@ class SignalClient {
     });
   }
 
+  /// Send text input to a desktop session
+  void sendStdin(String sessionId, String text) {
+    send({
+      "type": "session:stdin",
+      "session_id": sessionId,
+      "sender_uid": _uid,
+      "sender_device": _deviceId,
+      "payload": {"text": text},
+    });
+  }
+
   void disconnect() {
+    _connected = false;
     _channel?.sink.close();
     _channel = null;
     _eventController.add(SignalEvent.disconnected("Manual disconnect"));
@@ -103,3 +136,8 @@ class SignalEvent {
   factory SignalEvent.message(Map<String, dynamic> msg) =>
       SignalEvent._("message", data: msg);
 }
+'''
+
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    f.write(content)
+print('OK: signal_client.dart rewritten')

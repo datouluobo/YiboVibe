@@ -1,7 +1,7 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 use yibovibe_core::agent_host::{AgentHost, HostEvent, HostState};
 
 /// Shared wrapper for AgentHost that can be managed by Tauri state
@@ -44,10 +44,7 @@ unsafe impl Send for HostController {}
 unsafe impl Sync for HostController {}
 
 /// Spawn a task that forwards HostEvents to the Tauri frontend
-pub fn spawn_event_forwarder(
-    app_handle: AppHandle,
-    mut event_rx: broadcast::Receiver<HostEvent>,
-) {
+pub fn spawn_event_forwarder(app_handle: AppHandle, mut event_rx: broadcast::Receiver<HostEvent>) {
     tauri::async_runtime::spawn(async move {
         loop {
             match event_rx.recv().await {

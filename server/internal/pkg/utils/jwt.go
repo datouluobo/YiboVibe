@@ -1,10 +1,11 @@
-﻿package utils
+package utils
 
 import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -34,7 +35,7 @@ func getJWTSecret() []byte {
 }
 
 func GenerateAccessToken(uid, deviceId uint, role, status string) (string, error) {
-	expirationTime := time.Now().Add(15 * time.Minute) // Access Token TTL is 15 mins
+	expirationTime := time.Now().Add(getAccessTokenTTL())
 	claims := &CustomClaims{
 		UID:      uid,
 		DeviceID: deviceId,
@@ -43,12 +44,31 @@ func GenerateAccessToken(uid, deviceId uint, role, status string) (string, error
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer: "yibovibe",
+			Issuer:    "yibovibe",
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(getJWTSecret())
+}
+
+func getAccessTokenTTL() time.Duration {
+	// Default to 30 days so desktop/mobile long-lived sessions do not
+	// silently lose WS auth while the current clients still rely on a
+	// persisted access token and have no refresh-token renewal loop.
+	const defaultHours = 24 * 30
+
+	raw := os.Getenv("ACCESS_TOKEN_TTL_HOURS")
+	if raw == "" {
+		return time.Duration(defaultHours) * time.Hour
+	}
+
+	hours, err := strconv.Atoi(raw)
+	if err != nil || hours <= 0 {
+		return time.Duration(defaultHours) * time.Hour
+	}
+
+	return time.Duration(hours) * time.Hour
 }
 
 // GenerateOpaqueToken generates a random base64 string used as a Refresh Token
@@ -80,4 +100,3 @@ func ParseAccessToken(tokenStr string) (*CustomClaims, error) {
 
 	return nil, errors.New("invalid token")
 }
-

@@ -1,7 +1,8 @@
-﻿package session
+package session
 
 import (
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -14,6 +15,11 @@ const (
 	StatePaused  SessionState = "paused"
 	StateStopped SessionState = "stopped"
 	StateCrashed SessionState = "crashed"
+
+	// SessionTTL defines how long a session stays in memory after last update
+	// without being refreshed by its owner device. After this period, the
+	// session is auto-expired and removed.
+	SessionTTL = 2 * time.Minute
 )
 
 // Session represents a remote agent session managed through the Signal Hub
@@ -32,7 +38,7 @@ type Session struct {
 // SessionStore manages active session metadata in memory
 type SessionStore struct {
 	mu       sync.RWMutex
-	sessions map[string]*Session // session_id -> session
+	sessions map[string]*Session      // session_id -> session
 	userSess map[uint]map[string]bool // uid -> set of session_ids
 }
 
@@ -73,15 +79,46 @@ func (s *SessionStore) Delete(id string) {
 	}
 }
 
+func (s *SessionStore) DeleteByOwnerDevice(uid uint, deviceID uint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	owned := s.userSess[uid]
+	if owned == nil {
+		return
+	}
+
+	for id := range owned {
+		sess, ok := s.sessions[id]
+		if !ok || sess.OwnerDevice != deviceID {
+			continue
+		}
+		delete(s.sessions, id)
+		delete(owned, id)
+		log.Printf("[SessionStore] Deleted session %s for UID %d device %d", id, uid, deviceID)
+	}
+
+	if len(owned) == 0 {
+		delete(s.userSess, uid)
+	}
+}
+
 func (s *SessionStore) ListByUser(uid uint) []*Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	var result []*Session
 	for id := range s.userSess[uid] {
 		if sess, ok := s.sessions[id]; ok {
 			result = append(result, sess)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].StartedAt != result[j].StartedAt {
+			return result[i].StartedAt < result[j].StartedAt
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result
 }
 
@@ -91,5 +128,36 @@ func (s *SessionStore) UpdateState(id string, state SessionState) {
 	if sess, ok := s.sessions[id]; ok {
 		sess.State = state
 		sess.LastActiveAt = time.Now().Unix()
+	}
+}
+
+// CleanupStaleSessions removes sessions that haven't been updated within SessionTTL.
+// This prevents ghost sessions from persisting when a device disconnects
+// without cleanly unregistering its sessions (e.g., crash, network partition).
+func (s *SessionStore) CleanupStaleSessions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	cutoff := now - int64(SessionTTL.Seconds())
+	var removed int
+
+	for id, sess := range s.sessions {
+		if sess.LastActiveAt < cutoff {
+			delete(s.sessions, id)
+			if s.userSess[sess.OwnerUID] != nil {
+				delete(s.userSess[sess.OwnerUID], id)
+				if len(s.userSess[sess.OwnerUID]) == 0 {
+					delete(s.userSess, sess.OwnerUID)
+				}
+			}
+			removed++
+			log.Printf("[SessionStore] TTL expired session %s for UID %d (last_active=%d)",
+				id, sess.OwnerUID, sess.LastActiveAt)
+		}
+	}
+
+	if removed > 0 {
+		log.Printf("[SessionStore] Cleanup: removed %d stale session(s)", removed)
 	}
 }

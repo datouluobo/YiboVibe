@@ -100,6 +100,8 @@ class Session {
       case 'paused':
       case 'waiting_input':
         return 'yellow';
+      case 'stale':
+        return 'gray';
       case 'crashed':
         return 'red';
       case 'stopped':
