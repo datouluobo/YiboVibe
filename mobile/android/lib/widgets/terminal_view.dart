@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/event_message.dart';
 import '../../providers/session_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/terminal_text_formatter.dart';
 
 /// 终端模式视图 — 等宽字体，日志流风格，原生终端体验
 class TerminalView extends StatefulWidget {
@@ -41,20 +42,19 @@ class _TerminalViewState extends State<TerminalView> {
   @override
   Widget build(BuildContext context) {
     final events = context.watch<SessionProvider>().activeSessionEvents;
+    final terminalBlocks = _buildBlocks(events);
 
-    final filteredEvents = events
-        .where((e) => e.type != EventType.systemNotice || _showTimestamps)
-        .toList();
-
-    if (filteredEvents.isEmpty) {
+    if (terminalBlocks.isEmpty) {
       return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.terminal, size: 48, color: AppTheme.textTertiary),
             SizedBox(height: 12),
-            Text('等待输出…',
-                style: TextStyle(color: AppTheme.textTertiary, fontSize: 14)),
+            Text(
+              '等待输出…',
+              style: TextStyle(color: AppTheme.textTertiary, fontSize: 14),
+            ),
           ],
         ),
       );
@@ -64,11 +64,11 @@ class _TerminalViewState extends State<TerminalView> {
       children: [
         ListView.builder(
           controller: _scrollController,
-          padding: const EdgeInsets.all(12),
-          itemCount: filteredEvents.length,
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          itemCount: terminalBlocks.length,
           itemBuilder: (context, index) {
-            final event = filteredEvents[index];
-            return _TerminalLine(event: event, showTimestamp: _showTimestamps);
+            final block = terminalBlocks[index];
+            return _TerminalLine(block: block, showTimestamp: _showTimestamps);
           },
         ),
         // 浮动控制按钮
@@ -85,8 +85,9 @@ class _TerminalViewState extends State<TerminalView> {
               ),
               const SizedBox(height: 4),
               _MiniButton(
-                icon:
-                    _showTimestamps ? Icons.schedule : Icons.schedule_outlined,
+                icon: _showTimestamps
+                    ? Icons.schedule
+                    : Icons.schedule_outlined,
                 label: _showTimestamps ? '隐藏时间' : '显示时间',
                 onTap: () => setState(() => _showTimestamps = !_showTimestamps),
               ),
@@ -96,6 +97,90 @@ class _TerminalViewState extends State<TerminalView> {
       ],
     );
   }
+
+  List<_TerminalBlock> _buildBlocks(List<EventMessage> events) {
+    final blocks = <_TerminalBlock>[];
+
+    for (final event in events) {
+      if (event.type == EventType.systemNotice && !_showTimestamps) {
+        continue;
+      }
+
+      final displayText = TerminalTextFormatter.displayText(event.text);
+      if (displayText.isEmpty) continue;
+
+      final lines = displayText
+          .split('\n')
+          .map((line) => line.trimRight())
+          .where((line) => line.trim().isNotEmpty)
+          .toList();
+      final promptLines = TerminalTextFormatter.extractPromptLines(event.text)
+          .map((line) => line.trimRight())
+          .toSet();
+
+      if (event.isUserMessage) {
+        blocks.add(
+          _TerminalBlock(
+            type: _TerminalBlockType.userInput,
+            text: displayText,
+            ts: event.ts,
+          ),
+        );
+        continue;
+      }
+
+      if (event.type == EventType.systemNotice) {
+        blocks.add(
+          _TerminalBlock(
+            type: _TerminalBlockType.system,
+            text: displayText,
+            ts: event.ts,
+          ),
+        );
+        continue;
+      }
+
+      if (event.stream == OutputStream.stderr) {
+        blocks.add(
+          _TerminalBlock(
+            type: _TerminalBlockType.stderr,
+            text: displayText,
+            ts: event.ts,
+          ),
+        );
+        continue;
+      }
+
+      for (final line in lines) {
+        if (promptLines.contains(line)) {
+          continue;
+        }
+        blocks.add(
+          _TerminalBlock(
+            type: _TerminalBlockType.output,
+            text: line,
+            ts: event.ts,
+          ),
+        );
+      }
+    }
+
+    return blocks;
+  }
+}
+
+enum _TerminalBlockType { userInput, output, system, stderr }
+
+class _TerminalBlock {
+  final _TerminalBlockType type;
+  final String text;
+  final DateTime ts;
+
+  const _TerminalBlock({
+    required this.type,
+    required this.text,
+    required this.ts,
+  });
 }
 
 class _MiniButton extends StatelessWidget {
@@ -131,23 +216,23 @@ class _MiniButton extends StatelessWidget {
 }
 
 class _TerminalLine extends StatelessWidget {
-  final EventMessage event;
+  final _TerminalBlock block;
   final bool showTimestamp;
 
-  const _TerminalLine({required this.event, required this.showTimestamp});
+  const _TerminalLine({required this.block, required this.showTimestamp});
 
   @override
   Widget build(BuildContext context) {
     Color textColor;
     String prefix;
 
-    if (event.isUserMessage) {
+    if (block.type == _TerminalBlockType.userInput) {
       textColor = AppTheme.brand;
       prefix = '> ';
-    } else if (event.stream == OutputStream.stderr) {
+    } else if (block.type == _TerminalBlockType.stderr) {
       textColor = AppTheme.statusRed;
       prefix = '';
-    } else if (event.type == EventType.systemNotice) {
+    } else if (block.type == _TerminalBlockType.system) {
       textColor = AppTheme.statusYellow;
       prefix = '[SYS] ';
     } else {
@@ -156,13 +241,13 @@ class _TerminalLine extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+      padding: const EdgeInsets.only(bottom: 1),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showTimestamp) ...[
             Text(
-              DateFormat('HH:mm:ss').format(event.ts),
+              DateFormat('HH:mm:ss').format(block.ts),
               style: const TextStyle(
                 color: AppTheme.textTertiary,
                 fontSize: 10,
@@ -172,13 +257,28 @@ class _TerminalLine extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Expanded(
-            child: Text(
-              '$prefix${event.text}',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 13,
-                fontFamily: 'monospace',
-                height: 1.4,
+            child: SelectableText.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: prefix,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      height: 1.24,
+                    ),
+                  ),
+                  TerminalTextFormatter.buildStyledText(
+                    block.text,
+                    TextStyle(
+                      color: textColor,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      height: 1.24,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

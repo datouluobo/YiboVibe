@@ -137,13 +137,14 @@ class SignalClient {
     // 提取文本内容
     // 对 session:list_update 类型，payload 本身就是完整数据
     String text;
-    if ({
+    if (msgType == 'session_list') {
+      text = jsonEncode(payload['sessions'] ?? const []);
+    } else if ({
       'session:list_update',
       'session:update',
       'session:register',
       'session:unregister',
       'session:list',
-      'session_list',
     }.contains(msgType)) {
       text = jsonEncode(payload);
     } else {
@@ -165,7 +166,8 @@ class SignalClient {
 
     // 提取 state
     final state = innerPayload['state'] as String? ??
-        payload['state'] as String?;
+        payload['state'] as String? ??
+        (msgType == 'session_list' ? 'session_list' : null);
 
     // 提取时间
     DateTime ts;
@@ -202,8 +204,9 @@ class SignalClient {
       case 'session:register':
       case 'session:unregister':
       case 'session:list':
-      case 'session_list':
         return EventType.sessionListUpdate;
+      case 'session_list':
+        return EventType.sessionState;
       case 'system_notice':
         return EventType.systemNotice;
       case 'host:heartbeat':
@@ -270,14 +273,23 @@ class SignalClient {
     switch (action) {
       case 'start':
         _send({'type': 'session:start', 'session_id': sessionId});
+        break;
       case 'stop':
-        _send({'type': 'session:stop', 'session_id': sessionId, 'confirmed': true});
+        _send({
+          'type': 'session:stop',
+          'session_id': sessionId,
+          'confirmed': true,
+        });
+        break;
       case 'pause':
         _send({'type': 'session:pause', 'session_id': sessionId});
+        break;
       case 'resume':
         _send({'type': 'session:resume', 'session_id': sessionId});
+        break;
       case 'close':
         _send({'type': 'session:remove', 'session_id': sessionId});
+        break;
     }
   }
 

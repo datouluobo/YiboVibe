@@ -32,6 +32,11 @@ interface TerminalBundle {
   dataDisposable: { dispose: () => void };
 }
 
+interface TerminalStartSize {
+  cols: number;
+  rows: number;
+}
+
 interface ConsoleAdminStatus {
   is_elevated: boolean;
 }
@@ -102,10 +107,16 @@ export default function VibeConsole() {
   const mountedRef = useRef(true);
   const activeSessionRef = useRef<string | null>(null);
   const unlistenersRef = useRef<Map<string, UnlistenFn[]>>(new Map());
+  const attachingListenersRef = useRef<Set<string>>(new Set());
   const terminalBundlesRef = useRef<Map<string, TerminalBundle>>(new Map());
   const terminalHostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const lastResizeDimsRef = useRef<Map<string, { cols: number; rows: number }>>(new Map());
+  const knownSessionIdsRef = useRef<Set<string>>(new Set());
+  const closingSessionIdsRef = useRef<Set<string>>(new Set());
+  const bufferHydrationRef = useRef<Set<string>>(new Set());
+  const liveOutputSeenRef = useRef<Set<string>>(new Set());
+  const hydratedSnapshotTailRef = useRef<Map<string, string>>(new Map());
 
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => a.started_at - b.started_at),
@@ -161,6 +172,17 @@ export default function VibeConsole() {
     }
   }, []);
 
+  const getTerminalStartSize = useCallback(async (sid: string): Promise<TerminalStartSize | null> => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const bundle = terminalBundlesRef.current.get(sid);
+    const host = terminalHostsRef.current.get(sid);
+    if (!bundle || !host || host.offsetWidth === 0 || host.offsetHeight === 0) return null;
+    bundle.fitAddon.fit();
+    const dims = bundle.fitAddon.proposeDimensions();
+    if (!dims || dims.cols <= 0 || dims.rows <= 0) return null;
+    return { cols: dims.cols, rows: dims.rows };
+  }, []);
+
   const disposeTerminalSession = useCallback((sid: string) => {
     const observer = resizeObserversRef.current.get(sid);
     if (observer) {
@@ -189,6 +211,38 @@ export default function VibeConsole() {
     bundle.terminal.writeln(`\r\n[system] ${text}`);
   }, []);
 
+  const hydrateTerminalBuffer = useCallback(async (sid: string, terminal: Terminal, resetBeforeWrite: boolean) => {
+    if (!bufferHydrationRef.current.has(sid)) return;
+
+    try {
+      const snapshot = await invoke<string>("get_session_buffer", { sessionId: sid });
+      if (!snapshot) {
+        bufferHydrationRef.current.delete(sid);
+        hydratedSnapshotTailRef.current.delete(sid);
+        return;
+      }
+      if (liveOutputSeenRef.current.has(sid)) {
+        bufferHydrationRef.current.delete(sid);
+        hydratedSnapshotTailRef.current.delete(sid);
+        return;
+      }
+      if (!terminalBundlesRef.current.has(sid)) return;
+      if (liveOutputSeenRef.current.has(sid)) {
+        bufferHydrationRef.current.delete(sid);
+        hydratedSnapshotTailRef.current.delete(sid);
+        return;
+      }
+      if (resetBeforeWrite) {
+        terminal.reset();
+      }
+      terminal.write(snapshot);
+      hydratedSnapshotTailRef.current.set(sid, snapshot.slice(-4096));
+      bufferHydrationRef.current.delete(sid);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const ensureTerminalSession = useCallback((session: SessionInfo) => {
     if (terminalBundlesRef.current.has(session.session_id)) return;
 
@@ -200,6 +254,7 @@ export default function VibeConsole() {
       letterSpacing: 0,
       scrollback: 10000,
       allowProposedApi: true,
+      convertEol: true,
       theme: {
         background: "#0d1117",
         foreground: "#d6dde8",
@@ -236,6 +291,7 @@ export default function VibeConsole() {
     if (host) {
       host.innerHTML = "";
       terminal.open(host);
+      void hydrateTerminalBuffer(session.session_id, terminal, false);
       terminal.focus();
       terminal.element?.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -245,7 +301,7 @@ export default function VibeConsole() {
       });
       void fitSession(session.session_id);
     }
-  }, [fitSession]);
+  }, [fitSession, hydrateTerminalBuffer]);
 
   const chooseFallbackSession = useCallback((list: SessionInfo[]) => {
     const running = [...list].sort((a, b) => a.started_at - b.started_at).find((item) => isRunningStatus(item.status));
@@ -254,8 +310,18 @@ export default function VibeConsole() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const list = await invoke<SessionInfo[]>("list_sessions");
+      const list = (await invoke<SessionInfo[]>("list_sessions")).filter(
+        (item) => !closingSessionIdsRef.current.has(item.session_id)
+      );
       if (!mountedRef.current) return;
+
+      for (const session of list) {
+        const alreadyKnown = knownSessionIdsRef.current.has(session.session_id);
+        const alreadyBound = terminalBundlesRef.current.has(session.session_id);
+        if (!alreadyKnown && !alreadyBound) {
+          bufferHydrationRef.current.add(session.session_id);
+        }
+      }
 
       setSessions(list);
       const active = activeSessionRef.current;
@@ -296,37 +362,73 @@ export default function VibeConsole() {
       fns.forEach((fn) => fn());
       unlistenersRef.current.delete(sid);
     }
+    attachingListenersRef.current.delete(sid);
   }, []);
 
   const attachSessionListeners = useCallback(async (sid: string) => {
-    if (unlistenersRef.current.has(sid)) return;
+    if (unlistenersRef.current.has(sid) || attachingListenersRef.current.has(sid)) return;
+    attachingListenersRef.current.add(sid);
 
-    const stdout = await listen<string>(`term:stdout:${sid}`, (event) => {
-      if (!mountedRef.current) return;
-      markSessionStarting(sid, false);
-      appendOutput(sid, event.payload);
-      void refreshSessions();
-    });
-    const stderr = await listen<string>(`term:stderr:${sid}`, (event) => {
-      if (!mountedRef.current) return;
-      markSessionStarting(sid, false);
-      appendOutput(sid, event.payload);
-      void refreshSessions();
-    });
-    const exit = await listen<number>(`term:exit:${sid}`, (event) => {
-      if (!mountedRef.current) return;
-      markSessionStarting(sid, false);
-      appendSystem(sid, `Session exited with code ${event.payload}`);
-      void refreshSessions();
-    });
+    try {
+      const stdout = await listen<string>(`term:stdout:${sid}`, (event) => {
+        if (!mountedRef.current) return;
+        const hydratedTail = hydratedSnapshotTailRef.current.get(sid);
+        if (hydratedTail) {
+          hydratedSnapshotTailRef.current.delete(sid);
+          liveOutputSeenRef.current.add(sid);
+          if (hydratedTail.endsWith(event.payload) || hydratedTail.includes(event.payload)) {
+            return;
+          }
+        }
+        liveOutputSeenRef.current.add(sid);
+        markSessionStarting(sid, false);
+        appendOutput(sid, event.payload);
+        void refreshSessions();
+      });
+      const stderr = await listen<string>(`term:stderr:${sid}`, (event) => {
+        if (!mountedRef.current) return;
+        const hydratedTail = hydratedSnapshotTailRef.current.get(sid);
+        if (hydratedTail) {
+          hydratedSnapshotTailRef.current.delete(sid);
+          liveOutputSeenRef.current.add(sid);
+          if (hydratedTail.endsWith(event.payload) || hydratedTail.includes(event.payload)) {
+            return;
+          }
+        }
+        liveOutputSeenRef.current.add(sid);
+        markSessionStarting(sid, false);
+        appendOutput(sid, event.payload);
+        void refreshSessions();
+      });
+      const exit = await listen<number>(`term:exit:${sid}`, (event) => {
+        if (!mountedRef.current) return;
+        markSessionStarting(sid, false);
+        appendSystem(sid, `Session exited with code ${event.payload}`);
+        void refreshSessions();
+      });
 
-    unlistenersRef.current.set(sid, [stdout, stderr, exit]);
+      unlistenersRef.current.set(sid, [stdout, stderr, exit]);
+    } finally {
+      attachingListenersRef.current.delete(sid);
+    }
   }, [appendOutput, appendSystem, markSessionStarting, refreshSessions]);
+
+  const syncSessionBindings = useCallback(async (list: SessionInfo[]) => {
+    for (const session of list) {
+      ensureTerminalSession(session);
+      await attachSessionListeners(session.session_id);
+    }
+  }, [attachSessionListeners, ensureTerminalSession]);
 
   const focusTerminal = useCallback((sid: string | null) => {
     if (!sid) return;
     requestAnimationFrame(() => {
-      terminalBundlesRef.current.get(sid)?.terminal.focus();
+      const bundle = terminalBundlesRef.current.get(sid);
+      if (!bundle) return;
+      if (bundle.terminal.rows > 0) {
+        bundle.terminal.refresh(0, bundle.terminal.rows - 1);
+      }
+      bundle.terminal.focus();
       void fitSession(sid);
     });
   }, [fitSession]);
@@ -361,6 +463,10 @@ export default function VibeConsole() {
         // ignore
       }
       const sid = await invoke<string>("create_session", { shellKind: sk, cwd: null });
+      knownSessionIdsRef.current.add(sid);
+      bufferHydrationRef.current.delete(sid);
+      liveOutputSeenRef.current.delete(sid);
+      hydratedSnapshotTailRef.current.delete(sid);
       const tempSession: SessionInfo = {
         session_id: sid,
         shell_kind: sk,
@@ -369,14 +475,25 @@ export default function VibeConsole() {
         started_at: Date.now(),
         last_output_at: Date.now(),
       };
-      setSessions((prev) => [...prev, tempSession]);
+      setSessions((prev) => {
+        const existing = prev.find((item) => item.session_id === sid);
+        if (existing) {
+          return prev.map((item) => item.session_id === sid ? tempSession : item);
+        }
+        return [...prev, tempSession];
+      });
       ensureTerminalSession(tempSession);
       await attachSessionListeners(sid);
       markSessionStarting(sid, true);
       activeSessionRef.current = sid;
       setSessionId(sid);
       appendSystem(sid, `${sk.toUpperCase()} session starting...`);
-      await invoke("start_session", { sessionId: sid });
+      const initialSize = await getTerminalStartSize(sid);
+      await invoke("start_session", {
+        sessionId: sid,
+        cols: initialSize?.cols ?? null,
+        rows: initialSize?.rows ?? null,
+      });
       await refreshSessions();
       focusTerminal(sid);
       traceDebug("createAndStartSession:done", { shell: sk, sessionId: sid });
@@ -388,32 +505,40 @@ export default function VibeConsole() {
       markSessionStarting(activeSessionRef.current ?? "", false);
       traceDebug("createAndStartSession:error", String(error));
     }
-  }, [appendSystem, attachSessionListeners, ensureTerminalSession, focusTerminal, markSessionStarting, newTabShell, refreshSessions, traceDebug]);
+  }, [appendSystem, attachSessionListeners, ensureTerminalSession, focusTerminal, getTerminalStartSize, markSessionStarting, newTabShell, refreshSessions, traceDebug]);
 
   const closeSession = useCallback(async (sid: string) => {
-    try {
-      await invoke("kill_terminal", { sessionId: sid });
-    } catch {
-      // ignore, we still want to remove it from local state
-    }
+    if (closingSessionIdsRef.current.has(sid)) return;
+    closingSessionIdsRef.current.add(sid);
 
-    try {
-      await invoke("remove_session", { sessionId: sid });
-    } catch {
-      // ignore
-    }
-
+    knownSessionIdsRef.current.delete(sid);
+    bufferHydrationRef.current.delete(sid);
+    liveOutputSeenRef.current.delete(sid);
+    hydratedSnapshotTailRef.current.delete(sid);
     cleanupSessionListeners(sid);
     disposeTerminalSession(sid);
     markSessionStarting(sid, false);
 
-    const remaining = sortedSessions.filter((item) => item.session_id !== sid);
+    const remaining = sessions.filter((item) => item.session_id !== sid);
     const fallback = chooseFallbackSession(remaining);
     activeSessionRef.current = fallback;
     setSessionId(fallback);
     setSessions(remaining);
-    focusTerminal(fallback);
-  }, [chooseFallbackSession, cleanupSessionListeners, disposeTerminalSession, focusTerminal, markSessionStarting, sortedSessions]);
+    if (fallback) {
+      focusTerminal(fallback);
+    }
+
+    void invoke("remove_session", { sessionId: sid })
+      .catch(() => {
+        // ignore and let a later refresh reconcile if needed
+      })
+      .finally(() => {
+        window.setTimeout(() => {
+          closingSessionIdsRef.current.delete(sid);
+          void refreshSessions();
+        }, 1200);
+      });
+  }, [chooseFallbackSession, cleanupSessionListeners, disposeTerminalSession, focusTerminal, markSessionStarting, refreshSessions, sessions]);
 
   const setPreferredShell = useCallback((shellKind: string) => {
     traceDebug("setPreferredShell", { shell: shellKind, currentTab: sessionId });
@@ -429,6 +554,21 @@ export default function VibeConsole() {
     activeSessionRef.current = sessionId;
     traceDebug("sessionId:update", { sessionId });
   }, [sessionId, traceDebug]);
+
+  useEffect(() => {
+    knownSessionIdsRef.current = new Set(sessions.map((session) => session.session_id));
+    const known = new Set(sessions.map((session) => session.session_id));
+    liveOutputSeenRef.current.forEach((sid) => {
+      if (!known.has(sid)) {
+        liveOutputSeenRef.current.delete(sid);
+      }
+    });
+    hydratedSnapshotTailRef.current.forEach((_value, sid) => {
+      if (!known.has(sid)) {
+        hydratedSnapshotTailRef.current.delete(sid);
+      }
+    });
+  }, [sessions]);
 
   useEffect(() => {
     (async () => {
@@ -452,11 +592,12 @@ export default function VibeConsole() {
       try {
         const existing = await invoke<SessionInfo[]>("list_sessions");
         if (!mountedRef.current) return;
+        bufferHydrationRef.current = new Set(existing.map((session) => session.session_id));
+        knownSessionIdsRef.current = new Set(existing.map((session) => session.session_id));
+        liveOutputSeenRef.current.clear();
+        hydratedSnapshotTailRef.current.clear();
         setSessions(existing);
-        for (const session of existing) {
-          ensureTerminalSession(session);
-          await attachSessionListeners(session.session_id);
-        }
+        await syncSessionBindings(existing);
         const fallback = chooseFallbackSession(existing);
         if (fallback) {
           traceDebug("mount:fallback", { fallback, sessionIds: existing.map((item) => item.session_id) });
@@ -479,6 +620,7 @@ export default function VibeConsole() {
       unlistenersRef.current.clear();
       resizeObserversRef.current.forEach((observer) => observer.disconnect());
       resizeObserversRef.current.clear();
+      hydratedSnapshotTailRef.current.clear();
       terminalBundlesRef.current.forEach((bundle) => {
         bundle.dataDisposable.dispose();
         bundle.terminal.dispose();
@@ -489,14 +631,25 @@ export default function VibeConsole() {
   }, []);
 
   useEffect(() => {
-    sessions.forEach((session) => ensureTerminalSession(session));
+    void syncSessionBindings(sessions);
     const knownIds = new Set(sessions.map((session) => session.session_id));
     Array.from(terminalBundlesRef.current.keys()).forEach((sid) => {
       if (!knownIds.has(sid)) {
         disposeTerminalSession(sid);
+        cleanupSessionListeners(sid);
       }
     });
-  }, [disposeTerminalSession, ensureTerminalSession, sessions]);
+  }, [cleanupSessionListeners, disposeTerminalSession, sessions, syncSessionBindings]);
+
+  useEffect(() => {
+    if (sessions.length === 0) return;
+    const hasSelected = sessionId && sessions.some((item) => item.session_id === sessionId);
+    if (hasSelected) return;
+    const fallback = chooseFallbackSession(sessions);
+    if (!fallback) return;
+    activeSessionRef.current = fallback;
+    setSessionId(fallback);
+  }, [chooseFallbackSession, sessionId, sessions]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -542,7 +695,11 @@ export default function VibeConsole() {
     const bundle = terminalBundlesRef.current.get(sid);
     if (bundle && node.childElementCount === 0) {
       bundle.terminal.open(node);
+      void hydrateTerminalBuffer(sid, bundle.terminal, true);
       bundle.terminal.focus();
+      if (bundle.terminal.rows > 0) {
+        bundle.terminal.refresh(0, bundle.terminal.rows - 1);
+      }
       bundle.terminal.element?.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         navigator.clipboard.readText().then((text) => {
@@ -551,7 +708,7 @@ export default function VibeConsole() {
       });
       void fitSession(sid);
     }
-  }, [fitSession]);
+  }, [fitSession, hydrateTerminalBuffer]);
 
   const currentStatusLabel = currentSessionInfo
     ? startingSessionIds.includes(currentSessionInfo.session_id)
@@ -789,52 +946,72 @@ export default function VibeConsole() {
             const tabStatus = isStarting ? "Starting" : formatSessionStatus(session.status);
             const showTabStatus = tabStatus !== "Running";
             return (
-              <button
+              <div
                 key={session.session_id}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 8,
-                  padding: "7px 10px",
+                  padding: "7px 8px 7px 10px",
                   borderRadius: 10,
                   border: `1px solid ${active ? visual.border : "rgba(255,255,255,0.08)"}`,
                   background: active ? visual.accentSoft : "rgba(255,255,255,0.03)",
                   color: active ? "#eef6ff" : "#a7b0bd",
                   fontSize: 12,
                   fontFamily: "'JetBrains Mono', monospace",
-                  cursor: "pointer",
                   flexShrink: 0,
                   whiteSpace: "nowrap",
                 }}
-                onClick={() => switchSession(session.session_id)}
                 title={`${session.shell_kind} | ${tabStatus}`}
               >
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 999,
-                    background: isStarting
-                      ? "#f2cc60"
-                      : isRunningStatus(session.status)
-                        ? "#3fb950"
-                        : "#6e7681",
-                    flexShrink: 0,
+                <button
+                  type="button"
+                  onClick={() => switchSession(session.session_id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      void switchSession(session.session_id);
+                    }
                   }}
-                />
-                <span>{session.shell_kind} #{index + 1}</span>
-                {showTabStatus && (
-                  <span style={{ color: active ? visual.accent : "#7f8896", fontSize: 11 }}>
-                    {tabStatus}
-                  </span>
-                )}
-                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    minWidth: 0,
+                    padding: 0,
+                    margin: 0,
+                    border: "none",
+                    background: "transparent",
+                    color: "inherit",
+                    cursor: "pointer",
+                    font: "inherit",
+                  }}
+                  title={`${session.shell_kind} | ${tabStatus}`}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 999,
+                      background: isStarting
+                        ? "#f2cc60"
+                        : isRunningStatus(session.status)
+                          ? "#3fb950"
+                          : "#6e7681",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span>{session.shell_kind} #{index + 1}</span>
+                  {showTabStatus && (
+                    <span style={{ color: active ? visual.accent : "#7f8896", fontSize: 11 }}>
+                      {tabStatus}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
                   onClick={(event) => {
+                    event.preventDefault();
                     event.stopPropagation();
                     void closeSession(session.session_id);
                   }}
@@ -853,12 +1030,14 @@ export default function VibeConsole() {
                     fontSize: 16,
                     lineHeight: 1,
                     flexShrink: 0,
+                    border: "none",
+                    cursor: "pointer",
                   }}
                   title="Close session"
                 >
                   ×
-                </span>
-              </button>
+                </button>
+              </div>
             );
           }) : (
             <span style={{ color: "#8b949e", fontSize: 12 }}>No active session</span>
