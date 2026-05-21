@@ -83,7 +83,7 @@ class _ConsolePageState extends State<ConsolePage> {
               ),
               // 主视图区 — 最大化
               Expanded(
-                child: provider.isDialogMode
+                child: !provider.isInteractiveSession && provider.isDialogMode
                     ? const DialogView()
                     : const TerminalView(),
               ),
@@ -242,9 +242,7 @@ class _ConsolePageState extends State<ConsolePage> {
           duration: const Duration(milliseconds: 140),
           curve: Curves.easeOut,
           decoration: BoxDecoration(
-            color: isActive
-                ? AppTheme.brand.withAlpha(18)
-                : AppTheme.bgPrimary,
+            color: isActive ? AppTheme.brand.withAlpha(18) : AppTheme.bgPrimary,
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
               color: isActive
@@ -258,14 +256,20 @@ class _ConsolePageState extends State<ConsolePage> {
               borderRadius: BorderRadius.circular(999),
               onTap: () => provider.selectSession(s),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
                       width: 6,
                       height: 6,
-                      decoration: BoxDecoration(color: sc, shape: BoxShape.circle),
+                      decoration: BoxDecoration(
+                        color: sc,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                     const SizedBox(width: 6),
                     Text(
@@ -275,7 +279,9 @@ class _ConsolePageState extends State<ConsolePage> {
                             ? AppTheme.brandDark
                             : AppTheme.textSecondary,
                         fontSize: 11,
-                        fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                        fontWeight: isActive
+                            ? FontWeight.w600
+                            : FontWeight.w500,
                       ),
                     ),
                     const SizedBox(width: 4),

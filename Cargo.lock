@@ -7178,7 +7178,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "yibovibe-core"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "aes-gcm",
  "arboard",

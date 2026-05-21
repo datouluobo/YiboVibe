@@ -51,19 +51,14 @@ class DialogView extends StatelessWidget {
     const windowMs = 500; // 500ms 内合并
 
     for (final event in events) {
-      final displayText = TerminalTextFormatter.displayText(event.text);
+      final displayText = TerminalTextFormatter.displayBody(
+        event.text,
+        preserveBlankLines: true,
+        dropPromptLines: !event.isUserMessage,
+      );
       if (displayText.isEmpty) {
         continue;
       }
-
-      final lines = displayText
-          .split('\n')
-          .map((line) => line.trimRight())
-          .where((line) => line.trim().isNotEmpty)
-          .toList();
-      final promptLines = TerminalTextFormatter.extractPromptLines(event.text)
-          .map((line) => line.trimRight())
-          .toSet();
 
       if (event.isUserMessage) {
         blocks.add(
@@ -86,23 +81,22 @@ class DialogView extends StatelessWidget {
           ),
         );
       } else {
-        for (final line in lines) {
-          if (promptLines.contains(line)) continue;
-
-          if (blocks.isNotEmpty &&
-              blocks.last.type == BlockType.terminalOutput &&
-              event.ts.difference(blocks.last.ts).inMilliseconds < windowMs) {
-            blocks.last.text += '\n$line';
-            blocks.last.ts = event.ts;
-          } else {
-            blocks.add(
-              _MessageBlock(
-                type: BlockType.terminalOutput,
-                text: line,
-                ts: event.ts,
-              ),
-            );
-          }
+        if (blocks.isNotEmpty &&
+            blocks.last.type == BlockType.terminalOutput &&
+            event.ts.difference(blocks.last.ts).inMilliseconds < windowMs) {
+          blocks.last.text = TerminalTextFormatter.mergeDisplayText(
+            blocks.last.text,
+            displayText,
+          );
+          blocks.last.ts = event.ts;
+        } else {
+          blocks.add(
+            _MessageBlock(
+              type: BlockType.terminalOutput,
+              text: displayText,
+              ts: event.ts,
+            ),
+          );
         }
       }
     }
@@ -153,12 +147,12 @@ class _UserBubble extends StatelessWidget {
       alignment: Alignment.centerRight,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.82,
         ),
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: AppTheme.brand.withAlpha(40),
+          color: AppTheme.brand.withAlpha(22),
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(16),
             topRight: Radius.circular(4),
@@ -174,9 +168,10 @@ class _UserBubble extends StatelessWidget {
               text.trimRight(),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
-                fontSize: 14,
-                height: 1.42,
+                fontSize: 13.5,
+                height: 1.48,
               ),
+              textWidthBasis: TextWidthBasis.parent,
             ),
             const SizedBox(height: 2),
             Text(
@@ -205,18 +200,19 @@ class _TerminalBubble extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.88,
+          maxWidth: MediaQuery.of(context).size.width * 0.94,
         ),
         margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: AppTheme.bgTertiary,
+          color: AppTheme.bgSecondary,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(4),
             topRight: Radius.circular(16),
             bottomLeft: Radius.circular(16),
             bottomRight: Radius.circular(16),
           ),
+          border: Border.all(color: AppTheme.borderColor.withAlpha(150)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -225,12 +221,13 @@ class _TerminalBubble extends StatelessWidget {
               TerminalTextFormatter.buildStyledText(
                 text,
                 const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
+                  color: AppTheme.textPrimary,
+                  fontSize: 11.5,
                   fontFamily: 'monospace',
-                  height: 1.28,
+                  height: 1.38,
                 ),
               ),
+              textWidthBasis: TextWidthBasis.parent,
             ),
             const SizedBox(height: 2),
             Text(
@@ -301,7 +298,7 @@ class _ErrorBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.8,
+        maxWidth: MediaQuery.of(context).size.width * 0.9,
       ),
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -317,10 +314,11 @@ class _ErrorBubble extends StatelessWidget {
             text,
             style: const TextStyle(
               color: AppTheme.statusRed,
-              fontSize: 13,
+              fontSize: 11.5,
               fontFamily: 'monospace',
-              height: 1.45,
+              height: 1.42,
             ),
+            textWidthBasis: TextWidthBasis.parent,
           ),
           const SizedBox(height: 2),
           Text(

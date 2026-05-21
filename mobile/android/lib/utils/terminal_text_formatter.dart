@@ -4,20 +4,14 @@ class TerminalChunkRepairResult {
   final String text;
   final String carry;
 
-  const TerminalChunkRepairResult({
-    required this.text,
-    required this.carry,
-  });
+  const TerminalChunkRepairResult({required this.text, required this.carry});
 }
 
 class TerminalEchoStripResult {
   final String text;
   final bool matched;
 
-  const TerminalEchoStripResult({
-    required this.text,
-    required this.matched,
-  });
+  const TerminalEchoStripResult({required this.text, required this.matched});
 }
 
 class TerminalTextFormatter {
@@ -27,18 +21,48 @@ class TerminalTextFormatter {
   static final RegExp _csiPattern = RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]');
   static final RegExp _singleEscapePattern = RegExp(r'\x1B[@-_]');
   static final RegExp _sgrPattern = RegExp(r'^\x1B\[[0-9;]*m$');
+  static final RegExp _zeroWidthPattern = RegExp(
+    r'[\u200B-\u200D\u2060\uFEFF]',
+  );
+  static final RegExp _replacementCharPattern = RegExp(r'\uFFFD+');
+  static final RegExp _nakedSgrFragmentPattern = RegExp(
+    r'(?:\d{1,3}(?:;\d{1,3})*m)+',
+  );
   static final RegExp _cmdPromptPattern = RegExp(r'^[A-Za-z]:\\.*>$');
-  static final RegExp _pwshPromptPattern = RegExp(r'^PS [A-Za-z]:\\.*>$');
+  static final RegExp _pwshPromptPattern = RegExp(r'^PS ?[A-Za-z]:\\.*>$');
   static final RegExp _wslPromptPattern = RegExp(r'^[^@\s]+@[^:]+:.*[$#]$');
+  static final RegExp _cmdPromptFragmentPattern = RegExp(
+    r'[A-Za-z]:\\[^>\n]*>',
+  );
+  static final RegExp _pwshPromptFragmentPattern = RegExp(
+    r'PS ?[A-Za-z]:\\[^>\n]*>',
+  );
+  static final RegExp _wslPromptFragmentPattern = RegExp(
+    r'[^@\s]+@[^:]+:[^\n]*[$#]',
+  );
   static final RegExp _cursorTogglePrefixPattern = RegExp(
     r'^(?:\?25[hl]|\[\?25[hl]|\[[0-9;]*[A-Za-z])\s*',
   );
   static final RegExp _ansiOnlyPattern = RegExp(r'^(?:\x1B\[[0-9;]*m)+$');
+  static final RegExp _leadingPromptArtifactPattern = RegExp(
+    r'^(?:m+)(?=(?:PS ?[A-Za-z]:\\|[A-Za-z]:\\|[^@\s]+@[^:]+:|>|\$))',
+  );
+  static final RegExp _interactiveSurfacePattern = RegExp(
+    r'[┌┐└┘├┤┬┴┼│─╭╮╯╰═║]|Model Picker|Select Provider|Available Tools|Available Skills|Hermes Agent|Type your message|/help for commands',
+    caseSensitive: false,
+  );
 
-  static String sanitize(String input) {
+  static String sanitize(
+    String input, {
+    bool preserveBlankLines = false,
+    bool preserveCarriageReturns = false,
+  }) {
     if (input.isEmpty) return '';
 
-    final text = _prepareRichTextInput(input);
+    final text = _prepareRichTextInput(
+      input,
+      preserveCarriageReturns: preserveCarriageReturns,
+    );
     final lines = <String>[];
     final buffer = <String>[];
     var cursor = 0;
@@ -94,16 +118,30 @@ class TerminalTextFormatter {
       lines.add(buffer.join());
     }
 
-    final cleaned = lines
-        .map((line) {
-          var cleanedLine = line.replaceAll(RegExp(r'[ \t]+$'), '');
-          cleanedLine = cleanedLine.replaceFirst(_cursorTogglePrefixPattern, '');
-          return cleanedLine;
-        })
-        .where((line) => line.trim().isNotEmpty)
-        .join('\n')
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .trimRight();
+    final normalizedLines = <String>[];
+    var previousBlank = false;
+    for (final line in lines) {
+      var cleanedLine = _normalizeDisplayLine(line);
+      cleanedLine = cleanedLine.replaceFirst(_cursorTogglePrefixPattern, '');
+      if (_isIgnorableDisplayLine(cleanedLine)) {
+        continue;
+      }
+
+      final isBlank = cleanedLine.trim().isEmpty;
+      if (isBlank) {
+        if (!preserveBlankLines || normalizedLines.isEmpty || previousBlank) {
+          continue;
+        }
+        normalizedLines.add('');
+        previousBlank = true;
+        continue;
+      }
+
+      normalizedLines.add(cleanedLine);
+      previousBlank = false;
+    }
+
+    final cleaned = normalizedLines.join('\n').trimRight();
 
     return cleaned;
   }
@@ -111,6 +149,57 @@ class TerminalTextFormatter {
   static String displayText(String input) {
     final cleaned = sanitize(input);
     return cleaned.isEmpty ? '' : cleaned;
+  }
+
+  static List<String> displayLines(
+    String input, {
+    bool preserveBlankLines = false,
+    bool dropPromptLines = false,
+  }) {
+    final promptLines = dropPromptLines
+        ? extractPromptLines(input).map((line) => line.trimRight()).toSet()
+        : const <String>{};
+    final cleaned = sanitize(input, preserveBlankLines: preserveBlankLines);
+    if (cleaned.isEmpty) {
+      return const [];
+    }
+
+    return cleaned
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) => line.trim().isNotEmpty)
+        .where((line) => !dropPromptLines || !_looksLikeShellEcho(line))
+        .where(
+          (line) =>
+              !dropPromptLines ||
+              !_looksLikePromptLineForDrop(line, promptLines),
+        )
+        .toList();
+  }
+
+  static String displayBody(
+    String input, {
+    bool preserveBlankLines = true,
+    bool dropPromptLines = false,
+  }) {
+    final lines = displayLines(
+      input,
+      preserveBlankLines: preserveBlankLines,
+      dropPromptLines: dropPromptLines,
+    );
+    return lines.join('\n').trimRight();
+  }
+
+  static String mergeDisplayText(String current, String next) {
+    if (current.isEmpty) return next;
+    if (next.isEmpty) return current;
+    return '$current\n$next';
+  }
+
+  static bool looksLikeInteractiveSurface(String input) {
+    if (input.isEmpty) return false;
+    final prepared = _prepareRichTextInput(input);
+    return _interactiveSurfacePattern.hasMatch(prepared);
   }
 
   static TerminalChunkRepairResult repairChunk(String carry, String chunk) {
@@ -219,7 +308,7 @@ class TerminalTextFormatter {
 
     List<String> best = const [];
     for (var index = 0; index < lines.length; index++) {
-      final single = lines[index];
+      final single = _extractPromptFragment(lines[index]) ?? lines[index];
       if (isPromptLine(single)) {
         best = [single];
       }
@@ -228,8 +317,9 @@ class TerminalTextFormatter {
         continue;
       }
 
-      final first = lines[index];
-      final second = lines[index + 1];
+      final first = _extractPromptFragment(lines[index]) ?? lines[index];
+      final second =
+          _extractPromptFragment(lines[index + 1]) ?? lines[index + 1];
       final joined = '$first$second';
       if (_isWrappedPrompt(joined)) {
         best = [first, second];
@@ -239,7 +329,7 @@ class TerminalTextFormatter {
   }
 
   static bool isPromptLine(String input) {
-    final line = input.trim();
+    final line = (_extractPromptFragment(input) ?? input).trim();
     if (line.isEmpty) return false;
     return _cmdPromptPattern.hasMatch(line) ||
         _pwshPromptPattern.hasMatch(line) ||
@@ -264,7 +354,10 @@ class TerminalTextFormatter {
     }
   }
 
-  static String _prepareRichTextInput(String input) {
+  static String _prepareRichTextInput(
+    String input, {
+    bool preserveCarriageReturns = false,
+  }) {
     var text = input
         .replaceAll(_oscPattern, '')
         .replaceAllMapped(
@@ -273,7 +366,20 @@ class TerminalTextFormatter {
         )
         .replaceAll(_singleEscapePattern, '');
 
-    text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    text = text
+        .replaceAll(_zeroWidthPattern, '')
+        .replaceAll(_replacementCharPattern, '')
+        .replaceAllMapped(_nakedSgrFragmentPattern, (match) {
+          final value = match[0] ?? '';
+          final leadingWhitespace = value.startsWith(' ') ? ' ' : '';
+          final leadingBracket = value.startsWith('[') ? '[' : '';
+          return '$leadingWhitespace$leadingBracket';
+        });
+
+    text = text.replaceAll('\r\n', '\n');
+    if (!preserveCarriageReturns) {
+      text = text.replaceAll('\r', '\n');
+    }
     text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
     final sourceLines = text.split('\n');
     final filteredLines = <String>[];
@@ -284,7 +390,10 @@ class TerminalTextFormatter {
         filteredLines.add(line);
         continue;
       }
-      if (trimmed == '25h' || trimmed == '25l' || trimmed == '?25h' || trimmed == '?25l') {
+      if (trimmed == '25h' ||
+          trimmed == '25l' ||
+          trimmed == '?25h' ||
+          trimmed == '?25l') {
         continue;
       }
       if (_isProcessTitleLine(trimmed)) {
@@ -294,10 +403,7 @@ class TerminalTextFormatter {
         final nextMeaningful = sourceLines
             .skip(index + 1)
             .map((item) => item.trim())
-            .firstWhere(
-              (item) => item.isNotEmpty,
-              orElse: () => '',
-            );
+            .firstWhere((item) => item.isNotEmpty, orElse: () => '');
         if (_isProcessTitleLine(nextMeaningful) ||
             isPromptLine(nextMeaningful) ||
             _isWrappedPrompt(nextMeaningful)) {
@@ -312,6 +418,7 @@ class TerminalTextFormatter {
   static List<String> _promptCandidateLines(String input) {
     return _prepareRichTextInput(input)
         .split('\n')
+        .map(_normalizeDisplayLine)
         .map((line) => line.trimRight())
         .map((line) => line.replaceFirst(_cursorTogglePrefixPattern, ''))
         .where((line) => line.trim().isNotEmpty)
@@ -330,6 +437,160 @@ class TerminalTextFormatter {
         visibleLine.endsWith('> $command') ||
         visibleLine.endsWith('\$ $command') ||
         visibleLine.endsWith('# $command');
+  }
+
+  static String _normalizeDisplayLine(String line) {
+    var normalized = line
+        .replaceAll(_zeroWidthPattern, '')
+        .replaceAll(_replacementCharPattern, '')
+        .replaceAll(RegExp(r'[ \t]+$'), '');
+    normalized = normalized.replaceFirst(_leadingPromptArtifactPattern, '');
+
+    final hadAnsiFragments = _nakedSgrFragmentPattern.hasMatch(normalized);
+    normalized = normalized.replaceAllMapped(_nakedSgrFragmentPattern, (match) {
+      return '';
+    });
+
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\S+'),
+      (match) => _stripArtifactSuffix(
+        match[0] ?? '',
+        allowPlainWord: hadAnsiFragments,
+      ),
+    );
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\b([A-Za-z]{2,20})m(?=\s+\S+\.\S+\b)'),
+      (match) => match.group(1) ?? match[0] ?? '',
+    );
+    final lineLooksAnsiFileish = RegExp(
+      r'\b\S+[./\\_-]\S*m\b',
+    ).hasMatch(normalized);
+    if (hadAnsiFragments || lineLooksAnsiFileish) {
+      normalized = normalized.replaceAllMapped(
+        RegExp(r'\b([A-Za-z]{2,20})m\b'),
+        (match) => match.group(1) ?? match[0] ?? '',
+      );
+    }
+
+    final promptFragment = _extractPromptFragment(normalized);
+    if (promptFragment != null &&
+        normalized.trim().endsWith(promptFragment) &&
+        !_looksLikePromptWithCommand(normalized, promptFragment) &&
+        !isPromptLine(normalized)) {
+      normalized = promptFragment;
+    }
+
+    return normalized;
+  }
+
+  static String _stripArtifactSuffix(
+    String token, {
+    required bool allowPlainWord,
+  }) {
+    var current = token;
+    while (current.endsWith('m') && current.length >= 2) {
+      final candidate = current.substring(0, current.length - 1);
+      final looksLikePathOrFile =
+          candidate.contains(RegExp(r'[./\\_\-]')) ||
+          candidate.contains(RegExp(r'\d'));
+      final looksLikePunctuation = RegExp(r'^[-=]{2,}$').hasMatch(candidate);
+      final looksLikeShortName =
+          allowPlainWord && RegExp(r'^[A-Za-z]{1,20}$').hasMatch(candidate);
+      if (looksLikePathOrFile || looksLikePunctuation || looksLikeShortName) {
+        current = candidate;
+        continue;
+      }
+      break;
+    }
+    return current;
+  }
+
+  static String? _extractPromptFragment(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return null;
+
+    final pwshMatches = _pwshPromptFragmentPattern.allMatches(trimmed).toList();
+    if (pwshMatches.isNotEmpty) {
+      return _normalizePromptFragment(pwshMatches.last.group(0)?.trim() ?? '');
+    }
+
+    final wslMatches = _wslPromptFragmentPattern.allMatches(trimmed).toList();
+    if (wslMatches.isNotEmpty) {
+      return _normalizePromptFragment(wslMatches.last.group(0)?.trim() ?? '');
+    }
+
+    final cmdMatches = _cmdPromptFragmentPattern.allMatches(trimmed).toList();
+    if (cmdMatches.isNotEmpty) {
+      return _normalizePromptFragment(cmdMatches.last.group(0)?.trim() ?? '');
+    }
+
+    return null;
+  }
+
+  static bool _looksLikePromptWithCommand(String line, String promptFragment) {
+    final trimmed = line.trim();
+    if (!trimmed.contains(promptFragment)) {
+      return false;
+    }
+
+    final promptIndex = trimmed.indexOf(promptFragment);
+    final suffix = trimmed
+        .substring(promptIndex + promptFragment.length)
+        .trim();
+    return suffix.isNotEmpty;
+  }
+
+  static bool _looksLikeShellEcho(String line) {
+    final trimmed = line.trimLeft();
+    return trimmed.startsWith('>') || trimmed.startsWith(r'$');
+  }
+
+  static bool _looksLikePromptLineForDrop(
+    String line,
+    Set<String> promptLines,
+  ) {
+    final normalizedLine = _normalizePromptFragment(line.trim());
+    return promptLines.contains(normalizedLine) || isPromptLine(normalizedLine);
+  }
+
+  static String _normalizePromptFragment(String prompt) {
+    if (prompt.isEmpty) return prompt;
+
+    var normalized = prompt
+        .replaceAll(RegExp(r'(?<=PS)(?=[A-Za-z]:\\)'), ' ')
+        .replaceAll(':m/', ':/')
+        .replaceAll(':m/mnt/', ':/mnt/')
+        .replaceAllMapped(RegExp(r'(?<=[A-Za-z]:\\[^>\n]*)m(?=>?$)'), (_) => '')
+        .replaceAllMapped(
+          RegExp(r'(?<=/mnt/[a-z]/[^\n$#]*)m(?=[$#]?$)'),
+          (_) => '',
+        );
+
+    if (normalized.startsWith('PS') &&
+        !normalized.startsWith('PS ') &&
+        normalized.length > 2) {
+      normalized = 'PS ${normalized.substring(2)}';
+    }
+    return normalized;
+  }
+
+  static bool _isIgnorableDisplayLine(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return false;
+    if (trimmed == '25h' ||
+        trimmed == '25l' ||
+        trimmed == '?25h' ||
+        trimmed == '?25l' ||
+        trimmed == '[?25h' ||
+        trimmed == '[?25l' ||
+        trimmed == 'm') {
+      return true;
+    }
+    if (_ansiOnlyPattern.hasMatch(trimmed)) {
+      return true;
+    }
+    return _replacementCharPattern.hasMatch(trimmed) &&
+        trimmed.replaceAll(_replacementCharPattern, '').trim().isEmpty;
   }
 
   static bool _isProcessTitleLine(String input) {
@@ -425,7 +686,9 @@ class TerminalTextFormatter {
           final current = buffer.toString();
           buffer
             ..clear()
-            ..write(current.isEmpty ? '' : current.substring(0, current.length - 1));
+            ..write(
+              current.isEmpty ? '' : current.substring(0, current.length - 1),
+            );
           index += 1;
           continue;
         default:
@@ -456,10 +719,7 @@ class TerminalTextFormatter {
     final rawParams = match.group(1);
     final params = (rawParams == null || rawParams.isEmpty)
         ? <int>[0]
-        : rawParams
-            .split(';')
-            .map((part) => int.tryParse(part) ?? 0)
-            .toList();
+        : rawParams.split(';').map((part) => int.tryParse(part) ?? 0).toList();
 
     var next = current;
     for (final code in params) {

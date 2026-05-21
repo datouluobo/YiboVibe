@@ -254,7 +254,8 @@ export default function VibeConsole() {
       letterSpacing: 0,
       scrollback: 10000,
       allowProposedApi: true,
-      convertEol: true,
+      // Preserve PTY cursor movement semantics for TUIs like hermes.
+      convertEol: false,
       theme: {
         background: "#0d1117",
         foreground: "#d6dde8",

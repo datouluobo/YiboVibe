@@ -38,7 +38,14 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     return Consumer<SessionProvider>(
       builder: (context, p, _) {
         final running = p.activeSession?.isRunning ?? false;
+        final interactive = p.isInteractiveSession;
         final prompt = p.currentPrompt;
+        final promptText = prompt == null
+            ? null
+            : TerminalTextFormatter.displayBody(
+                prompt,
+                preserveBlankLines: true,
+              );
 
         return Container(
           decoration: BoxDecoration(
@@ -48,21 +55,45 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (prompt != null && prompt.isNotEmpty)
+              if (promptText != null && promptText.isNotEmpty)
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                  margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
                   alignment: Alignment.centerLeft,
-                  child: SelectableText.rich(
-                    TerminalTextFormatter.buildStyledText(
-                      prompt,
-                      const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        height: 1.18,
-                      ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgSecondary,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: AppTheme.borderColor.withAlpha(140),
                     ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1, right: 8),
+                        child: Icon(
+                          Icons.subdirectory_arrow_right_rounded,
+                          size: 14,
+                          color: AppTheme.textTertiary,
+                        ),
+                      ),
+                      Expanded(
+                        child: SelectableText.rich(
+                          TerminalTextFormatter.buildStyledText(
+                            promptText,
+                            const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 11.5,
+                              fontFamily: 'monospace',
+                              height: 1.28,
+                            ),
+                          ),
+                          textWidthBasis: TextWidthBasis.parent,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               // 输入行 — 统一 36px 高度
@@ -72,7 +103,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // 模式指示 (终端/对话)
-                    _ModeToggle(p: p),
+                    _ModeToggle(p: p, disabled: interactive),
                     const SizedBox(width: 6),
                     // 输入框
                     Expanded(
@@ -194,6 +225,11 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                   ],
                 ),
               ),
+              if (interactive)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                  child: _InteractiveToolbar(provider: p),
+                ),
             ],
           ),
         );
@@ -350,24 +386,101 @@ class _BottomInputAreaState extends State<BottomInputArea> {
 // ═══════════════════════════════════════════════════════════════
 class _ModeToggle extends StatelessWidget {
   final SessionProvider p;
-  const _ModeToggle({required this.p});
+  final bool disabled;
+  const _ModeToggle({required this.p, this.disabled = false});
 
   @override
   Widget build(BuildContext context) {
     final isDialog = p.isDialogMode;
     return GestureDetector(
-      onTap: p.toggleViewMode,
+      onTap: disabled ? null : p.toggleViewMode,
       child: Container(
         width: 36,
         height: 36,
         decoration: BoxDecoration(
           color: AppTheme.bgTertiary,
           borderRadius: BorderRadius.circular(8),
+          border: disabled
+              ? Border.all(color: AppTheme.borderColor.withAlpha(140))
+              : null,
         ),
         child: Icon(
           isDialog ? Icons.chat_bubble_outline : Icons.terminal,
           size: 18,
-          color: AppTheme.brand,
+          color: disabled ? AppTheme.textTertiary : AppTheme.brand,
+        ),
+      ),
+    );
+  }
+}
+
+class _InteractiveToolbar extends StatelessWidget {
+  final SessionProvider provider;
+
+  const _InteractiveToolbar({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.bgSecondary,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '交互模式',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _interactiveKey('Up', Icons.keyboard_arrow_up, '\x1B[A'),
+              _interactiveKey('Down', Icons.keyboard_arrow_down, '\x1B[B'),
+              _interactiveKey('Left', Icons.keyboard_arrow_left, '\x1B[D'),
+              _interactiveKey('Right', Icons.keyboard_arrow_right, '\x1B[C'),
+              _interactiveKey('Enter', Icons.keyboard_return, '\n'),
+              _interactiveKey('Tab', Icons.keyboard_tab, '\t'),
+              _interactiveKey('Esc', Icons.close_fullscreen, '\x1B'),
+              _interactiveKey('Space', Icons.space_bar, ' '),
+              _interactiveKey('Ctrl+C', Icons.cancel_outlined, '\x03'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _interactiveKey(String label, IconData icon, String value) {
+    return GestureDetector(
+      onTap: () => provider.sendRawInput(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: AppTheme.bgPrimary,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.borderColor),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: AppTheme.brand),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
+            ),
+          ],
         ),
       ),
     );
