@@ -168,6 +168,6 @@ class EventMessage {
     }
   }
 
-  bool get isError => stream == OutputStream.stderr || type == EventType.systemNotice;
+  bool get isError => stream == OutputStream.stderr;
   bool get isUserMessage => type == EventType.userInput;
 }

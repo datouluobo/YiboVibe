@@ -64,7 +64,10 @@ class SessionProvider extends ChangeNotifier {
   void initWithAuth() {
     final serverUrl = _auth.serverUrl;
     final token = _auth.token;
-    if (serverUrl == null || serverUrl.isEmpty || token == null || token.isEmpty) {
+    if (serverUrl == null ||
+        serverUrl.isEmpty ||
+        token == null ||
+        token.isEmpty) {
       return;
     }
 
@@ -81,10 +84,7 @@ class SessionProvider extends ChangeNotifier {
     }
 
     _api.setBaseUrl(serverUrl, token);
-    _signal.configure(
-      serverUrl: serverUrl,
-      token: token,
-    );
+    _signal.configure(serverUrl: serverUrl, token: token);
     _signal.connect();
     _startPolling();
     loadDevicesAndSessions();
@@ -166,25 +166,23 @@ class SessionProvider extends ChangeNotifier {
   }
 
   List<Session> _normalizeSessions(List<Session> sessions) {
-    final normalized = sessions
-        .map((session) {
-          final existing = _sessions
-              .where((item) => item.sessionId == session.sessionId)
-              .firstOrNull;
-          if (existing == null) {
-            return session;
-          }
-          return session.copyWith(
-            startedAt: session.startedAt ?? existing.startedAt,
-            lastActiveAt: session.lastActiveAt ?? existing.lastActiveAt,
-            title: session.title.isNotEmpty ? session.title : existing.title,
-            shellKind: session.shellKind.isNotEmpty
-                ? session.shellKind
-                : existing.shellKind,
-            cwd: session.cwd.isNotEmpty ? session.cwd : existing.cwd,
-          );
-        })
-        .toList();
+    final normalized = sessions.map((session) {
+      final existing = _sessions
+          .where((item) => item.sessionId == session.sessionId)
+          .firstOrNull;
+      if (existing == null) {
+        return session;
+      }
+      return session.copyWith(
+        startedAt: session.startedAt ?? existing.startedAt,
+        lastActiveAt: session.lastActiveAt ?? existing.lastActiveAt,
+        title: session.title.isNotEmpty ? session.title : existing.title,
+        shellKind: session.shellKind.isNotEmpty
+            ? session.shellKind
+            : existing.shellKind,
+        cwd: session.cwd.isNotEmpty ? session.cwd : existing.cwd,
+      );
+    }).toList();
 
     normalized.sort((left, right) {
       final ownerCmp = left.ownerDevice.compareTo(right.ownerDevice);
@@ -309,10 +307,7 @@ class SessionProvider extends ChangeNotifier {
               _closingSessions.remove(sid);
               _sessions.removeWhere((s) => s.sessionId == sid);
             } else {
-              final updated = Session.fromJson({
-                'id': sid,
-                ...decoded,
-              });
+              final updated = Session.fromJson({'id': sid, ...decoded});
               if (!_isSessionClosing(updated.sessionId)) {
                 _upsertSession(updated);
               }
@@ -329,8 +324,9 @@ class SessionProvider extends ChangeNotifier {
       // 批量更新 session 列表（来自 desktop WS 直推）
       try {
         final list = jsonDecode(normalizedEvent.text) as List<dynamic>;
-        final nextSessions =
-            list.map((s) => Session.fromJson(s as Map<String, dynamic>)).toList();
+        final nextSessions = list
+            .map((s) => Session.fromJson(s as Map<String, dynamic>))
+            .toList();
         _reconcileClosingSessions(nextSessions);
         _sessions = nextSessions
             .where((session) => !_isSessionClosing(session.sessionId))
@@ -339,6 +335,12 @@ class SessionProvider extends ChangeNotifier {
       } catch (_) {}
     } else {
       _events.add(normalizedEvent);
+      if (_isDialogMode &&
+          TerminalTextFormatter.looksLikeInteractiveSurface(
+            normalizedEvent.text,
+          )) {
+        _isDialogMode = false;
+      }
       if (_events.length > 500) {
         _events = _events.sublist(_events.length - 300);
       }
@@ -395,7 +397,9 @@ class SessionProvider extends ChangeNotifier {
     final sameDeviceSessions = _sessions
         .where((item) => item.ownerDevice == session.ownerDevice)
         .toList();
-    final index = sameDeviceSessions.indexWhere((item) => item.sessionId == session.sessionId);
+    final index = sameDeviceSessions.indexWhere(
+      (item) => item.sessionId == session.sessionId,
+    );
     final ordinal = index >= 0 ? index + 1 : 0;
     if (ordinal > 0) {
       return '${session.shellKind} #$ordinal';
@@ -413,9 +417,21 @@ class SessionProvider extends ChangeNotifier {
   List<EventMessage> get activeSessionEvents {
     if (_activeSession == null) return _events;
     return _events
-        .where((e) =>
-            e.sessionId.isEmpty || e.sessionId == _activeSession!.sessionId)
+        .where(
+          (e) =>
+              e.sessionId.isEmpty || e.sessionId == _activeSession!.sessionId,
+        )
         .toList();
+  }
+
+  bool get isInteractiveSession {
+    final events = activeSessionEvents.reversed.take(24);
+    for (final event in events) {
+      if (TerminalTextFormatter.looksLikeInteractiveSurface(event.text)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   String? get currentPrompt {
@@ -440,14 +456,22 @@ class SessionProvider extends ChangeNotifier {
       _pendingEchoBySession[_activeSession!.sessionId] = command;
     }
     _signal.sendInput(_activeSession!.sessionId, text);
-    _events.add(EventMessage(
-      type: EventType.userInput,
-      sessionId: _activeSession!.sessionId,
-      text: text,
-      ts: DateTime.now(),
-      senderDevice: 'mobile',
-    ));
+    _events.add(
+      EventMessage(
+        type: EventType.userInput,
+        sessionId: _activeSession!.sessionId,
+        text: text,
+        ts: DateTime.now(),
+        senderDevice: 'mobile',
+      ),
+    );
     unawaited(_persistEvents());
+    notifyListeners();
+  }
+
+  void sendRawInput(String text) {
+    if (_activeSession == null || text.isEmpty) return;
+    _signal.sendInput(_activeSession!.sessionId, text);
     notifyListeners();
   }
 
@@ -487,7 +511,7 @@ class SessionProvider extends ChangeNotifier {
       _pendingEchoBySession.remove(sessionId);
     }
 
-    if (text.trim().isEmpty) {
+    if (text.trim().isEmpty && !text.contains('\x1B') && !text.contains('\r')) {
       return null;
     }
 
@@ -551,13 +575,12 @@ class SessionProvider extends ChangeNotifier {
   /// 创建新 session
   void createSession(String shellKind) {
     _signal.createSession(shellKind);
-    unawaited(Future<void>.delayed(
-      const Duration(milliseconds: 600),
-      () async {
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 600), () async {
         _signal.requestSessions();
         await _pollSessions();
-      },
-    ));
+      }),
+    );
   }
 
   /// 切换视图模式
@@ -616,8 +639,7 @@ class SessionProvider extends ChangeNotifier {
   bool _isSessionClosing(String sessionId) {
     final startedAt = _closingSessions[sessionId];
     if (startedAt == null) return false;
-    return DateTime.now().difference(startedAt) <
-        const Duration(seconds: 8);
+    return DateTime.now().difference(startedAt) < const Duration(seconds: 8);
   }
 
   void _purgeClosingSessions() {
@@ -629,18 +651,18 @@ class SessionProvider extends ChangeNotifier {
 
   void _reconcileClosingSessions(List<Session> sessions) {
     final activeIds = sessions.map((session) => session.sessionId).toSet();
-    _closingSessions.removeWhere((sessionId, _) => !activeIds.contains(sessionId));
+    _closingSessions.removeWhere(
+      (sessionId, _) => !activeIds.contains(sessionId),
+    );
   }
 
   void _scheduleRefreshAfterControl() {
-    unawaited(Future<void>.delayed(
-      const Duration(milliseconds: 350),
-      _pollSessions,
-    ));
-    unawaited(Future<void>.delayed(
-      const Duration(milliseconds: 1400),
-      _pollSessions,
-    ));
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 350), _pollSessions),
+    );
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 1400), _pollSessions),
+    );
   }
 
   @override

@@ -41,7 +41,11 @@ class _TerminalViewState extends State<TerminalView> {
 
   @override
   Widget build(BuildContext context) {
-    final events = context.watch<SessionProvider>().activeSessionEvents;
+    final provider = context.watch<SessionProvider>();
+    final events = provider.activeSessionEvents;
+    if (provider.isInteractiveSession) {
+      return _InteractiveTerminalSurface(events: events);
+    }
     final terminalBlocks = _buildBlocks(events);
 
     if (terminalBlocks.isEmpty) {
@@ -106,19 +110,12 @@ class _TerminalViewState extends State<TerminalView> {
         continue;
       }
 
-      final displayText = TerminalTextFormatter.displayText(event.text);
-      if (displayText.isEmpty) continue;
-
-      final lines = displayText
-          .split('\n')
-          .map((line) => line.trimRight())
-          .where((line) => line.trim().isNotEmpty)
-          .toList();
-      final promptLines = TerminalTextFormatter.extractPromptLines(event.text)
-          .map((line) => line.trimRight())
-          .toSet();
-
       if (event.isUserMessage) {
+        final displayText = TerminalTextFormatter.displayBody(
+          event.text,
+          preserveBlankLines: true,
+        );
+        if (displayText.isEmpty) continue;
         blocks.add(
           _TerminalBlock(
             type: _TerminalBlockType.userInput,
@@ -130,6 +127,11 @@ class _TerminalViewState extends State<TerminalView> {
       }
 
       if (event.type == EventType.systemNotice) {
+        final displayText = TerminalTextFormatter.displayBody(
+          event.text,
+          preserveBlankLines: true,
+        );
+        if (displayText.isEmpty) continue;
         blocks.add(
           _TerminalBlock(
             type: _TerminalBlockType.system,
@@ -141,6 +143,12 @@ class _TerminalViewState extends State<TerminalView> {
       }
 
       if (event.stream == OutputStream.stderr) {
+        final displayText = TerminalTextFormatter.displayBody(
+          event.text,
+          preserveBlankLines: true,
+          dropPromptLines: true,
+        );
+        if (displayText.isEmpty) continue;
         blocks.add(
           _TerminalBlock(
             type: _TerminalBlockType.stderr,
@@ -151,21 +159,80 @@ class _TerminalViewState extends State<TerminalView> {
         continue;
       }
 
-      for (final line in lines) {
-        if (promptLines.contains(line)) {
-          continue;
-        }
-        blocks.add(
-          _TerminalBlock(
-            type: _TerminalBlockType.output,
-            text: line,
-            ts: event.ts,
-          ),
-        );
-      }
+      final displayText = TerminalTextFormatter.displayBody(
+        event.text,
+        preserveBlankLines: true,
+        dropPromptLines: true,
+      );
+      if (displayText.isEmpty) continue;
+      blocks.add(
+        _TerminalBlock(
+          type: _TerminalBlockType.output,
+          text: displayText,
+          ts: event.ts,
+        ),
+      );
     }
 
     return blocks;
+  }
+}
+
+class _InteractiveTerminalSurface extends StatelessWidget {
+  final List<EventMessage> events;
+
+  const _InteractiveTerminalSurface({required this.events});
+
+  @override
+  Widget build(BuildContext context) {
+    final transcript = _buildTranscript(events);
+    if (transcript.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Scrollbar(
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.of(context).size.width - 20,
+          ),
+          child: SelectableText.rich(
+            TextSpan(
+              text: transcript,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 11.5,
+                fontFamily: 'monospace',
+                height: 1.3,
+              ),
+            ),
+            textWidthBasis: TextWidthBasis.parent,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _buildTranscript(List<EventMessage> events) {
+    final buffer = StringBuffer();
+    for (final event in events) {
+      if (event.type != EventType.terminalOutput) {
+        continue;
+      }
+      if (event.text.isEmpty) {
+        continue;
+      }
+      buffer.write(event.text);
+    }
+
+    return TerminalTextFormatter.sanitize(
+      buffer.toString(),
+      preserveBlankLines: true,
+      preserveCarriageReturns: true,
+    );
   }
 }
 
@@ -225,64 +292,87 @@ class _TerminalLine extends StatelessWidget {
   Widget build(BuildContext context) {
     Color textColor;
     String prefix;
+    Color? backgroundColor;
+    EdgeInsets padding = const EdgeInsets.symmetric(vertical: 1);
 
     if (block.type == _TerminalBlockType.userInput) {
       textColor = AppTheme.brand;
       prefix = '> ';
+      backgroundColor = AppTheme.brand.withAlpha(18);
+      padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6);
     } else if (block.type == _TerminalBlockType.stderr) {
       textColor = AppTheme.statusRed;
       prefix = '';
+      backgroundColor = AppTheme.statusRed.withAlpha(14);
+      padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6);
     } else if (block.type == _TerminalBlockType.system) {
       textColor = AppTheme.statusYellow;
       prefix = '[SYS] ';
+      backgroundColor = AppTheme.statusYellow.withAlpha(14);
+      padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6);
     } else {
       textColor = AppTheme.textPrimary;
       prefix = '';
+      backgroundColor = AppTheme.bgSecondary;
+      padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6);
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 1),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showTimestamp) ...[
-            Text(
-              DateFormat('HH:mm:ss').format(block.ts),
-              style: const TextStyle(
-                color: AppTheme.textTertiary,
-                fontSize: 10,
-                fontFamily: 'monospace',
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.borderColor.withAlpha(120)),
+        ),
+        padding: padding,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showTimestamp) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Text(
+                  DateFormat('HH:mm:ss').format(block.ts),
+                  style: const TextStyle(
+                    color: AppTheme.textTertiary,
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: SelectableText.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: prefix,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        height: 1.36,
+                      ),
+                    ),
+                    TerminalTextFormatter.buildStyledText(
+                      block.text,
+                      TextStyle(
+                        color: textColor,
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        height: 1.36,
+                      ),
+                    ),
+                  ],
+                ),
+                textWidthBasis: TextWidthBasis.parent,
+                style: const TextStyle(overflow: TextOverflow.visible),
               ),
             ),
-            const SizedBox(width: 8),
           ],
-          Expanded(
-            child: SelectableText.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: prefix,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 12,
-                      fontFamily: 'monospace',
-                      height: 1.24,
-                    ),
-                  ),
-                  TerminalTextFormatter.buildStyledText(
-                    block.text,
-                    TextStyle(
-                      color: textColor,
-                      fontSize: 12,
-                      fontFamily: 'monospace',
-                      height: 1.24,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
