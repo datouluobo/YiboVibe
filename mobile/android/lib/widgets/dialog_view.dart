@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/event_message.dart';
 import '../../providers/session_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/terminal_text_formatter.dart';
 
 /// 对话模式视图 — 气泡式，区分用户输入/终端输出/系统事件
 class DialogView extends StatelessWidget {
@@ -19,18 +20,23 @@ class DialogView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.chat_bubble_outline,
-                size: 48, color: AppTheme.textTertiary),
+            Icon(
+              Icons.chat_bubble_outline,
+              size: 48,
+              color: AppTheme.textTertiary,
+            ),
             SizedBox(height: 12),
-            Text('暂无消息',
-                style: TextStyle(color: AppTheme.textTertiary, fontSize: 14)),
+            Text(
+              '暂无消息',
+              style: TextStyle(color: AppTheme.textTertiary, fontSize: 14),
+            ),
           ],
         ),
       );
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       itemCount: grouped.length,
       itemBuilder: (context, index) {
         final block = grouped[index];
@@ -45,37 +51,58 @@ class DialogView extends StatelessWidget {
     const windowMs = 500; // 500ms 内合并
 
     for (final event in events) {
+      final displayText = TerminalTextFormatter.displayText(event.text);
+      if (displayText.isEmpty) {
+        continue;
+      }
+
+      final lines = displayText
+          .split('\n')
+          .map((line) => line.trimRight())
+          .where((line) => line.trim().isNotEmpty)
+          .toList();
+      final promptLines = TerminalTextFormatter.extractPromptLines(event.text)
+          .map((line) => line.trimRight())
+          .toSet();
+
       if (event.isUserMessage) {
-        blocks.add(_MessageBlock(
-          type: BlockType.userInput,
-          text: event.text,
-          ts: event.ts,
-        ));
-      } else if (event.isError) {
-        blocks.add(_MessageBlock(
-          type: BlockType.error,
-          text: event.text,
-          ts: event.ts,
-        ));
-      } else if (event.type == EventType.systemNotice) {
-        blocks.add(_MessageBlock(
-          type: BlockType.system,
-          text: event.text,
-          ts: event.ts,
-        ));
-      } else {
-        // terminal output — 合并
-        if (blocks.isNotEmpty &&
-            blocks.last.type == BlockType.terminalOutput &&
-            event.ts.difference(blocks.last.ts).inMilliseconds < windowMs) {
-          blocks.last.text += '\n${event.text}';
-          blocks.last.ts = event.ts;
-        } else {
-          blocks.add(_MessageBlock(
-            type: BlockType.terminalOutput,
-            text: event.text,
+        blocks.add(
+          _MessageBlock(
+            type: BlockType.userInput,
+            text: displayText,
             ts: event.ts,
-          ));
+          ),
+        );
+      } else if (event.isError) {
+        blocks.add(
+          _MessageBlock(type: BlockType.error, text: displayText, ts: event.ts),
+        );
+      } else if (event.type == EventType.systemNotice) {
+        blocks.add(
+          _MessageBlock(
+            type: BlockType.system,
+            text: displayText,
+            ts: event.ts,
+          ),
+        );
+      } else {
+        for (final line in lines) {
+          if (promptLines.contains(line)) continue;
+
+          if (blocks.isNotEmpty &&
+              blocks.last.type == BlockType.terminalOutput &&
+              event.ts.difference(blocks.last.ts).inMilliseconds < windowMs) {
+            blocks.last.text += '\n$line';
+            blocks.last.ts = event.ts;
+          } else {
+            blocks.add(
+              _MessageBlock(
+                type: BlockType.terminalOutput,
+                text: line,
+                ts: event.ts,
+              ),
+            );
+          }
         }
       }
     }
@@ -125,9 +152,11 @@ class _UserBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: AppTheme.brand.withAlpha(40),
           borderRadius: const BorderRadius.only(
@@ -136,19 +165,27 @@ class _UserBubble extends StatelessWidget {
             bottomLeft: Radius.circular(16),
             bottomRight: Radius.circular(16),
           ),
-          border: Border.all(
-              color: AppTheme.brand.withAlpha(60)),
+          border: Border.all(color: AppTheme.brand.withAlpha(60)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(text,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary, fontSize: 14)),
-            const SizedBox(height: 4),
-            Text(DateFormat('HH:mm').format(ts),
-                style: const TextStyle(
-                    color: AppTheme.textTertiary, fontSize: 10)),
+            SelectableText(
+              text.trimRight(),
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+                height: 1.42,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              DateFormat('HH:mm').format(ts),
+              style: const TextStyle(
+                color: AppTheme.textTertiary,
+                fontSize: 10,
+              ),
+            ),
           ],
         ),
       ),
@@ -167,9 +204,11 @@ class _TerminalBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.88,
+        ),
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: AppTheme.bgTertiary,
           borderRadius: const BorderRadius.only(
@@ -182,15 +221,25 @@ class _TerminalBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(text,
-                style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 13,
-                    fontFamily: 'monospace')),
-            const SizedBox(height: 4),
-            Text(DateFormat('HH:mm').format(ts),
-                style: const TextStyle(
-                    color: AppTheme.textTertiary, fontSize: 10)),
+            SelectableText.rich(
+              TerminalTextFormatter.buildStyledText(
+                text,
+                const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  height: 1.28,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              DateFormat('HH:mm').format(ts),
+              style: const TextStyle(
+                color: AppTheme.textTertiary,
+                fontSize: 10,
+              ),
+            ),
           ],
         ),
       ),
@@ -207,8 +256,8 @@ class _SystemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: AppTheme.statusYellow.withAlpha(15),
         borderRadius: BorderRadius.circular(8),
@@ -216,16 +265,26 @@ class _SystemCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.info_outline, size: 14, color: AppTheme.statusYellow),
+          const Icon(
+            Icons.info_outline,
+            size: 14,
+            color: AppTheme.statusYellow,
+          ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(text,
-                style: const TextStyle(
-                    color: AppTheme.statusYellow, fontSize: 12)),
-          ),
-          Text(DateFormat('HH:mm').format(ts),
+            child: SelectableText(
+              text,
               style: const TextStyle(
-                  color: AppTheme.textTertiary, fontSize: 10)),
+                color: AppTheme.statusYellow,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+          Text(
+            DateFormat('HH:mm').format(ts),
+            style: const TextStyle(color: AppTheme.textTertiary, fontSize: 10),
+          ),
         ],
       ),
     );
@@ -241,9 +300,11 @@ class _ErrorBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.8,
+      ),
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: AppTheme.statusRed.withAlpha(15),
         borderRadius: BorderRadius.circular(12),
@@ -252,15 +313,20 @@ class _ErrorBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(text,
-              style: const TextStyle(
-                  color: AppTheme.statusRed,
-                  fontSize: 13,
-                  fontFamily: 'monospace')),
-          const SizedBox(height: 4),
-          Text(DateFormat('HH:mm').format(ts),
-              style: const TextStyle(
-                  color: AppTheme.textTertiary, fontSize: 10)),
+          SelectableText(
+            text,
+            style: const TextStyle(
+              color: AppTheme.statusRed,
+              fontSize: 13,
+              fontFamily: 'monospace',
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            DateFormat('HH:mm').format(ts),
+            style: const TextStyle(color: AppTheme.textTertiary, fontSize: 10),
+          ),
         ],
       ),
     );

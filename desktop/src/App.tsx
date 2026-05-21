@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, Suspense, lazy } from "react";
 import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import Login from "./pages/Login";
 import Layout from "./components/Layout";
 
@@ -39,6 +40,7 @@ function PageFallback() {
 
 function App() {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [desktopBuildLabel, setDesktopBuildLabel] = useState("");
   const lastClickRef = useRef({ time: 0, x: 0, y: 0 });
 
   useEffect(() => {
@@ -53,6 +55,16 @@ function App() {
       appWindow.isMaximized().then(setIsMaximized).catch(() => {});
     });
     return () => { unlisten.then(f => f()); };
+  }, []);
+
+  useEffect(() => {
+    invoke<{ app_version: string; debug_label: string }>("get_desktop_build_label")
+      .then((info) => {
+        setDesktopBuildLabel(`${info.app_version} / ${info.debug_label}`);
+      })
+      .catch(() => {
+        setDesktopBuildLabel("");
+      });
   }, []);
 
   const handleTitlebarMouseDown = useCallback((e: React.MouseEvent) => {
@@ -84,7 +96,9 @@ function App() {
           className="titlebar"
           onMouseDown={handleTitlebarMouseDown}
         >
-          <span className="titlebar-title">YiboVibe</span>
+          <span className="titlebar-title">
+            YiboVibe{desktopBuildLabel ? ` ${desktopBuildLabel}` : ""}
+          </span>
           <div className="titlebar-controls">
             <button
               className="titlebar-button minimize"

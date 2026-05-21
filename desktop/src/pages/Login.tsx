@@ -9,6 +9,7 @@ import { formatOperationError, resolveAuthError } from "../utils/errorDisplay";
 export default function Login() {
     const navigate = useNavigate();
     const { t } = useTranslation();
+    const [desktopBuildLabel, setDesktopBuildLabel] = useState("");
     const [serverUrl, setServerUrl] = useState(() => {
         const hist = localStorage.getItem('yibovibe_server_url_history');
         if (hist) {
@@ -39,6 +40,16 @@ export default function Login() {
         };
         document.addEventListener("mousedown", handleClickOutside);
         return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    useEffect(() => {
+        invoke<{ app_version: string; debug_label: string }>("get_desktop_build_label")
+            .then((info) => {
+                setDesktopBuildLabel(`v${info.app_version} / ${info.debug_label}`);
+            })
+            .catch(() => {
+                setDesktopBuildLabel("");
+            });
     }, []);
 
     const [username, setUsername] = useState(() => localStorage.getItem('yibovibe_username') || "admin");
@@ -202,6 +213,24 @@ export default function Login() {
                     </motion.div>
                     <h1 className="auth-title">{isRegistering ? t('login.title_register') : t('login.title_login')}</h1>
                     <p className="auth-subtitle">{isRegistering ? t('login.subtitle_register') : t('login.subtitle_login')}</p>
+                    {desktopBuildLabel && (
+                        <div style={{
+                            marginTop: "10px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "5px 14px",
+                            borderRadius: "999px",
+                            border: "1px solid var(--color-glass-border)",
+                            background: "var(--color-surface-elevated)",
+                            color: "var(--color-text-muted)",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            letterSpacing: "0.2px"
+                        }}>
+                            {desktopBuildLabel}
+                        </div>
+                    )}
                 </div>
 
                 <form className="auth-form" onSubmit={handleAuth}>

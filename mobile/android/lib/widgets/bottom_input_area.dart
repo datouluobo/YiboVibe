@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/session_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/terminal_text_formatter.dart';
 
 /// 底部输入区 — Warp 风格: 单行输入 + 紧凑工具图标
 /// 主入口: [mode-icon] [input-field] [send]
@@ -37,6 +38,7 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     return Consumer<SessionProvider>(
       builder: (context, p, _) {
         final running = p.activeSession?.isRunning ?? false;
+        final prompt = p.currentPrompt;
 
         return Container(
           decoration: BoxDecoration(
@@ -46,6 +48,23 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (prompt != null && prompt.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                  alignment: Alignment.centerLeft,
+                  child: SelectableText.rich(
+                    TerminalTextFormatter.buildStyledText(
+                      prompt,
+                      const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        height: 1.18,
+                      ),
+                    ),
+                  ),
+                ),
               // 输入行 — 统一 36px 高度
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
@@ -72,7 +91,10 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                           ),
                           decoration: InputDecoration(
                             isDense: false,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 9,
+                            ),
                             hintText: running ? '输入命令…' : 'Session 未运行',
                             hintStyle: const TextStyle(
                               color: AppTheme.textTertiary,
@@ -90,7 +112,11 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                                     onTap: () => _ctrl.clear(),
                                     child: const Padding(
                                       padding: EdgeInsets.all(8),
-                                      child: Icon(Icons.close, size: 14, color: AppTheme.textTertiary),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 14,
+                                        color: AppTheme.textTertiary,
+                                      ),
                                     ),
                                   )
                                 : null,
@@ -103,7 +129,9 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                     const SizedBox(width: 6),
                     // 发送按钮 — 36x36
                     GestureDetector(
-                      onTap: running && _ctrl.text.trim().isNotEmpty ? _send : null,
+                      onTap: running && _ctrl.text.trim().isNotEmpty
+                          ? _send
+                          : null,
                       child: Container(
                         width: 36,
                         height: 36,
@@ -130,13 +158,39 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
                 child: Row(
                   children: [
-                    _ToolBtn(Icons.dns_outlined, 'Sessions', () => Scaffold.of(context).openDrawer()),
-                    _ToolBtn(Icons.bolt, 'FlowMind', () => _openFlowMind(context)),
-                    _ToolBtn(Icons.flash_on, '快捷', () => _openActions(context, p)),
-                    _ToolBtn(Icons.folder_outlined, '文件', () => _comingSoon(context)),
-                    _ToolBtn(Icons.image_outlined, '图片', () => _comingSoon(context)),
+                    Builder(
+                      builder: (innerContext) => _ToolBtn(
+                        Icons.dns_outlined,
+                        'Sessions',
+                        () => Scaffold.maybeOf(innerContext)?.openDrawer(),
+                      ),
+                    ),
+                    _ToolBtn(
+                      Icons.bolt,
+                      'FlowMind',
+                      () => _openFlowMind(context),
+                    ),
+                    _ToolBtn(
+                      Icons.flash_on,
+                      '快捷',
+                      () => _openActions(context, p),
+                    ),
+                    _ToolBtn(
+                      Icons.folder_outlined,
+                      '文件',
+                      () => _comingSoon(context),
+                    ),
+                    _ToolBtn(
+                      Icons.image_outlined,
+                      '图片',
+                      () => _comingSoon(context),
+                    ),
                     const Spacer(),
-                    _ToolBtn(Icons.more_horiz, '更多', () => _openMore(context, p)),
+                    _ToolBtn(
+                      Icons.more_horiz,
+                      '更多',
+                      () => _openMore(context, p),
+                    ),
                   ],
                 ),
               ),
@@ -165,10 +219,18 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('快捷动作', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600)),
+            const Text(
+              '快捷动作',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 10),
             Wrap(
-              spacing: 6, runSpacing: 6,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 _quickBtn('Enter', Icons.keyboard_return, '\n', p),
                 _quickBtn('Ctrl+C', Icons.cancel, '\x03', p),
@@ -184,9 +246,19 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     );
   }
 
-  Widget _quickBtn(String label, IconData icon, String text, SessionProvider p) {
+  Widget _quickBtn(
+    String label,
+    IconData icon,
+    String text,
+    SessionProvider p,
+  ) {
     return GestureDetector(
-      onTap: text.isNotEmpty ? () { p.sendInput(text); Navigator.pop(context); } : null,
+      onTap: text.isNotEmpty
+          ? () {
+              p.sendInput(text);
+              Navigator.pop(context);
+            }
+          : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -199,7 +271,10 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           children: [
             Icon(icon, size: 14, color: AppTheme.brand),
             const SizedBox(width: 4),
-            Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12)),
+            Text(
+              label,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
+            ),
           ],
         ),
       ),
@@ -216,11 +291,25 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('更多', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600)),
+            const Text(
+              '更多',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 10),
-            _moreItem(Icons.cleaning_services, '清空视图', () { p.clearEvents(); Navigator.pop(ctx); }),
-            _moreItem(Icons.info_outline, '设备详情', () { Navigator.pop(ctx); }),
-            _moreItem(Icons.link_off, '断开连接', () { Navigator.pop(ctx); }),
+            _moreItem(Icons.cleaning_services, '清空视图', () {
+              p.clearEvents();
+              Navigator.pop(ctx);
+            }),
+            _moreItem(Icons.info_outline, '设备详情', () {
+              Navigator.pop(ctx);
+            }),
+            _moreItem(Icons.link_off, '断开连接', () {
+              Navigator.pop(ctx);
+            }),
           ],
         ),
       ),
@@ -236,7 +325,10 @@ class _BottomInputAreaState extends State<BottomInputArea> {
           children: [
             Icon(icon, size: 18, color: AppTheme.textSecondary),
             const SizedBox(width: 10),
-            Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            Text(
+              label,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+            ),
           ],
         ),
       ),
@@ -244,10 +336,12 @@ class _BottomInputAreaState extends State<BottomInputArea> {
   }
 
   void _comingSoon(BuildContext ctx) {
-    ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-      content: Text('即将推出', style: TextStyle(fontSize: 12)),
-      duration: Duration(seconds: 1),
-    ));
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      const SnackBar(
+        content: Text('即将推出', style: TextStyle(fontSize: 12)),
+        duration: Duration(seconds: 1),
+      ),
+    );
   }
 }
 
@@ -297,15 +391,19 @@ class _ToolBtn extends StatelessWidget {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(4),
-          ),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(4)),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon, size: 14, color: AppTheme.textSecondary),
               const SizedBox(width: 3),
-              Text(label, style: const TextStyle(color: AppTheme.textTertiary, fontSize: 10)),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.textTertiary,
+                  fontSize: 10,
+                ),
+              ),
             ],
           ),
         ),
@@ -324,10 +422,16 @@ class _FlowMindPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cmds = <List<String>>[
-      ['git status', 'Git'], ['git diff', 'Git'], ['git log --oneline -5', 'Git'],
-      ['cargo build', 'Rust'], ['cargo test', 'Rust'],
-      ['npm run build', 'Node'], ['npm test', 'Node'],
-      ['docker ps', 'Docker'], ['ls -la', 'Shell'], ['pwd', 'Shell'],
+      ['git status', 'Git'],
+      ['git diff', 'Git'],
+      ['git log --oneline -5', 'Git'],
+      ['cargo build', 'Rust'],
+      ['cargo test', 'Rust'],
+      ['npm run build', 'Node'],
+      ['npm test', 'Node'],
+      ['docker ps', 'Docker'],
+      ['ls -la', 'Shell'],
+      ['pwd', 'Shell'],
     ];
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -335,24 +439,46 @@ class _FlowMindPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('FlowMind · 命令模板',
-              style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600)),
+          const Text(
+            'FlowMind · 命令模板',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const SizedBox(height: 10),
-          Wrap(spacing: 6, runSpacing: 6,
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: cmds.map((c) {
               final cmd = c[0];
               return GestureDetector(
-              onTap: () { provider.sendInput('$cmd\n'); Navigator.pop(context); },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppTheme.bgTertiary, borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: AppTheme.borderColor),
+                onTap: () {
+                  provider.sendInput('$cmd\n');
+                  Navigator.pop(context);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgTertiary,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppTheme.borderColor),
+                  ),
+                  child: Text(
+                    cmd,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
                 ),
-                child: Text(cmd,
-                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12, fontFamily: 'monospace')),
-              ),
-            );}).toList(),
+              );
+            }).toList(),
           ),
         ],
       ),

@@ -167,6 +167,9 @@ func handleSignalMessage(c *Client, msg *Message) {
 		}
 		// Extract additional fields from payload map
 		if data, ok := msg.Payload.(map[string]interface{}); ok {
+			if label, ok := data["label"].(string); ok {
+				s.Label = label
+			}
 			if sk, ok := data["shell_kind"].(string); ok {
 				s.ShellKind = sk
 			}

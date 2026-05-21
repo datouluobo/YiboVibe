@@ -1,15 +1,24 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { BookOpen, ExternalLink, Heart, Code2, Shield, Zap } from "lucide-react";
 
 export default function FlowInfo() {
     const { t } = useTranslation();
     const [appVersion, setAppVersion] = useState("");
+    const [desktopBuildLabel, setDesktopBuildLabel] = useState("");
 
     useEffect(() => {
         import("@tauri-apps/api/app").then(({ getVersion }) => {
             getVersion().then(setAppVersion);
         });
+        invoke<{ debug_label: string }>("get_desktop_build_label")
+            .then((info) => {
+                setDesktopBuildLabel(info.debug_label);
+            })
+            .catch(() => {
+                setDesktopBuildLabel("");
+            });
     }, []);
 
     return (
@@ -57,7 +66,7 @@ export default function FlowInfo() {
                         color: 'var(--color-text-dim)',
                         fontSize: '12px', fontWeight: 600, letterSpacing: '0.5px'
                     }}>
-                        v{appVersion}
+                        v{appVersion}{desktopBuildLabel ? ` / ${desktopBuildLabel}` : ""}
                     </div>
                 )}
             </div>

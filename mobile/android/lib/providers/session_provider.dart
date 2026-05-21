@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/session.dart';
 import '../models/device.dart';
 import '../models/event_message.dart';
 import '../services/api_service.dart';
 import '../services/signal_client.dart';
+import '../utils/terminal_text_formatter.dart';
 import 'auth_provider.dart';
 
 /// Session + 连接状态管理 — 移动端主状态中枢
 /// 每 5 秒轮询 REST API 同步 session 列表（服务端不广播 session 变更）
 class SessionProvider extends ChangeNotifier {
+  static const _eventsStorageKey = 'yibovibe_mobile_events_v1';
   final ApiService _api = ApiService();
   final SignalClient _signal = SignalClient();
   final AuthProvider _auth;
@@ -24,6 +27,9 @@ class SessionProvider extends ChangeNotifier {
   String? _error;
   bool _isDialogMode = false;
   List<int> _onlineDeviceIds = [];
+  final Map<String, String> _ansiCarryBySession = {};
+  final Map<String, String> _pendingEchoBySession = {};
+  final Map<String, DateTime> _closingSessions = {};
 
   Timer? _pollTimer;
   String? _lastInitToken;
@@ -42,9 +48,14 @@ class SessionProvider extends ChangeNotifier {
   StreamSubscription<bool>? _connSub;
 
   SessionProvider(this._auth) {
+    unawaited(_restorePersistedEvents());
     _eventSub = _signal.events.listen(_onEvent);
     _connSub = _signal.connectionState.listen((connected) {
       _isConnected = connected;
+      if (connected) {
+        _signal.requestSessions();
+        unawaited(loadDevicesAndSessions());
+      }
       notifyListeners();
     });
   }
@@ -64,7 +75,6 @@ class SessionProvider extends ChangeNotifier {
       _devices = [];
       _sessions = [];
       _activeSession = null;
-      _events = [];
       _onlineDeviceIds = [];
       _error = null;
       _lastInitToken = authKey;
@@ -78,6 +88,7 @@ class SessionProvider extends ChangeNotifier {
     _signal.connect();
     _startPolling();
     loadDevicesAndSessions();
+    _signal.requestSessions();
     notifyListeners();
   }
 
@@ -96,6 +107,7 @@ class SessionProvider extends ChangeNotifier {
 
   Future<void> _pollSessions() async {
     try {
+      _purgeClosingSessions();
       final sessionData = await _api.getSessions();
       var newSessions = sessionData.map((s) => Session.fromJson(s)).toList();
 
@@ -117,6 +129,10 @@ class SessionProvider extends ChangeNotifier {
       }
 
       newSessions = _normalizeSessions(newSessions);
+      _reconcileClosingSessions(newSessions);
+      newSessions = newSessions
+          .where((session) => !_isSessionClosing(session.sessionId))
+          .toList();
 
       if (_listChanged(_sessions, newSessions)) {
         _sessions = newSessions;
@@ -251,10 +267,16 @@ class SessionProvider extends ChangeNotifier {
 
   /// 处理 Signal 事件
   void _onEvent(EventMessage event) {
-    if (event.type == EventType.sessionListUpdate) {
+    _purgeClosingSessions();
+    final normalizedEvent = _normalizeEventForDisplay(event);
+    if (normalizedEvent == null) {
+      return;
+    }
+
+    if (normalizedEvent.type == EventType.sessionListUpdate) {
       // session:list_update / session:update / session:register — 实时同步session变更
       try {
-        final decoded = jsonDecode(event.text);
+        final decoded = jsonDecode(normalizedEvent.text);
         if (decoded is List) {
           _sessions = _normalizeSessions(
             decoded
@@ -267,11 +289,15 @@ class SessionProvider extends ChangeNotifier {
           final sessionData = decoded['session'] as Map<String, dynamic>?;
 
           if (action == 'deleted') {
-            final sid = decoded['session_id'] as String? ?? event.sessionId;
+            final sid =
+                decoded['session_id'] as String? ?? normalizedEvent.sessionId;
+            _closingSessions.remove(sid);
             _sessions.removeWhere((s) => s.sessionId == sid);
           } else if (action == 'upserted' && sessionData != null) {
             final updated = Session.fromJson(sessionData);
-            if (_isDesktopOnline()) {
+            if (_isSessionClosing(updated.sessionId)) {
+              // ignore stale re-upserts while a close is still in flight
+            } else if (_isDesktopOnline()) {
               _upsertSession(updated);
             } else {
               _upsertSession(updated.copyWith(status: 'stale'));
@@ -280,13 +306,16 @@ class SessionProvider extends ChangeNotifier {
             final state = decoded['state'] as String?;
             final sid = decoded['session_id'] as String;
             if (state == 'deleted' || action == 'deleted') {
+              _closingSessions.remove(sid);
               _sessions.removeWhere((s) => s.sessionId == sid);
             } else {
               final updated = Session.fromJson({
                 'id': sid,
                 ...decoded,
               });
-              _upsertSession(updated);
+              if (!_isSessionClosing(updated.sessionId)) {
+                _upsertSession(updated);
+              }
             }
           }
         }
@@ -295,25 +324,34 @@ class SessionProvider extends ChangeNotifier {
       } catch (_) {
         // 解析失败忽略
       }
-    } else if (event.type == EventType.sessionState && event.state == 'session_list') {
+    } else if (normalizedEvent.type == EventType.sessionState &&
+        normalizedEvent.state == 'session_list') {
       // 批量更新 session 列表（来自 desktop WS 直推）
       try {
-        final list = jsonDecode(event.text) as List<dynamic>;
-        _sessions =
+        final list = jsonDecode(normalizedEvent.text) as List<dynamic>;
+        final nextSessions =
             list.map((s) => Session.fromJson(s as Map<String, dynamic>)).toList();
+        _reconcileClosingSessions(nextSessions);
+        _sessions = nextSessions
+            .where((session) => !_isSessionClosing(session.sessionId))
+            .toList();
         _syncActiveSession();
       } catch (_) {}
     } else {
-      _events.add(event);
+      _events.add(normalizedEvent);
       if (_events.length > 500) {
         _events = _events.sublist(_events.length - 300);
       }
+      unawaited(_persistEvents());
     }
     notifyListeners();
   }
 
   /// 更新或添加 session 到列表
   void _upsertSession(Session session) {
+    if (_isSessionClosing(session.sessionId)) {
+      return;
+    }
     final idx = _sessions.indexWhere((s) => s.sessionId == session.sessionId);
     if (idx >= 0) {
       final existing = _sessions[idx];
@@ -353,6 +391,18 @@ class SessionProvider extends ChangeNotifier {
     return device?.deviceName ?? '设备 $deviceId';
   }
 
+  String sessionDisplayTitle(Session session) {
+    final sameDeviceSessions = _sessions
+        .where((item) => item.ownerDevice == session.ownerDevice)
+        .toList();
+    final index = sameDeviceSessions.indexWhere((item) => item.sessionId == session.sessionId);
+    final ordinal = index >= 0 ? index + 1 : 0;
+    if (ordinal > 0) {
+      return '${session.shellKind} #$ordinal';
+    }
+    return session.shellKind.isNotEmpty ? session.shellKind : session.sessionId;
+  }
+
   /// 当前活跃 session
   void selectSession(Session session) {
     _activeSession = session;
@@ -368,9 +418,27 @@ class SessionProvider extends ChangeNotifier {
         .toList();
   }
 
+  String? get currentPrompt {
+    final events = activeSessionEvents;
+    for (final event in events.reversed) {
+      final prompt = TerminalTextFormatter.extractPrompt(event.text);
+      if (prompt != null && prompt.isNotEmpty) return prompt;
+    }
+    final session = _activeSession;
+    if (session == null || session.cwd.isEmpty) return null;
+    return TerminalTextFormatter.fallbackPrompt(
+      shellKind: session.shellKind,
+      cwd: session.cwd,
+    );
+  }
+
   /// 发送输入
   void sendInput(String text) {
     if (_activeSession == null) return;
+    final command = text.trim();
+    if (command.isNotEmpty) {
+      _pendingEchoBySession[_activeSession!.sessionId] = command;
+    }
     _signal.sendInput(_activeSession!.sessionId, text);
     _events.add(EventMessage(
       type: EventType.userInput,
@@ -379,7 +447,51 @@ class SessionProvider extends ChangeNotifier {
       ts: DateTime.now(),
       senderDevice: 'mobile',
     ));
+    unawaited(_persistEvents());
     notifyListeners();
+  }
+
+  EventMessage? _normalizeEventForDisplay(EventMessage event) {
+    if (event.isUserMessage) {
+      final command = event.text.trim();
+      if (command.isNotEmpty && event.sessionId.isNotEmpty) {
+        _pendingEchoBySession[event.sessionId] = command;
+      }
+      return event;
+    }
+
+    if (event.type != EventType.terminalOutput) {
+      return event;
+    }
+
+    final sessionId = event.sessionId;
+    final repaired = TerminalTextFormatter.repairChunk(
+      _ansiCarryBySession[sessionId] ?? '',
+      event.text,
+    );
+    _ansiCarryBySession[sessionId] = repaired.carry;
+
+    var text = repaired.text;
+    var matchedEcho = false;
+    final pendingEcho = _pendingEchoBySession[sessionId];
+    if (pendingEcho != null && pendingEcho.isNotEmpty) {
+      final stripped = TerminalTextFormatter.stripLeadingCommandEcho(
+        text,
+        pendingEcho,
+      );
+      text = stripped.text;
+      matchedEcho = stripped.matched;
+    }
+
+    if (matchedEcho) {
+      _pendingEchoBySession.remove(sessionId);
+    }
+
+    if (text.trim().isEmpty) {
+      return null;
+    }
+
+    return event.copyWith(text: text);
   }
 
   /// Session 控制
@@ -401,13 +513,15 @@ class SessionProvider extends ChangeNotifier {
       try {
         await _api.stopSession(session.sessionId);
       } catch (_) {
-        _signal.sendControl(session.sessionId, 'stop');
+        // REST 可能因为服务端 session 缓存未命中而失败，仍直接通知桌面端停止。
       }
+      _signal.sendControl(session.sessionId, 'stop');
     }
     _scheduleRefreshAfterControl();
   }
 
   Future<void> closeSession(Session session) async {
+    _markSessionClosing(session.sessionId);
     if (session.status == 'stale') {
       _signal.sendUnregister(session.sessionId);
       _sessions.removeWhere((s) => s.sessionId == session.sessionId);
@@ -417,10 +531,13 @@ class SessionProvider extends ChangeNotifier {
       _sessions.removeWhere((s) => s.sessionId == session.sessionId);
       _syncActiveSession();
       notifyListeners();
+      if (_isConnected) {
+        _signal.sendControl(session.sessionId, 'close');
+      }
       try {
         await _api.removeSession(session.sessionId);
       } catch (_) {
-        _signal.sendControl(session.sessionId, 'close');
+        // REST 失败时仍保留 WS 关闭路径，由 tombstone 防止短暂回弹。
       }
     }
     _scheduleRefreshAfterControl();
@@ -434,6 +551,13 @@ class SessionProvider extends ChangeNotifier {
   /// 创建新 session
   void createSession(String shellKind) {
     _signal.createSession(shellKind);
+    unawaited(Future<void>.delayed(
+      const Duration(milliseconds: 600),
+      () async {
+        _signal.requestSessions();
+        await _pollSessions();
+      },
+    ));
   }
 
   /// 切换视图模式
@@ -449,7 +573,63 @@ class SessionProvider extends ChangeNotifier {
 
   void clearEvents() {
     _events.clear();
+    unawaited(_persistEvents());
     notifyListeners();
+  }
+
+  Future<void> _restorePersistedEvents() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_eventsStorageKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      _events = decoded
+          .whereType<Map>()
+          .map((item) => EventMessage.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
+      notifyListeners();
+    } catch (_) {
+      // ignore persistence failures
+    }
+  }
+
+  Future<void> _persistEvents() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final eventsToStore = _events.length > 300
+          ? _events.sublist(_events.length - 300)
+          : _events;
+      final payload = jsonEncode(
+        eventsToStore.map((event) => event.toJson()).toList(),
+      );
+      await prefs.setString(_eventsStorageKey, payload);
+    } catch (_) {
+      // ignore persistence failures
+    }
+  }
+
+  void _markSessionClosing(String sessionId) {
+    if (sessionId.isEmpty) return;
+    _closingSessions[sessionId] = DateTime.now();
+  }
+
+  bool _isSessionClosing(String sessionId) {
+    final startedAt = _closingSessions[sessionId];
+    if (startedAt == null) return false;
+    return DateTime.now().difference(startedAt) <
+        const Duration(seconds: 8);
+  }
+
+  void _purgeClosingSessions() {
+    final now = DateTime.now();
+    _closingSessions.removeWhere(
+      (_, startedAt) => now.difference(startedAt) >= const Duration(seconds: 8),
+    );
+  }
+
+  void _reconcileClosingSessions(List<Session> sessions) {
+    final activeIds = sessions.map((session) => session.sessionId).toSet();
+    _closingSessions.removeWhere((sessionId, _) => !activeIds.contains(sessionId));
   }
 
   void _scheduleRefreshAfterControl() {

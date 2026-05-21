@@ -1,9 +1,12 @@
 use log::{info, warn};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
+use tokio::time::{self, Duration};
 
 mod agent_bridge;
 mod probe;
@@ -33,10 +36,13 @@ use yibovibe_core::ws::WsClient;
 
 const MAIN_WINDOW_DEFAULT_WIDTH: f64 = 1440.0;
 const MAIN_WINDOW_DEFAULT_HEIGHT: f64 = 900.0;
+const DESKTOP_DEBUG_LABEL: &str = "d-0522-r12";
+const SESSION_CLOSE_TOMBSTONE_SECS: u64 = 8;
 
 // We can store shared state here later, like the WsClient channel for sending new text.
 pub struct AppState {
     pub session_manager: terminal::SharedSessionManager,
+    pub closing_sessions: Mutex<HashMap<String, u64>>,
     pub is_connected: Mutex<bool>,
     pub ws_tx: Mutex<Option<tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>>>,
     pub runtime_server_url: Mutex<Option<String>>,
@@ -47,6 +53,32 @@ pub struct AppState {
     pub runtime_device_fingerprint: Mutex<Option<String>>,
     pub runtime_access_token: Mutex<Option<String>>,
     pub runtime_role: Mutex<Option<String>>,
+}
+
+fn session_close_deadline() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + SESSION_CLOSE_TOMBSTONE_SECS
+}
+
+async fn mark_session_closing(state: &tauri::State<'_, AppState>, session_id: &str) {
+    if session_id.is_empty() {
+        return;
+    }
+    let mut closing = state.closing_sessions.lock().await;
+    closing.insert(session_id.to_string(), session_close_deadline());
+}
+
+async fn is_session_closing(state: &tauri::State<'_, AppState>, session_id: &str) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut closing = state.closing_sessions.lock().await;
+    closing.retain(|_, deadline| *deadline > now);
+    closing.get(session_id).is_some()
 }
 
 #[derive(serde::Serialize)]
@@ -77,6 +109,13 @@ struct FlowSyncDiagnostics {
     activity_total_entries: Option<i64>,
     activity_sample_query_count: Option<usize>,
     activity_query_error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct DesktopBuildLabel {
+    app_version: String,
+    debug_label: String,
+    build_id: String,
 }
 
 const FLOWSYNC_STAGE_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -517,23 +556,40 @@ async fn connect_engine(
                         );
                         cb_monitor.start_receiving(clipboard_rx);
 
-                        let mut connected_flag = state.is_connected.lock().await;
-                        *connected_flag = true;
-                        let mut ws_tx = state.ws_tx.lock().await;
-                        *ws_tx = Some(ws_client.tx.clone());
-                        let mut runtime_server_url = state.runtime_server_url.lock().await;
-                        *runtime_server_url = Some(server_url.clone());
-                        let mut runtime_username = state.runtime_username.lock().await;
-                        *runtime_username = Some(username.clone());
-                        let mut runtime_device_name = state.runtime_device_name.lock().await;
-                        *runtime_device_name = Some(device_name.clone());
-                        let mut runtime_remote_device_id =
-                            state.runtime_remote_device_id.lock().await;
-                        *runtime_remote_device_id = Some(login_device_id);
-                        let mut runtime_access_token = state.runtime_access_token.lock().await;
-                        *runtime_access_token = Some(access_token.clone());
-                        let mut runtime_role = state.runtime_role.lock().await;
-                        *runtime_role = Some(login_role.clone());
+                        {
+                            let mut connected_flag = state.is_connected.lock().await;
+                            *connected_flag = true;
+                        }
+                        {
+                            let mut ws_tx = state.ws_tx.lock().await;
+                            *ws_tx = Some(ws_client.tx.clone());
+                        }
+                        {
+                            let mut runtime_server_url = state.runtime_server_url.lock().await;
+                            *runtime_server_url = Some(server_url.clone());
+                        }
+                        {
+                            let mut runtime_username = state.runtime_username.lock().await;
+                            *runtime_username = Some(username.clone());
+                        }
+                        {
+                            let mut runtime_device_name = state.runtime_device_name.lock().await;
+                            *runtime_device_name = Some(device_name.clone());
+                        }
+                        {
+                            let mut runtime_remote_device_id =
+                                state.runtime_remote_device_id.lock().await;
+                            *runtime_remote_device_id = Some(login_device_id);
+                        }
+                        {
+                            let mut runtime_access_token = state.runtime_access_token.lock().await;
+                            *runtime_access_token = Some(access_token.clone());
+                        }
+                        {
+                            let mut runtime_role = state.runtime_role.lock().await;
+                            *runtime_role = Some(login_role.clone());
+                        }
+                        sync_all_sessions_to_server_handle(&app).await;
                         return Ok(ConnectResult {
                             success: true,
                             role: login_role,
@@ -2125,6 +2181,15 @@ fn set_flowsync_receive_only_mode(enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn get_desktop_build_label() -> Result<DesktopBuildLabel, String> {
+    Ok(DesktopBuildLabel {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        debug_label: DESKTOP_DEBUG_LABEL.to_string(),
+        build_id: env!("YIBOVIBE_BUILD_ID").to_string(),
+    })
+}
+
+#[tauri::command]
 async fn get_flowsync_diagnostics(
     state: tauri::State<'_, AppState>,
 ) -> Result<FlowSyncDiagnostics, String> {
@@ -3286,7 +3351,7 @@ async fn start_terminal(
 ) -> Result<String, String> {
     let mut mgr = state.session_manager.lock().await;
     let sid = mgr.create_session(None, None).await;
-    mgr.start_session(&sid, &app).await?;
+    mgr.start_session(&sid, &app, None).await?;
     Ok(sid)
 }
 
@@ -3301,11 +3366,22 @@ fn build_session_sync_payload(
         "session_id": session_id,
     });
     if let Some(info) = session_info {
+        let cwd_name = Path::new(&info.cwd)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or("workspace");
+        let short_id = session_id
+            .rsplit_once('-')
+            .map(|(_, suffix)| suffix)
+            .unwrap_or(session_id);
+        let label = format!("{} · {} · {}", info.shell_kind, cwd_name, short_id);
         let status_str = match info.status {
             terminal::SessionStatus::Running => "running",
             terminal::SessionStatus::Exited(_) => "stopped",
             terminal::SessionStatus::Error(_) => "crashed",
         };
+        payload["label"] = serde_json::json!(label);
         payload["status"] = serde_json::json!(status_str);
         payload["state"] = serde_json::json!(status_str);
         payload["shell_kind"] = serde_json::json!(info.shell_kind);
@@ -3346,7 +3422,127 @@ async fn sync_session_to_server(
         r#type: msg_type.to_string(),
         payload: build_session_sync_payload(session_id, session_info, extra),
     };
-    let _ = tx.send(msg).await;
+    match tx.try_send(msg) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let _ = tx_clone.send(msg).await;
+            });
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_msg)) => {
+            warn!(
+                "[SignalSync] Failed to send {} for session {}: channel closed",
+                msg_type, session_id
+            );
+            *state.is_connected.lock().await = false;
+            *state.ws_tx.lock().await = None;
+        }
+    }
+}
+
+async fn sync_all_sessions_to_server_handle(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let ws_tx = state.ws_tx.lock().await.clone();
+    let Some(tx) = ws_tx else { return };
+
+    let sessions = {
+        let mgr = state.session_manager.lock().await;
+        mgr.list_sessions().await
+    };
+
+    for session in sessions {
+        let session_id = session.session_id.clone();
+        if is_session_closing(&state, &session_id).await {
+            continue;
+        }
+        let msg = yibovibe_core::ws::WsMessage {
+            sender_uid: 0,
+            sender_device_id: 0,
+            target_devices: vec![],
+            r#type: "session:update".to_string(),
+            payload: build_session_sync_payload(&session_id, Some(session), None),
+        };
+
+        if let Err(e) = tx.send(msg).await {
+            warn!("[SignalSync] Failed to keepalive sessions: {}", e);
+            *state.is_connected.lock().await = false;
+            *state.ws_tx.lock().await = None;
+            break;
+        }
+    }
+}
+
+async fn reconnect_session_signal_channel(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.ws_tx.lock().await.is_some() {
+        return Ok(());
+    }
+
+    let server_url = state
+        .runtime_server_url
+        .lock()
+        .await
+        .clone()
+        .ok_or("missing runtime server url".to_string())?;
+    let access_token = state
+        .runtime_access_token
+        .lock()
+        .await
+        .clone()
+        .ok_or("missing runtime access token".to_string())?;
+
+    let (ws_client, ws_rx) = WsClient::connect(&server_url, &access_token)
+        .await
+        .map_err(|e| format!("websocket reconnect failed: {e}"))?;
+
+    let (clipboard_tx, _clipboard_rx) = tokio::sync::mpsc::channel(8);
+    spawn_ws_broker(
+        ws_rx,
+        clipboard_tx,
+        ws_client.tx.clone(),
+        state.session_manager.clone(),
+        app.clone(),
+    );
+
+    *state.is_connected.lock().await = true;
+    *state.ws_tx.lock().await = Some(ws_client.tx.clone());
+
+    info!("[SignalSync] Reconnected session signal channel.");
+    sync_all_sessions_to_server_handle(app).await;
+    Ok(())
+}
+
+fn spawn_session_sync_guard(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = time::interval(Duration::from_secs(30));
+        loop {
+            ticker.tick().await;
+
+            let has_runtime_auth = {
+                let state = app_handle.state::<AppState>();
+                let server_ready = state.runtime_server_url.lock().await.is_some();
+                let token_ready = state.runtime_access_token.lock().await.is_some();
+                server_ready && token_ready
+            };
+
+            if !has_runtime_auth {
+                continue;
+            }
+
+            let is_connected = {
+                let state = app_handle.state::<AppState>();
+                let connected = *state.is_connected.lock().await;
+                connected
+            };
+
+            if is_connected {
+                sync_all_sessions_to_server_handle(&app_handle).await;
+            } else if let Err(e) = reconnect_session_signal_channel(&app_handle).await {
+                warn!("[SignalSync] Reconnect skipped/failed: {}", e);
+            }
+        }
+    });
 }
 
 /// Spawn a broker task that splits the WS receive stream:
@@ -3395,7 +3591,7 @@ fn spawn_ws_broker(
                                 .await;
                         }
                         if let Err(e) = mgr
-                            .start_session_with_ws(session_id, &app, sync_tx.clone())
+                            .start_session_with_ws(session_id, &app, sync_tx.clone(), None)
                             .await
                         {
                             warn!(
@@ -3420,6 +3616,31 @@ fn spawn_ws_broker(
                                 .await;
                         }
                     }
+                }
+                "session:list" => {
+                    let sessions = {
+                        let mgr = sm.lock().await;
+                        mgr.list_sessions().await
+                    };
+
+                    let payload = serde_json::json!({
+                        "type": "session_list",
+                        "sessions": sessions,
+                    });
+
+                    let _ = sync_tx
+                        .send(yibovibe_core::ws::WsMessage {
+                            sender_uid: 0,
+                            sender_device_id: 0,
+                            target_devices: if msg.sender_device_id > 0 {
+                                vec![msg.sender_device_id]
+                            } else {
+                                vec![]
+                            },
+                            r#type: "session_list".to_string(),
+                            payload,
+                        })
+                        .await;
                 }
                 "session:stop" | "session:pause" => {
                     let session_id = msg.payload["session_id"].as_str().unwrap_or("");
@@ -3475,8 +3696,9 @@ fn spawn_ws_broker(
                 "session:remove" => {
                     let session_id = msg.payload["session_id"].as_str().unwrap_or("");
                     if !session_id.is_empty() {
+                        let state = app.state::<AppState>();
+                        mark_session_closing(&state, session_id).await;
                         let mut mgr = sm.lock().await;
-                        let _ = mgr.kill_session(session_id).await;
                         if let Err(e) = mgr.remove_session(session_id).await {
                             warn!(
                                 "[WS Broker] Remote remove session {} failed: {}",
@@ -3503,6 +3725,7 @@ fn spawn_ws_broker(
                     let text = msg.payload["text"].as_str().unwrap_or("");
                     if !session_id.is_empty() && !text.is_empty() {
                         let mut mgr = sm.lock().await;
+                        let _ = mgr.prepare_remote_input(session_id).await;
                         if let Err(e) = mgr.write_session(session_id, text).await {
                             warn!("[WS Broker] Remote stdin to {} failed: {}", session_id, e);
                         }
@@ -3520,6 +3743,9 @@ fn spawn_ws_broker(
                 _ => {}
             }
         }
+        let state = app.state::<AppState>();
+        *state.is_connected.lock().await = false;
+        *state.ws_tx.lock().await = None;
         info!("[WS Broker] WS receive stream ended, broker shutting down");
     });
 }
@@ -3530,8 +3756,37 @@ async fn write_terminal(
     session_id: String,
     text: String,
 ) -> Result<(), String> {
-    let mut mgr = state.session_manager.lock().await;
-    mgr.write_session(&session_id, &text).await
+    let commands = {
+        let mgr = state.session_manager.lock().await;
+        mgr.record_session_input_for_sync(&session_id, &text)
+            .await?
+    };
+
+    {
+        let mut mgr = state.session_manager.lock().await;
+        mgr.write_session(&session_id, &text).await?;
+    }
+
+    if !commands.is_empty() {
+        if let Some(tx) = state.ws_tx.lock().await.clone() {
+            for command in commands {
+                let _ = tx
+                    .send(yibovibe_core::ws::WsMessage {
+                        sender_uid: 0,
+                        sender_device_id: 0,
+                        target_devices: vec![],
+                        r#type: "user_input".to_string(),
+                        payload: serde_json::json!({
+                            "session_id": session_id.clone(),
+                            "text": command,
+                        }),
+                    })
+                    .await;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -3567,13 +3822,20 @@ async fn start_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     session_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<(), String> {
     let mut mgr = state.session_manager.lock().await;
+    let initial_size = match (cols, rows) {
+        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => Some((cols, rows)),
+        _ => None,
+    };
     // If WS is connected, use the WS-aware variant so output is forwarded to server
     if let Some(ws_tx) = state.ws_tx.lock().await.clone() {
-        mgr.start_session_with_ws(&session_id, &app, ws_tx).await?;
+        mgr.start_session_with_ws(&session_id, &app, ws_tx, initial_size)
+            .await?;
     } else {
-        mgr.start_session(&session_id, &app).await?;
+        mgr.start_session(&session_id, &app, initial_size).await?;
     }
     drop(mgr);
     sync_session_to_server(&state, "session:update", &session_id, None).await;
@@ -3589,10 +3851,22 @@ async fn list_sessions(
 }
 
 #[tauri::command]
+async fn get_session_buffer(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let mgr = state.session_manager.lock().await;
+    mgr.get_session_buffer(&session_id)
+        .await
+        .ok_or_else(|| format!("Session not found: {session_id}"))
+}
+
+#[tauri::command]
 async fn remove_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    mark_session_closing(&state, &session_id).await;
     let mut mgr = state.session_manager.lock().await;
     mgr.remove_session(&session_id).await?;
     drop(mgr);
@@ -3767,6 +4041,7 @@ pub fn run() {
                     .map(|cfg| cfg.terminal_default_shell.clone())
                     .unwrap_or_else(|_| "cmd".to_string()),
             ),
+            closing_sessions: Mutex::new(HashMap::new()),
             is_connected: Mutex::new(false),
             ws_tx: Mutex::new(None),
             runtime_server_url: Mutex::new(None),
@@ -3809,6 +4084,7 @@ pub fn run() {
             // Start AgentHost in background via tokio
             let app_handle = app.handle().clone();
             agent_bridge::spawn_event_forwarder(app_handle, host_event_rx);
+            spawn_session_sync_guard(app.handle().clone());
             let host = host_ctrl_for_setup.clone();
             tauri::async_runtime::spawn(async move {
                 let ctrl = host.lock().await;
@@ -4054,12 +4330,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_terminal_prefs,
             set_terminal_prefs,
+            get_desktop_build_label,
             start_terminal,
             write_terminal,
             kill_terminal,
             create_session,
             start_session,
             list_sessions,
+            get_session_buffer,
             remove_session,
             resize_session,
             get_console_admin_status,

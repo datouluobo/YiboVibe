@@ -73,6 +73,59 @@ class EventMessage {
     );
   }
 
+  Map<String, dynamic> toJson() {
+    return {
+      'type': _typeToWire(type),
+      'session_id': sessionId,
+      'text': text,
+      'ts': ts.toIso8601String(),
+      'sender_device': senderDevice,
+      'stream': stream?.name,
+      'chunk_id': chunkId,
+      'state': state,
+      'exit_code': exitCode,
+      'prompt_kind': promptKind,
+      'suggested_actions': suggestedActions,
+      'resource_type': resourceType,
+      'action': action,
+      'result': result,
+    };
+  }
+
+  EventMessage copyWith({
+    EventType? type,
+    String? sessionId,
+    String? text,
+    DateTime? ts,
+    String? senderDevice,
+    OutputStream? stream,
+    String? chunkId,
+    String? state,
+    int? exitCode,
+    String? promptKind,
+    List<String>? suggestedActions,
+    String? resourceType,
+    String? action,
+    String? result,
+  }) {
+    return EventMessage(
+      type: type ?? this.type,
+      sessionId: sessionId ?? this.sessionId,
+      text: text ?? this.text,
+      ts: ts ?? this.ts,
+      senderDevice: senderDevice ?? this.senderDevice,
+      stream: stream ?? this.stream,
+      chunkId: chunkId ?? this.chunkId,
+      state: state ?? this.state,
+      exitCode: exitCode ?? this.exitCode,
+      promptKind: promptKind ?? this.promptKind,
+      suggestedActions: suggestedActions ?? this.suggestedActions,
+      resourceType: resourceType ?? this.resourceType,
+      action: action ?? this.action,
+      result: result ?? this.result,
+    );
+  }
+
   static EventType _parseType(String type) {
     switch (type) {
       case 'user_input':
@@ -91,6 +144,27 @@ class EventMessage {
         return EventType.systemNotice;
       default:
         return EventType.terminalOutput; // fallback
+    }
+  }
+
+  static String _typeToWire(EventType type) {
+    switch (type) {
+      case EventType.userInput:
+        return 'user_input';
+      case EventType.terminalOutput:
+        return 'terminal_output';
+      case EventType.sessionState:
+        return 'session_state';
+      case EventType.sessionListUpdate:
+        return 'session_list_update';
+      case EventType.promptRequest:
+        return 'prompt_request';
+      case EventType.resourceEvent:
+        return 'resource_event';
+      case EventType.controlEvent:
+        return 'control_event';
+      case EventType.systemNotice:
+        return 'system_notice';
     }
   }
 

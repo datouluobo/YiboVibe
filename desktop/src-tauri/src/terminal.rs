@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 pub type SessionId = String;
+const MAX_BUFFER_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SessionStatus {
@@ -107,7 +108,8 @@ fn debug_preview(text: &str) -> String {
     preview.replace('\r', "\\r").replace('\n', "\\n")
 }
 
-fn normalize_terminal_input(text: &str) -> String {
+fn normalize_terminal_input(shell_kind: &str, text: &str) -> String {
+    let _ = shell_kind;
     text.replace("\r\n", "\r").replace('\n', "\r")
 }
 
@@ -215,8 +217,84 @@ struct PtySession {
     is_running: Arc<AtomicBool>,
     started_at: u64,
     last_output_at: Arc<AtomicU64>,
+    output_buffer: Arc<StdMutex<String>>,
     exit_code: Arc<StdMutex<Option<i32>>>,
     error_message: Arc<StdMutex<Option<String>>>,
+    input_sync_state: Arc<StdMutex<InputSyncState>>,
+}
+
+#[derive(Default)]
+struct InputSyncState {
+    line_buffer: String,
+    suppress_echo: String,
+    escape_sequence: String,
+}
+
+fn filter_sync_output(sync_state: &Arc<StdMutex<InputSyncState>>, text: &str) -> Option<String> {
+    let Ok(mut state) = sync_state.lock() else {
+        return Some(text.to_string());
+    };
+
+    // While the local desktop user is still editing the current command line,
+    // suppress all PTY echo/redraw traffic for mobile mirrors.
+    if !state.line_buffer.is_empty() {
+        return None;
+    }
+
+    if state.suppress_echo.is_empty() {
+        return Some(text.to_string());
+    }
+
+    let pending_chars = state.suppress_echo.chars().collect::<Vec<_>>();
+    let output_chars = text.chars().collect::<Vec<_>>();
+    let mut pending_index = 0usize;
+    let mut output_index = 0usize;
+
+    // Skip shell control bytes that may precede the echoed command itself.
+    while output_index < output_chars.len() && pending_index < pending_chars.len() {
+        let ch = output_chars[output_index];
+        if ch == pending_chars[pending_index] {
+            pending_index += 1;
+            output_index += 1;
+            continue;
+        }
+
+        if ch == '\u{1b}' {
+            output_index += 1;
+            if output_index < output_chars.len() && output_chars[output_index] == '[' {
+                output_index += 1;
+                while output_index < output_chars.len() {
+                    let esc_ch = output_chars[output_index];
+                    output_index += 1;
+                    if ('@'..='~').contains(&esc_ch) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            continue;
+        }
+
+        if ch == '\r' || ch == '\n' || ch.is_control() {
+            output_index += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    if pending_index == 0 {
+        return Some(text.to_string());
+    }
+
+    state.suppress_echo = pending_chars[pending_index..].iter().collect();
+
+    let kept: String = output_chars[output_index..].iter().collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept)
+    }
 }
 
 impl PtySession {
@@ -237,8 +315,10 @@ impl PtySession {
             is_running: Arc::new(AtomicBool::new(false)),
             started_at: 0,
             last_output_at: Arc::new(AtomicU64::new(0)),
+            output_buffer: Arc::new(StdMutex::new(String::new())),
             exit_code: Arc::new(StdMutex::new(None)),
             error_message: Arc::new(StdMutex::new(None)),
+            input_sync_state: Arc::new(StdMutex::new(InputSyncState::default())),
         }
     }
 
@@ -280,8 +360,60 @@ impl PtySession {
         let _ = self.wait_thread.take();
     }
 
+    fn output_snapshot(&self) -> String {
+        self.output_buffer
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default()
+    }
+
+    fn record_input_for_sync(&self, text: &str) -> Vec<String> {
+        let mut commands = Vec::new();
+        let Ok(mut state) = self.input_sync_state.lock() else {
+            return commands;
+        };
+
+        state.suppress_echo.push_str(text);
+
+        for ch in text.chars() {
+            if !state.escape_sequence.is_empty() {
+                state.escape_sequence.push(ch);
+                let len = state.escape_sequence.chars().count();
+                let is_escape_complete = match len {
+                    2 => ch != '[' && ch != 'O',
+                    _ => ('@'..='~').contains(&ch),
+                };
+                if is_escape_complete {
+                    state.escape_sequence.clear();
+                }
+                continue;
+            }
+
+            match ch {
+                '\u{1b}' => {
+                    state.escape_sequence.push(ch);
+                }
+                '\u{8}' | '\u{7f}' => {
+                    state.line_buffer.pop();
+                }
+                '\r' | '\n' => {
+                    let command = state.line_buffer.trim().to_string();
+                    if !command.is_empty() {
+                        commands.push(command);
+                    }
+                    state.line_buffer.clear();
+                }
+                _ if ch.is_control() => {}
+                _ => state.line_buffer.push(ch),
+            }
+        }
+
+        commands
+    }
+
     fn start_with_callbacks<FStdout, FExit>(
         &mut self,
+        initial_size: Option<(u16, u16)>,
         on_stdout: FStdout,
         on_exit: FExit,
     ) -> Result<(), String>
@@ -296,6 +428,9 @@ impl PtySession {
         self.cleanup_runtime_resources();
         self.started_at = now_secs();
         self.last_output_at.store(self.started_at, Ordering::SeqCst);
+        if let Ok(mut buffer) = self.output_buffer.lock() {
+            buffer.clear();
+        }
         if let Ok(mut g) = self.exit_code.lock() {
             *g = None;
         }
@@ -304,10 +439,11 @@ impl PtySession {
         }
 
         let pty_system = native_pty_system();
+        let (cols, rows) = initial_size.unwrap_or((120, 32));
         let pair = pty_system
             .openpty(PtySize {
-                rows: 32,
-                cols: 120,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -345,7 +481,17 @@ impl PtySession {
         self.writer = Some(writer);
         self.is_running.store(true, Ordering::SeqCst);
 
-        let stdout_cb: Arc<dyn Fn(String) + Send + Sync> = Arc::new(on_stdout);
+        let buffer_store = self.output_buffer.clone();
+        let stdout_cb: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
+            if let Ok(mut buffer) = buffer_store.lock() {
+                buffer.push_str(&text);
+                if buffer.len() > MAX_BUFFER_BYTES {
+                    let overflow = buffer.len().saturating_sub(MAX_BUFFER_BYTES);
+                    buffer.drain(..overflow);
+                }
+            }
+            on_stdout(text);
+        });
         let output_thread = spawn_output_reader(
             self.shell_kind.clone(),
             reader,
@@ -387,6 +533,7 @@ impl PtySession {
         let exit_sid = self.session_id.clone();
         let exit_app = app_handle.clone();
         self.start_with_callbacks(
+            None,
             move |text| {
                 let _ = stdout_app.emit(&format!("term:stdout:{stdout_sid}"), &text);
             },
@@ -398,7 +545,7 @@ impl PtySession {
 
     fn write_input(&self, text: &str) -> Result<(), String> {
         let writer = self.writer.as_ref().ok_or("Session not started")?;
-        let normalized = normalize_terminal_input(text);
+        let normalized = normalize_terminal_input(&self.shell_kind, text);
         if self.shell_kind == "wsl" {
             eprintln!(
                 "[VibeConsole][WSL][stdin] session={} preview={}",
@@ -412,7 +559,9 @@ impl PtySession {
         writer
             .write_all(normalized.as_bytes())
             .map_err(|e| format!("pty write error: {e}"))?;
-        writer.flush().map_err(|e| format!("pty flush error: {e}"))?;
+        writer
+            .flush()
+            .map_err(|e| format!("pty flush error: {e}"))?;
         self.last_output_at.store(now_secs(), Ordering::SeqCst);
         Ok(())
     }
@@ -434,6 +583,14 @@ impl PtySession {
 
     fn kill(&mut self) {
         self.cleanup_runtime_resources();
+    }
+
+    fn clear_sync_input_state(&self) {
+        if let Ok(mut state) = self.input_sync_state.lock() {
+            state.line_buffer.clear();
+            state.suppress_echo.clear();
+            state.escape_sequence.clear();
+        }
     }
 }
 
@@ -487,6 +644,7 @@ impl SessionManager {
         &mut self,
         session_id: &str,
         app_handle: &AppHandle,
+        initial_size: Option<(u16, u16)>,
     ) -> Result<(), String> {
         let session = self
             .sessions
@@ -495,7 +653,19 @@ impl SessionManager {
         if session.is_running() {
             return Ok(());
         }
-        session.start(app_handle)?;
+        let stdout_sid = session.session_id.clone();
+        let stdout_app = app_handle.clone();
+        let exit_sid = session.session_id.clone();
+        let exit_app = app_handle.clone();
+        session.start_with_callbacks(
+            initial_size,
+            move |text| {
+                let _ = stdout_app.emit(&format!("term:stdout:{stdout_sid}"), &text);
+            },
+            move |code| {
+                let _ = exit_app.emit(&format!("term:exit:{exit_sid}"), code);
+            },
+        )?;
         if let Some(init) = shell_init_input(&session.shell_kind) {
             let _ = session.write_input(init);
         }
@@ -507,6 +677,7 @@ impl SessionManager {
         session_id: &str,
         app_handle: &AppHandle,
         ws_tx: tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>,
+        initial_size: Option<(u16, u16)>,
     ) -> Result<(), String> {
         let session = self
             .sessions
@@ -520,9 +691,15 @@ impl SessionManager {
         let exit_sid = session.session_id.clone();
         let exit_app = app_handle.clone();
         let ws_tx_out = ws_tx.clone();
+        let sync_filter = session.input_sync_state.clone();
         session.start_with_callbacks(
+            initial_size,
             move |text| {
                 let _ = stdout_app.emit(&format!("term:stdout:{stdout_sid}"), &text);
+                let filtered = filter_sync_output(&sync_filter, &text);
+                let Some(text) = filtered else {
+                    return;
+                };
                 let ws_msg = yibovibe_core::ws::WsMessage {
                     sender_uid: 0,
                     sender_device_id: 0,
@@ -567,6 +744,27 @@ impl SessionManager {
         session.write_input(text)
     }
 
+    pub async fn prepare_remote_input(&self, session_id: &str) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        session.clear_sync_input_state();
+        Ok(())
+    }
+
+    pub async fn record_session_input_for_sync(
+        &self,
+        session_id: &str,
+        text: &str,
+    ) -> Result<Vec<String>, String> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        Ok(session.record_input_for_sync(text))
+    }
+
     pub async fn resize_session(
         &mut self,
         session_id: &str,
@@ -581,21 +779,18 @@ impl SessionManager {
     }
 
     pub async fn kill_session(&mut self, session_id: &str) -> Result<(), String> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| format!("Session not found: {session_id}"))?;
-        session.kill();
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.kill();
+        }
         Ok(())
     }
 
     pub async fn remove_session(&mut self, session_id: &str) -> Result<(), String> {
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            session.kill();
+        if let Some(mut session) = self.sessions.remove(session_id) {
+            thread::spawn(move || {
+                session.kill();
+            });
         }
-        self.sessions
-            .remove(session_id)
-            .ok_or_else(|| format!("Session not found: {session_id}"))?;
         Ok(())
     }
 
@@ -605,6 +800,10 @@ impl SessionManager {
 
     pub async fn get_session_info(&self, session_id: &str) -> Option<SessionInfo> {
         self.sessions.get(session_id).map(|s| s.info())
+    }
+
+    pub async fn get_session_buffer(&self, session_id: &str) -> Option<String> {
+        self.sessions.get(session_id).map(|s| s.output_snapshot())
     }
 
     pub async fn session_exists(&self, session_id: &str) -> bool {
@@ -623,6 +822,29 @@ mod tests {
     use super::*;
     use std::sync::mpsc::{self, Receiver};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn normalize_cmd_input_uses_cr() {
+        assert_eq!(normalize_terminal_input("cmd", "echo hi\n"), "echo hi\r");
+        assert_eq!(normalize_terminal_input("cmd", "echo hi\r"), "echo hi\r");
+        assert_eq!(
+            normalize_terminal_input("cmd", "echo hi\r\ndir\n"),
+            "echo hi\rdir\r"
+        );
+    }
+
+    #[test]
+    fn normalize_shell_input_uses_cr() {
+        assert_eq!(
+            normalize_terminal_input("pwsh", "Write-Output hi\n"),
+            "Write-Output hi\r"
+        );
+        assert_eq!(
+            normalize_terminal_input("wsl", "printf hi\n"),
+            "printf hi\r"
+        );
+        assert_eq!(normalize_terminal_input("cmd", "echo hi\r\n"), "echo hi\r");
+    }
 
     fn wait_for_contains(
         rx: &Receiver<String>,
@@ -660,6 +882,7 @@ mod tests {
 
         session
             .start_with_callbacks(
+                None,
                 move |text| {
                     let _ = stdout_tx.send(text);
                 },

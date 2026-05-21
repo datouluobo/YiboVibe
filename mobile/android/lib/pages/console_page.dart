@@ -19,6 +19,8 @@ class ConsolePage extends StatefulWidget {
 }
 
 class _ConsolePageState extends State<ConsolePage> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   @override
   void initState() {
     super.initState();
@@ -38,7 +40,10 @@ class _ConsolePageState extends State<ConsolePage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary)),
+        content: Text(
+          msg,
+          style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+        ),
         backgroundColor: AppTheme.statusRed.withAlpha(200),
         duration: const Duration(seconds: 6),
         action: SnackBarAction(
@@ -64,14 +69,18 @@ class _ConsolePageState extends State<ConsolePage> {
             : AppTheme.statusGray;
 
         return Scaffold(
+          key: _scaffoldKey,
           backgroundColor: AppTheme.bgPrimary,
           drawer: _SessionDrawer(provider: provider),
-          appBar: PreferredSize(
-            preferredSize: const Size.fromHeight(40),
-            child: _buildSessionBar(context, provider, session, connected, statusColor),
-          ),
           body: Column(
             children: [
+              _buildSessionBar(
+                context,
+                provider,
+                session,
+                connected,
+                statusColor,
+              ),
               // 主视图区 — 最大化
               Expanded(
                 child: provider.isDialogMode
@@ -96,157 +105,238 @@ class _ConsolePageState extends State<ConsolePage> {
     Color statusColor,
   ) {
     return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
       decoration: BoxDecoration(
         color: AppTheme.bgSecondary,
         border: Border(bottom: BorderSide(color: AppTheme.borderColor)),
       ),
-      child: Row(
-        children: [
-          // 左侧: 菜单按钮 (打开 drawer)
-          GestureDetector(
-            onTap: () => Scaffold.of(context).openDrawer(),
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.dns_outlined, size: 18, color: AppTheme.textSecondary),
-            ),
-          ),
-          const SizedBox(width: 6),
-          // 连接状态 + 错误提示
-          GestureDetector(
-            onTap: () {
-              if (!connected) {
-                provider.loadDevicesAndSessions();
-                provider.initWithAuth();
-              }
-            },
-            child: Tooltip(
-              message: connected
-                  ? '已连接'
-                  : (provider.error ?? '未连接，点击重试'),
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: connected ? AppTheme.statusGreen : AppTheme.statusRed,
-                  shape: BoxShape.circle,
-                ),
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              height: 34,
+              child: Row(
+                children: [
+                  Builder(
+                    builder: (innerContext) => GestureDetector(
+                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.dns_outlined,
+                          size: 18,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () {
+                      if (!connected) {
+                        provider.loadDevicesAndSessions();
+                        provider.initWithAuth();
+                      }
+                    },
+                    child: Tooltip(
+                      message: connected
+                          ? '已连接'
+                          : (provider.error ?? '未连接，点击重试'),
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: connected
+                              ? AppTheme.statusGreen
+                              : AppTheme.statusRed,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => provider.loadDevicesAndSessions(),
+                      child: Text(
+                        session != null
+                            ? '${provider.sessionDisplayTitle(session)}  ·  ${_statusLabel(session.status)}'
+                            : '无活跃 Session',
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgTertiary,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppTheme.borderColor),
+                    ),
+                    child: Text(
+                      mobileAppVersion,
+                      style: const TextStyle(
+                        color: AppTheme.textTertiary,
+                        fontSize: 10,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => _showNewSessionDialog(context, provider),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.add,
+                        size: 18,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => _logout(context),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.logout,
+                        size: 16,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          // Session 名 / 状态
-          Expanded(
-            child: GestureDetector(
-              onTap: () => provider.loadDevicesAndSessions(),
-              child: Text(
-                session != null
-                    ? '${session.title}  ·  ${_statusLabel(session.status)}'
-                    : '无活跃 Session',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-                overflow: TextOverflow.ellipsis,
+            if (provider.sessions.length > 1)
+              SizedBox(
+                height: 26,
+                child: _buildSessionChips(provider, session),
               ),
-            ),
-          ),
-          // 活跃 Session 标签 (可点击切换)
-          if (provider.sessions.length > 1)
-            ..._buildSessionChips(provider, session),
-          Container(
-            margin: const EdgeInsets.only(right: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppTheme.bgTertiary,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: AppTheme.borderColor),
-            ),
-            child: Text(
-              mobileAppVersion,
-              style: const TextStyle(
-                color: AppTheme.textTertiary,
-                fontSize: 10,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ),
-          // 右侧操作
-          GestureDetector(
-            onTap: () => _showNewSessionDialog(context, provider),
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.add, size: 18, color: AppTheme.textSecondary),
-            ),
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () => _logout(context),
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.logout, size: 16, color: AppTheme.textTertiary),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  /// 内联 Session 快切按钮 (最多2个, 其余在drawer)
-  List<Widget> _buildSessionChips(SessionProvider provider, Session? active) {
-    final chips = provider.sessions.take(2).map((s) {
+  /// 顶部横向 Session 快切栏
+  Widget _buildSessionChips(SessionProvider provider, Session? active) {
+    final chips = provider.sessions.map((s) {
       final isActive = s.sessionId == active?.sessionId;
       final sc = AppTheme.sessionStatusColor(s.status);
+      final displayTitle = provider.sessionDisplayTitle(s);
       return Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: GestureDetector(
-          onTap: () => provider.selectSession(s),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: isActive ? AppTheme.brand.withAlpha(15) : Colors.transparent,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: isActive
-                    ? AppTheme.brand.withAlpha(60)
-                    : Colors.transparent,
-              ),
+        padding: const EdgeInsets.only(right: 6),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
+            color: isActive
+                ? AppTheme.brand.withAlpha(18)
+                : AppTheme.bgPrimary,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: isActive
+                  ? AppTheme.brand.withAlpha(70)
+                  : AppTheme.borderColor,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6, height: 6,
-                  decoration: BoxDecoration(color: sc, shape: BoxShape.circle),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => provider.selectSession(s),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(color: sc, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      displayTitle,
+                      style: TextStyle(
+                        color: isActive
+                            ? AppTheme.brandDark
+                            : AppTheme.textSecondary,
+                        fontSize: 11,
+                        fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        splashRadius: 12,
+                        onPressed: () => provider.closeSession(s),
+                        icon: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? AppTheme.brand.withAlpha(18)
+                                : AppTheme.bgTertiary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.close,
+                            size: 10,
+                            color: isActive
+                                ? AppTheme.brandDark
+                                : AppTheme.textTertiary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  s.title.length > 6 ? '${s.title.substring(0, 6)}…' : s.title,
-                  style: TextStyle(
-                    color: isActive ? AppTheme.brand : AppTheme.textTertiary,
-                    fontSize: 11,
-                    fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       );
     }).toList();
-    return chips;
+
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.zero,
+      children: chips,
+    );
   }
 
   String _statusLabel(String status) {
     switch (status) {
-      case 'running': return '运行中';
-      case 'paused': return '已暂停';
-      case 'waiting_input': return '等待输入';
-      case 'stale': return '已离线';
-      case 'stopped': return '已停止';
-      case 'crashed': return '崩溃';
-      default: return status;
+      case 'running':
+        return '运行中';
+      case 'paused':
+        return '已暂停';
+      case 'waiting_input':
+        return '等待输入';
+      case 'stale':
+        return '已离线';
+      case 'stopped':
+        return '已停止';
+      case 'crashed':
+        return '崩溃';
+      default:
+        return status;
     }
   }
 
@@ -255,19 +345,27 @@ class _ConsolePageState extends State<ConsolePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.bgPrimary,
-        title: const Text('新建 Session',
-            style: TextStyle(color: AppTheme.textPrimary, fontSize: 15)),
+        title: const Text(
+          '新建 Session',
+          style: TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            shellOption(Icons.terminal, 'PowerShell (pwsh)',
-                () { provider.createSession('pwsh'); Navigator.pop(ctx); }),
+            shellOption(Icons.terminal, 'PowerShell (pwsh)', () {
+              provider.createSession('pwsh');
+              Navigator.pop(ctx);
+            }),
             const SizedBox(height: 6),
-            shellOption(Icons.terminal, 'CMD',
-                () { provider.createSession('cmd'); Navigator.pop(ctx); }),
+            shellOption(Icons.terminal, 'CMD', () {
+              provider.createSession('cmd');
+              Navigator.pop(ctx);
+            }),
             const SizedBox(height: 6),
-            shellOption(Icons.code, 'WSL (Bash)',
-                () { provider.createSession('wsl'); Navigator.pop(ctx); }),
+            shellOption(Icons.code, 'WSL (Bash)', () {
+              provider.createSession('wsl');
+              Navigator.pop(ctx);
+            }),
           ],
         ),
       ),
@@ -276,7 +374,9 @@ class _ConsolePageState extends State<ConsolePage> {
 
   void _logout(BuildContext context) async {
     await context.read<AuthProvider>().logout();
-    if (context.mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+    if (context.mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
   }
 }
 
@@ -295,7 +395,10 @@ Widget shellOption(IconData icon, String label, VoidCallback onTap) {
         children: [
           Icon(icon, size: 18, color: AppTheme.brand),
           const SizedBox(width: 10),
-          Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+          Text(
+            label,
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+          ),
         ],
       ),
     ),
@@ -351,10 +454,19 @@ class _SessionDrawerState extends State<_SessionDrawer> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.dns_outlined, size: 32, color: AppTheme.textTertiary),
+                          Icon(
+                            Icons.dns_outlined,
+                            size: 32,
+                            color: AppTheme.textTertiary,
+                          ),
                           SizedBox(height: 8),
-                          Text('暂无 Session',
-                              style: TextStyle(color: AppTheme.textTertiary, fontSize: 12)),
+                          Text(
+                            '暂无 Session',
+                            style: TextStyle(
+                              color: AppTheme.textTertiary,
+                              fontSize: 12,
+                            ),
+                          ),
                         ],
                       ),
                     )
@@ -364,7 +476,9 @@ class _SessionDrawerState extends State<_SessionDrawer> {
                         final deviceId = entry.key;
                         final sessions = entry.value;
                         final isExpanded = _expandedDevices.contains(deviceId);
-                        final isOnline = provider.onlineDeviceIds.contains(deviceId);
+                        final isOnline = provider.onlineDeviceIds.contains(
+                          deviceId,
+                        );
                         final deviceName = provider.deviceName(deviceId);
 
                         return _DeviceGroup(
@@ -399,23 +513,32 @@ class _SessionDrawerState extends State<_SessionDrawer> {
       child: Row(
         children: [
           Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
-              color: provider.isConnected ? AppTheme.statusGreen : AppTheme.statusGray,
+              color: provider.isConnected
+                  ? AppTheme.statusGreen
+                  : AppTheme.statusGray,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 8),
-          const Text('Sessions',
-              style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600)),
+          const Text(
+            'Sessions',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const Spacer(),
           GestureDetector(
             onTap: () => provider.loadDevicesAndSessions(),
-            child: const Icon(Icons.refresh,
-                size: 16, color: AppTheme.textTertiary),
+            child: const Icon(
+              Icons.refresh,
+              size: 16,
+              color: AppTheme.textTertiary,
+            ),
           ),
         ],
       ),
@@ -465,7 +588,9 @@ class _DeviceGroup extends StatelessWidget {
                 Icon(
                   Icons.computer,
                   size: 14,
-                  color: isOnline ? AppTheme.statusGreen : AppTheme.textTertiary,
+                  color: isOnline
+                      ? AppTheme.statusGreen
+                      : AppTheme.textTertiary,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -480,9 +605,12 @@ class _DeviceGroup extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  width: 6, height: 6,
+                  width: 6,
+                  height: 6,
                   decoration: BoxDecoration(
-                    color: isOnline ? AppTheme.statusGreen : AppTheme.statusGray,
+                    color: isOnline
+                        ? AppTheme.statusGreen
+                        : AppTheme.statusGray,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -490,7 +618,9 @@ class _DeviceGroup extends StatelessWidget {
                 Text(
                   isOnline ? '在线' : '离线',
                   style: TextStyle(
-                    color: isOnline ? AppTheme.statusGreen : AppTheme.textTertiary,
+                    color: isOnline
+                        ? AppTheme.statusGreen
+                        : AppTheme.textTertiary,
                     fontSize: 10,
                   ),
                 ),
@@ -508,16 +638,19 @@ class _DeviceGroup extends StatelessWidget {
         ),
         // Session列表
         if (isExpanded)
-          ...sessions.map((s) => _SessionRow(
-                session: s,
-                isActive: provider.activeSession?.sessionId == s.sessionId,
-                onTap: () {
-                  provider.selectSession(s);
-                  // 关闭drawer在调用方处理
-                },
-                onStop: () => provider.stopSession(s),
-                onClose: () => provider.closeSession(s),
-              )),
+          ...sessions.map(
+            (s) => _SessionRow(
+              displayTitle: provider.sessionDisplayTitle(s),
+              session: s,
+              isActive: provider.activeSession?.sessionId == s.sessionId,
+              onTap: () {
+                provider.selectSession(s);
+                // 关闭drawer在调用方处理
+              },
+              onStop: () => provider.stopSession(s),
+              onClose: () => provider.closeSession(s),
+            ),
+          ),
       ],
     );
   }
@@ -525,6 +658,7 @@ class _DeviceGroup extends StatelessWidget {
 
 /// 单条 Session 行
 class _SessionRow extends StatelessWidget {
+  final String displayTitle;
   final Session session;
   final bool isActive;
   final VoidCallback onTap;
@@ -532,6 +666,7 @@ class _SessionRow extends StatelessWidget {
   final VoidCallback onClose;
 
   const _SessionRow({
+    required this.displayTitle,
     required this.session,
     required this.isActive,
     required this.onTap,
@@ -542,6 +677,10 @@ class _SessionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sc = AppTheme.sessionStatusColor(session.status);
+    final cwdLeaf = _cwdLeaf(session.cwd);
+    final meta = cwdLeaf.isNotEmpty
+        ? '${session.shellKind}  ·  $cwdLeaf  ·  ${_sessionStatusLabel(session.status)}'
+        : '${session.shellKind}  ·  ${_sessionStatusLabel(session.status)}';
 
     return InkWell(
       onTap: onTap,
@@ -551,7 +690,8 @@ class _SessionRow extends StatelessWidget {
         child: Row(
           children: [
             Container(
-              width: 8, height: 8,
+              width: 8,
+              height: 8,
               decoration: BoxDecoration(color: sc, shape: BoxShape.circle),
             ),
             const SizedBox(width: 8),
@@ -560,7 +700,7 @@ class _SessionRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    session.title,
+                    displayTitle,
                     style: TextStyle(
                       color: isActive ? AppTheme.brand : AppTheme.textPrimary,
                       fontSize: 13,
@@ -569,16 +709,22 @@ class _SessionRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
-                    '${session.shellKind}  ·  ${_sessionStatusLabel(session.status)}',
+                    meta,
                     style: const TextStyle(
-                        color: AppTheme.textTertiary, fontSize: 10),
+                      color: AppTheme.textTertiary,
+                      fontSize: 10,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert,
-                  size: 16, color: AppTheme.textTertiary),
+              icon: const Icon(
+                Icons.more_vert,
+                size: 16,
+                color: AppTheme.textTertiary,
+              ),
               color: AppTheme.bgPrimary,
               onSelected: (v) {
                 if (v == 'stop') onStop();
@@ -586,11 +732,13 @@ class _SessionRow extends StatelessWidget {
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(
-                    value: 'stop',
-                    child: Text('停止', style: TextStyle(fontSize: 12))),
+                  value: 'stop',
+                  child: Text('停止', style: TextStyle(fontSize: 12)),
+                ),
                 const PopupMenuItem(
-                    value: 'close',
-                    child: Text('关闭', style: TextStyle(fontSize: 12))),
+                  value: 'close',
+                  child: Text('关闭', style: TextStyle(fontSize: 12)),
+                ),
               ],
             ),
           ],
@@ -601,13 +749,29 @@ class _SessionRow extends StatelessWidget {
 
   String _sessionStatusLabel(String s) {
     switch (s) {
-      case 'running': return '运行中';
-      case 'paused': return '已暂停';
-      case 'waiting_input': return '等待输入';
-      case 'stale': return '已离线';
-      case 'stopped': return '已停止';
-      case 'crashed': return '崩溃';
-      default: return s;
+      case 'running':
+        return '运行中';
+      case 'paused':
+        return '已暂停';
+      case 'waiting_input':
+        return '等待输入';
+      case 'stale':
+        return '已离线';
+      case 'stopped':
+        return '已停止';
+      case 'crashed':
+        return '崩溃';
+      default:
+        return s;
     }
+  }
+
+  String _cwdLeaf(String cwd) {
+    final normalized = cwd.replaceAll('\\', '/');
+    final parts = normalized
+        .split('/')
+        .where((part) => part.trim().isNotEmpty)
+        .toList();
+    return parts.isEmpty ? '' : parts.last;
   }
 }
