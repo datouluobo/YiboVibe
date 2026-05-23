@@ -111,7 +111,37 @@ It currently supports:
 - dialog aggregation view
 - `screen` mode terminal view
 
-### 3.2 Mobile Remote Console
+### 3.2 Lingsi
+
+`Lingsi` is the desktop-side productivity layer for making repeated expression and repeated actions easier to reuse.
+
+It is intended to help users organize frequently used content fragments, common expressions, and high-frequency workflow pieces into a smoother working rhythm.
+
+### 3.3 Access
+
+`Access` is the desktop-side entry for managing upstream models and API endpoints.
+
+It is used to centralize provider configuration so the user does not have to repeat the same setup across multiple tools.
+
+### 3.4 Relay
+
+`Relay` exposes already configured upstream capabilities through a single desktop-local output path.
+
+It is used to reduce repeated configuration and make local tool integration more stable.
+
+### 3.5 Fenghuo
+
+`Fenghuo` is the cross-device synchronization and delivery layer for text, images, files, and result artifacts.
+
+It helps move working material and outputs between devices and back into the current workflow.
+
+### 3.6 Jianpu
+
+`Jianpu` is the keyboard mapping and shortcut adjustment layer.
+
+It lets the user reshape key behavior and common actions around personal habits so repeated operations become faster and more natural.
+
+### 3.7 Mobile Remote Console
 
 The Android client currently supports:
 
@@ -122,7 +152,7 @@ The Android client currently supports:
 - a quick action sheet
 - local scale controls in `screen` mode, including fit-width, fit-height, touch zoom, and mouse-wheel zoom
 
-### 3.3 FlowSync
+### 3.8 FlowSync
 
 `FlowSync` currently acts as the cross-device asset and result synchronization substrate, including:
 
@@ -131,7 +161,7 @@ The Android client currently supports:
 - share download links
 - multi-device sync capability
 
-### 3.4 FlowProbe
+### 3.9 FlowProbe
 
 `FlowProbe` is currently a desktop-local upstream API asset tool used to:
 
@@ -156,7 +186,37 @@ It is not a server-side AI gateway and not a public multi-tenant proxy layer.
 - 对话聚合视图
 - `screen` 模式终端视图
 
-### 3.2 Mobile Remote Console
+### 3.2 灵思
+
+`灵思` 是桌面端面向日常使用的内容与操作辅助层。
+
+它更强调把常用表达、思路片段和高频操作整理得更顺手，减少重复输入和来回切换。
+
+### 3.3 接入
+
+`接入` 用来集中管理桌面端要使用的模型和 API 接口。
+
+用户可以把常用上游能力统一配置在这里，避免在不同工具里重复维护。
+
+### 3.4 转发
+
+`转发` 把已经配置好的接口能力通过本机统一出口提供给其它工具使用。
+
+它的重点是减少重复配置，让本地调用路径更稳定、更统一。
+
+### 3.5 烽火
+
+`烽火` 是跨设备的资源与结果流转层。
+
+它负责把文本、图片、文件和结果产物在设备之间同步，并继续送回当前工作流。
+
+### 3.6 键谱
+
+`键谱` 是键盘映射与快捷操作调整层。
+
+用户可以按自己的习惯调整按键行为和快捷操作映射，让常用动作更顺手，减少重复操作。
+
+### 3.7 Mobile Remote Console
 
 Android 端当前已支持：
 
@@ -167,7 +227,7 @@ Android 端当前已支持：
 - 快捷动作弹层
 - `screen` 模式本地缩放、适宽、适高、手势缩放、鼠标滚轮缩放
 
-### 3.3 FlowSync
+### 3.8 FlowSync
 
 `FlowSync` 当前承担跨端资产与结果同步底座，包括：
 
@@ -176,7 +236,7 @@ Android 端当前已支持：
 - 分享下载链路
 - 多端同步能力
 
-### 3.4 FlowProbe
+### 3.9 FlowProbe
 
 `FlowProbe` 当前是桌面端本机直连的上游 API 资产工具，负责：
 

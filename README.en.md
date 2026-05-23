@@ -16,12 +16,12 @@ The current product boundary is defined by [docs/specs-v2.md](docs/specs-v2.md).
 
 ## What You Can Do Today
 
-- Run and manage multiple terminal sessions from the desktop app
-- View and control those sessions remotely from Android
-- Switch between `text`, `dialog`, and `screen` console views on mobile
-- Use quick actions for Enter, Ctrl+C, arrows, Tab, Esc, paste, and select all
-- Use `FlowSync` for asset and result delivery across devices
-- Use `FlowProbe` to manage and inspect upstream model/API assets on the desktop machine
+- Console: run and switch between multiple local or WSL sessions on desktop, and continue viewing or taking over them from mobile
+- Lingsi: make frequently used expressions, idea fragments, and repeated actions easier to reuse
+- Access: manage upstream models and API endpoints from one desktop-side entry
+- Relay: expose configured upstream capabilities through a unified desktop-local output path
+- Fenghuo: sync text, images, files, and result artifacts across devices and send them back into the current workflow
+- Jianpu: adjust key behavior and shortcut mappings around your own habits so common actions feel more natural
 - Deploy the server stack to a NAS or Linux host with Docker Compose
 
 ## Releases
