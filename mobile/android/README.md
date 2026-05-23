@@ -1,44 +1,117 @@
-# YiboVibe Mobile — Android App
+# YiboVibe Mobile for Android
 
-YiboVibe 移动端 Android App，作为 `Remote Console` 远程控制桌面端 Vibe Coding 环境。
+YiboVibe Mobile is the Android remote console for a running YiboVibe desktop environment.
 
-## 架构
+YiboVibe Mobile 是面向运行中 YiboVibe 桌面环境的 Android 远程控制台。
 
+## Current Role
+
+The mobile app is not a standalone execution host.
+
+移动端不是独立执行宿主。
+
+It is designed to:
+
+- sign in to a YiboVibe Server
+- list and switch desktop sessions
+- create a new remote session
+- send text input and quick actions
+- observe long-running terminal work away from the desk
+- control interactive terminal prompts from a phone
+
+它当前用于：
+
+- 登录 YiboVibe Server
+- 查看并切换桌面会话
+- 新建远程 Session
+- 发送文本输入和快捷动作
+- 在离开电脑时观察长时间运行的终端任务
+- 在手机上处理交互式终端提示
+
+## Current Console Views
+
+The main console currently supports:
+
+- `text` mode for plain terminal flow
+- `dialog` mode for message-style aggregation
+- `screen` mode for interactive full-screen terminal rendering
+
+当前主控制台支持：
+
+- 纯终端流的 `text` 模式
+- 消息聚合式的 `dialog` 模式
+- 交互式全屏终端渲染的 `screen` 模式
+
+`screen` mode currently includes:
+
+- unified bottom input bar
+- quick action sheet
+- fit-width and fit-height shortcuts
+- pinch zoom on touch devices
+- mouse-wheel zoom for browser and simulator usage
+
+`screen` 模式当前包含：
+
+- 统一底部输入栏
+- 快捷动作弹层
+- 适宽和适高快捷切换
+- 触屏双指缩放
+- 浏览器和模拟器下的鼠标滚轮缩放
+
+## Main UI Structure
+
+```text
+LoginPage
+  -> server address / account / password / device name
+
+ConsolePage
+  -> top session bar
+  -> session chip bar
+  -> terminal or dialog view
+  -> bottom input area
+  -> toolbar entries for Sessions / FlowMind / Quick Actions / Files / Images / More
 ```
-登录层 → LoginPage (服务端地址 / 账号 / 设备名)
-主链路 → ConsolePage (单页远程控制台)
-  ├── TopStatusBar     → 连接状态 / 设备 / Session / 告警
-  ├── SessionChipBar   → Session 快切 + 长按操作
-  ├── TerminalView     → 终端模式 (等宽日志流)
-  ├── DialogView       → 对话模式 (气泡式聚合)
-  ├── BottomInputArea  → 两行输入区 (输入框 + 发送)
-  └── ToolBar          → 工具行 (Sessions|文件|FlowMind|图片|模式|动作|设置|更多)
-辅助层 → Session Drawer / FlowMind 面板 / 快捷动作 / 更多
+
+```text
+LoginPage
+  -> 服务端地址 / 账号 / 密码 / 设备名
+
+ConsolePage
+  -> 顶部会话栏
+  -> Session 切换栏
+  -> 终端或对话视图
+  -> 底部输入区
+  -> Sessions / FlowMind / 快捷动作 / 文件 / 图片 / 更多 工具入口
 ```
 
-## 服务端
+## Server Interfaces
 
-连接 YiboVibe Server（v2-signal 版本）:
-- REST: `/api/v1/user/login`, `/api/v1/sync/devices`, `/api/v1/sync/signal/sessions`
-- WS: `/api/v1/sync/ws?token=<access_token>`
+The Android app connects to the YiboVibe Server v2 signal stack:
 
-## 开发
+Android 客户端连接到 YiboVibe Server v2 signal 链路：
 
-```bash
-# 构建 APK (Android)
-flutter build apk --debug
-
-# 构建 Web (调试用)
-flutter build web
-bash scripts/post-build.sh    # 复制本地 CanvasKit (规避代理)
-
-# 运行 Web Server
-python3 -m http.server 8899 --directory build/web
-```
+- REST
+  - `/api/v1/user/login`
+  - `/api/v1/sync/devices`
+  - `/api/v1/sync/signal/sessions`
+- WebSocket
+  - `/api/v1/sync/ws?token=<access_token>`
 
 ## Build
 
-| 产物 | 路径 |
-|------|------|
-| APK | `build/app/outputs/flutter-apk/app-debug.apk` |
-| Web | `build/web/` |
+### Android release APK
+
+```bash
+flutter build apk --release
+```
+
+Output / 输出：
+
+- `build/app/outputs/flutter-apk/app-release.apk`
+
+## Notes
+
+- The current public mobile release line is `0.9.7`.
+- Android is the current maintained mobile target in this repository.
+- 当前公开移动端版本线为 `0.9.7`。
+- 当前仓库内维护的移动端目标平台是 Android。

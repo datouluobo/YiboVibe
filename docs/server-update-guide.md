@@ -1,6 +1,6 @@
 # YiboVibe 服务端更新指南
 
-更新时间：2026-05-14
+更新时间：2026-05-23
 
 ## 1. 适用范围
 
@@ -53,7 +53,7 @@ Docker Hub 发布只保留给正式对外发版，不作为默认修复流程。
 
 - 日常调试：`yibovibe-server:local-2026-05-14`
 - 日常调试重建：`yibovibe-server:local-2026-05-14-clean`
-- 正式发布：`datouluobo/yibovibe-server:0.9.5`
+- 正式发布：`datouluobo/yibovibe-server:0.9.7`
 
 规则：
 
@@ -270,7 +270,7 @@ curl --noproxy '*' http://127.0.0.1:11434/api/v1/ping
 如果返回：
 
 ```json
-{"message":"pong","version":"server-2026-05-18-r1"}
+{"message":"pong","version":"0.9.7"}
 ```
 
 则说明新镜像已在 NAS 生效。

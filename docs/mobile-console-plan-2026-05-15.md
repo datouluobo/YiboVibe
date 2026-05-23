@@ -1,5 +1,10 @@
 # YiboVibe 移动端控制台规划
 
+> Archived engineering note:
+> This document is kept for historical implementation context and is not the current public product or deployment guide.
+>
+> 历史工程记录：本文保留实现背景与演进过程，不作为当前对外产品或部署说明。
+
 更新时间：2026-05-15
 
 ## 1. 文档目的
