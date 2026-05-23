@@ -1,6 +1,33 @@
 # YiboVibe v2 产品与工程规格
 
-更新时间：2026-05-11
+Updated: 2026-05-24
+
+更新时间：2026-05-24
+
+## English Executive Summary
+
+This document defines the current YiboVibe v2 product direction, module boundary, and system responsibilities.
+
+YiboVibe v2 is designed as a Vibe Coding infrastructure stack centered on three surfaces:
+
+- Desktop as the headless execution host
+- Server as the signal, session, and sync hub
+- Mobile as the remote console
+
+Current key points:
+
+- Existing `Flow*` modules remain in scope, but their roles are reorganized around the Vibe Coding backbone.
+- The server is not a third-party AI gateway and is not the main execution host.
+- The desktop app remains the primary execution environment for sessions, shells, and local resources.
+- The mobile app is a remote control surface rather than a standalone execution client.
+
+Readers who need the current public-facing short version should start with:
+
+- [features_summary.md](features_summary.md)
+- [public-docs.md](public-docs.md)
+- [../server/README.md](../server/README.md)
+
+The detailed sections below remain the canonical product and engineering specification for the v2 line.
 
 ## 1. 文档目的
 
@@ -379,7 +406,7 @@ v2 需要把 WSL 视为首要执行环境之一。
 
 ## 13. 与旧规格文档的关系
 
-- [specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md) 记录的是 v1 阶段的产品真实状态
+- 仓库内旧的 v1 相关说明只应视为历史背景材料，不再作为当前公开产品说明入口
 - 本文档定义的是 v2 阶段的主线目标与正式重组方向
 - 在程序名、仓库名与镜像名完成统一之前，仓库内仍可能同时存在 v1/v2 叙事
 

@@ -1,226 +1,209 @@
-# YiboFlow NAS / 服务端私有化部署指南
+# YiboVibe NAS / 服务端私有化部署指南
 
-更新时间：2026-05-05
+This document explains how to deploy the YiboVibe server stack to a NAS or Linux Docker host.
 
-## 1. 环境准备
+本文档说明如何把 YiboVibe 服务端部署到 NAS 或 Linux Docker 主机。
 
-确保服务器或 NAS 已安装：
+更新时间：2026-05-24
 
-1. Docker
-2. Docker Compose v2
-3. 可用对外端口，默认 `11434`
+## 1. Scope / 适用范围
 
-建议先验证：
+Use this guide when you want to deploy the login, session sync, and WebSocket signaling stack for YiboVibe.
 
-```bash
-docker --version
-docker compose version
-```
+如果你需要部署 YiboVibe 的登录、会话同步和 WebSocket 信令链路，可以使用本指南。
 
-## 2. 获取部署文件
+The current public deployment target is the Compose stack under `server/`.
 
-推荐直接使用仓库里的 `server/` 目录：
+当前公开部署目标是 `server/` 目录下的 Compose 栈。
 
-```bash
-git clone https://github.com/datouluobo/YiboVibe.git
-cd YiboVibe/server
-```
+## 2. Stack / 部署内容
 
-如果是上传部署包，也应保证最终目录里至少包含：
-
-- `docker-compose.yml`
-- `.env.example`
-- `Caddyfile`
-- `Dockerfile`
-
-## 3. 配置运行环境
-
-先复制模板：
-
-```bash
-cp .env.example .env
-```
-
-然后修改 `.env`，至少确认这些项：
-
-```env
-POSTGRES_USER=yibo_admin
-POSTGRES_PASSWORD=change_me_postgres_password
-POSTGRES_DB=yiboflow
-REDIS_PASSWORD=change_me_redis_password
-GIN_MODE=release
-GATE_PORT=11434
-YIBOVIBE_API_IMAGE=datouluobo/yibovibe-server:latest
-```
-
-必须修改：
-
-- `POSTGRES_PASSWORD`
-- `REDIS_PASSWORD`
-
-按需修改：
-
-- `GATE_PORT`
-- `YIBOVIBE_API_IMAGE`
-
-## 4. 启动服务
-
-当前公开 Compose 默认走已发布镜像，直接执行：
-
-```bash
-docker compose up -d
-```
-
-启动后应有 4 个容器：
+The current stack includes:
 
 - `yibovibe_api`
 - `yibovibe_ai_gate`
 - `yibovibe_db`
 - `yibovibe_redis`
 
-查看状态：
+当前部署栈包含：
+
+- `yibovibe_api`
+- `yibovibe_ai_gate`
+- `yibovibe_db`
+- `yibovibe_redis`
+
+`yibovibe_ai_gate` is only the historical reverse-proxy container name. It does not act as a third-party AI gateway.
+
+`yibovibe_ai_gate` 只是历史保留下来的反向代理入口容器名，不承担第三方 AI 网关职责。
+
+## 3. Requirements / 环境准备
+
+You need:
+
+1. Docker Engine
+2. Docker Compose v2
+3. An available public port, `11434` by default
+
+需要准备：
+
+1. Docker Engine
+2. Docker Compose v2
+3. 一个可用对外端口，默认 `11434`
+
+Recommended checks:
 
 ```bash
+docker --version
+docker compose version
+```
+
+推荐先检查：
+
+```bash
+docker --version
+docker compose version
+```
+
+If you build on Windows first and then send the image to the NAS, also verify:
+
+如果你打算先在 Windows 本机构建，再把镜像传到 NAS，还应额外确认：
+
+```powershell
+docker version
+```
+
+## 4. Get The Deployment Files / 获取部署文件
+
+```bash
+git clone https://github.com/datouluobo/YiboVibe.git
+cd YiboVibe/server
+```
+
+If you copy files manually instead of cloning the repository, keep at least:
+
+如果你不是直接克隆仓库，而是手动复制目录，至少要保留：
+
+- `docker-compose.yml`
+- `Dockerfile`
+- `Caddyfile`
+- `.env.example`
+
+## 5. Configure The Environment / 配置运行环境
+
+```bash
+cp .env.example .env
+```
+
+Then confirm these values in `.env`:
+
+然后确认 `.env` 至少包含这些值：
+
+```env
+POSTGRES_USER=yibo_admin
+POSTGRES_PASSWORD=change_me_postgres_password
+POSTGRES_DB=yibovibe
+REDIS_PASSWORD=change_me_redis_password
+GIN_MODE=release
+GATE_PORT=11434
+YIBOVIBE_API_IMAGE=datouluobo/yibovibe-server:0.9.7
+```
+
+You must change:
+
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+
+必须修改：
+
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+
+## 6. First Start / 首次启动
+
+```bash
+docker compose up -d
 docker compose ps
 ```
 
-## 5. 当前网关与入口
+You should see all four containers running.
 
-默认对外入口端口：
+正常情况下应看到 4 个容器都已启动。
 
-- `11434`
-
-当前网关必须放行：
-
-- `/api/*`
-- `/share/*`
-
-这两条都应转发到：
-
-- `yiboflow_api:8080`
-
-如果 `Caddyfile` 没有 `/share/*`，`FlowSync` 外链会生成成功，但别人无法通过分享链接下载。
-
-## 6. 首次部署后验证
-
-先验证网关存活：
+## 7. Validation / 更新后验证
 
 ```bash
 curl http://127.0.0.1:11434/
-```
-
-预期返回：
-
-```text
-YiboFlow Sync Gateway is Active
-```
-
-再验证 API：
-
-```bash
 curl http://127.0.0.1:11434/api/v1/ping
+docker compose ps
+docker compose logs api --tail=120
 ```
 
-预期返回包含：
+Expected ping output includes:
+
+`/api/v1/ping` 预期返回包含：
 
 ```json
-{"message":"pong","version":"v1.5"}
+{"message":"pong","version":"0.9.7"}
 ```
 
-## 7. 更新到新版本
+## 8. Recommended Update Paths / 推荐更新路径
 
-### 7.1 使用已发布镜像更新
+Preferred day-to-day update paths:
+
+1. sync the latest `server/` source to the NAS and build locally on the NAS
+2. build the image on your local machine, export a tar, upload it to the NAS, then load and restart
+
+日常更新优先使用两条路径：
+
+1. 把最新 `server/` 源码同步到 NAS，在 NAS 本地构建并更新
+2. 在本机构建镜像并导出 tar，上传到 NAS 后导入并重启
+
+Do not rely on “push to Docker Hub and wait for NAS to pull `latest`” as the default hotfix path.
+
+不要把“推 Docker Hub 再等 NAS 拉取 `latest`”当作默认修复路径。
+
+## 9. Local Build Then NAS Import / 本机构建后导入 NAS
+
+### Step 1. Build locally / 本机构建镜像
+
+```powershell
+cd F:\Download\GitHub\YiboVibe\server
+docker build -t yibovibe-server:local-2026-05-24 .
+```
+
+### Step 2. Export tar / 导出 tar
+
+```powershell
+docker save -o F:\Download\yibovibe-server-local-2026-05-24.tar yibovibe-server:local-2026-05-24
+```
+
+### Step 3. Load on NAS and restart / NAS 导入并更新
 
 ```bash
-docker compose pull
-docker compose up -d
+docker load -i /actual/path/yibovibe-server-local-2026-05-24.tar
+
+cd /actual/path/YiboVibe/server
+YIBOVIBE_API_IMAGE='yibovibe-server:local-2026-05-24' docker compose up -d api
 ```
 
-### 7.2 使用本地源码构建更新
+If you want later restarts to keep using the same image, write that image name back into `.env`.
 
-如果你不是等 Docker Hub 新镜像，而是要直接部署当前仓库里的最新 `server/` 代码：
+如果你希望后续重启继续固定使用同一个镜像，把相同镜像名写回 `.env` 中的 `YIBOVIBE_API_IMAGE`。
 
-```bash
-docker build -t yiboflow-server:local-2026-05-05 .
-YIBOFLOW_API_IMAGE=yiboflow-server:local-2026-05-05 docker compose up -d api
-```
+## 10. Public Release Tags / 公开发布版本
 
-这条路径适合：
+Use explicit version tags for public releases, for example:
 
-- 本地刚修完服务端问题
-- 需要先在 NAS 验证
-- 尚未推送正式镜像标签
+正式对外发布时，建议使用明确版本标签，例如：
 
-## 8. 本次重构后的重点验证项
+- `datouluobo/yibovibe-server:0.9.7`
 
-除登录与配置同步外，至少再检查：
+Using `latest` is optional, but it should not be your primary verification target.
 
-1. `FlowSync` NAS 暂存对象可创建
-2. 外链策略可启用
-3. 外链可生成
-4. 外链第一次下载成功
-5. 如果设置了 `max_downloads=1`，第二次下载应失败
+`latest` 可以作为附加标签，但不建议作为主要验证依据。
 
-## 9. 已知兼容性注意项
+## 11. Related Docs / 相关文档
 
-如果你部署的是包含 `FlowSync` NAS 暂存的新版本服务端，需确认仓库代码里：
-
-- [server/internal/model/staging.go](/F:/Download/GitHub/YiboFlow/server/internal/model/staging.go:30)
-
-当前应为：
-
-```go
-ManifestJSON string `gorm:"type:text" json:"manifest_json"`
-```
-
-如果仍是 `longtext`，PostgreSQL 启动建表会失败，并报：
-
-```text
-ERROR: type "longtext" does not exist (SQLSTATE 42704)
-```
-
-## 10. 日志与排障
-
-常用命令：
-
-```bash
-docker compose logs -f api
-docker compose logs -f ai_gateway
-docker compose logs -f db
-docker compose logs -f redis
-```
-
-## 11. 安全停机与回滚
-
-停止但保留数据：
-
-```bash
-docker compose stop
-```
-
-恢复上一版镜像：
-
-1. 把 `.env` 中 `YIBOFLOW_API_IMAGE` 改回上一版
-2. 执行：
-
-```bash
-docker compose up -d
-```
-
-不要默认执行：
-
-```bash
-docker compose down -v
-```
-
-这会删除：
-
-- PostgreSQL 数据卷
-- Redis 数据卷
-- Vault 数据卷
-
-## 12. 相关文档
-
-- [docs/server-update-guide.md](/F:/Download/GitHub/YiboFlow/docs/server-update-guide.md)
-- [docs/nas-server-fixed-workflow.md](/F:/Download/GitHub/YiboFlow/docs/nas-server-fixed-workflow.md)
-- [docs/specs.md](/F:/Download/GitHub/YiboFlow/docs/specs.md)
+- Server deployment guide / 服务端部署总说明: [../server/README.md](../server/README.md)
+- Server update guide / 服务端更新指南: [server-update-guide.md](server-update-guide.md)
+- Product specification / 产品规格: [specs-v2.md](specs-v2.md)

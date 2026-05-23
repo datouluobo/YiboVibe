@@ -402,8 +402,8 @@ v2 控制台采用：
 
 ## 13. 与架构文档的关系
 
-- [specs-v2.md](/F:/Download/GitHub/YiboFlow/docs/specs-v2.md) 定义产品与模块边界
-- [architecture-vibe-coding.md](/F:/Download/GitHub/YiboFlow/docs/architecture-vibe-coding.md) 定义系统技术结构
+- [specs-v2.md](specs-v2.md) 定义产品与模块边界
+- [architecture-vibe-coding.md](architecture-vibe-coding.md) 定义系统技术结构
 - 本文档定义桌面端与管理控制台的 UI 表达约束
 
 后续新的管理页、会话页与 FlowProbe 页面迭代，应优先遵循本文档。
