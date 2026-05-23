@@ -1,16 +1,10 @@
 # YiboVibe
 
-YiboVibe is a desktop-first Vibe Coding toolkit for running, observing, and remotely controlling long-lived coding sessions across desktop, mobile, and NAS environments.
+简体中文 | [English](README.en.md)
 
 YiboVibe 是一套桌面优先的 Vibe Coding 工具链，用来在桌面端、移动端和 NAS 环境之间持续运行、观察并远程控制长期存在的编码会话。
 
-## Overview
-
-YiboVibe currently ships as a three-part system:
-
-- Desktop: the primary execution host for local shells, WSL sessions, agent consoles, resource access, and operator UI.
-- Server: the auth, signal, session, and sync hub used by desktop and mobile clients.
-- Mobile: an Android remote console for checking sessions, sending commands, handling prompts, and observing long-running work away from the desk.
+## 产品简介
 
 YiboVibe 当前由三部分组成：
 
@@ -18,73 +12,49 @@ YiboVibe 当前由三部分组成：
 - 服务端：负责登录鉴权、WebSocket 信令、会话同步和跨端路由。
 - 移动端：Android 远程控制台，用于离开电脑后查看会话、发令、处理交互提示和观察后台任务。
 
-## Current Product Scope
+当前产品边界以 [docs/specs-v2.md](docs/specs-v2.md) 为准。
 
-The current product boundary is defined by [docs/specs-v2.md](docs/specs-v2.md).
+## 当前可以做什么
 
-Active modules:
+- 在桌面端运行和管理多 Session 终端会话
+- 在 Android 上远程查看并控制这些会话
+- 在移动端切换 `text`、`dialog`、`screen` 三种控制台视图
+- 用快捷动作处理 Enter、Ctrl+C、方向键、Tab、Esc、粘贴、全选等交互场景
+- 使用 `FlowSync` 做跨设备资源与结果同步
+- 使用 `FlowProbe` 在桌面端管理和检查上游模型/API 资产
+- 用 Docker Compose 把服务端部署到 NAS 或 Linux 主机
 
-- `FlowDeck`
-- `FlowSnap`
-- `FlowHint`
-- `FlowSync`
-- `FlowDrop`
-- `FlowRules`
-- `FlowKeys`
-- `FlowProbe`
-- `Settings`
-
-Key constraints:
-
-- The desktop app is the execution host. The server is not an AI gateway.
-- `FlowProbe` is a desktop-side upstream API testing and relay tool, not the main product backbone.
-- The mobile app is a remote console, not a standalone execution environment.
-
-## What You Can Do Today
-
-- Run and manage multiple terminal sessions from the desktop app.
-- View and control those sessions remotely from Android.
-- Switch between text, dialog, and screen-oriented console views on mobile.
-- Use quick actions for interactive prompts such as Enter, Ctrl+C, arrows, Tab, Esc, paste, and select all.
-- Use `FlowSync` for asset and result delivery across devices.
-- Use `FlowProbe` to manage and inspect upstream model/API assets from the desktop machine.
-- Deploy the server stack to a NAS or Linux host with Docker Compose.
-
-## Install And Release
+## 下载与发布
 
 - GitHub Releases: [Releases](https://github.com/datouluobo/YiboVibe/releases)
-- Desktop build target: Windows x64
-- Mobile build target: Android APK
-- Server release target: Docker image / Docker tar package
+- 桌面端发布形态：Windows x64 安装包
+- 移动端发布形态：Android APK
+- 服务端发布形态：Docker 镜像 / Docker tar 包
 
-Current public release line:
+当前公开版本线：
 
-- Server: `0.9.7`
-- Desktop: `0.9.7`
-- Mobile: `0.9.7`
+- 服务端：`0.9.7`
+- 桌面端：`0.9.7`
+- 移动端：`0.9.7`
 
-## Documentation
+## 文档入口
 
-- Public feature summary: [docs/features_summary.md](docs/features_summary.md)
-- Public docs index: [docs/public-docs.md](docs/public-docs.md)
-- Product spec: [docs/specs-v2.md](docs/specs-v2.md)
-- Architecture: [docs/architecture-vibe-coding.md](docs/architecture-vibe-coding.md)
-- Console UI guidelines: [docs/ui-console-guidelines.md](docs/ui-console-guidelines.md)
-- Server deployment guide: [server/README.md](server/README.md)
-- NAS deployment guide: [docs/NAS部署指南.md](docs/NAS部署指南.md)
-- Server update guide: [docs/server-update-guide.md](docs/server-update-guide.md)
-- Documentation index: [docs/documentation-index.md](docs/documentation-index.md)
-- Engineering archive index: [docs/archive-index.md](docs/archive-index.md)
+- 公开文档总入口：[docs/public-docs.md](docs/public-docs.md)
+- 公开功能摘要：[docs/features_summary.md](docs/features_summary.md)
+- 产品规格：[docs/specs-v2.md](docs/specs-v2.md)
+- 架构说明：[docs/architecture-vibe-coding.md](docs/architecture-vibe-coding.md)
+- 服务端部署说明：[server/README.md](server/README.md)
+- NAS 部署说明：[docs/NAS部署指南.md](docs/NAS部署指南.md)
+- Android 客户端说明：[mobile/android/README.md](mobile/android/README.md)
 
-## Repository Layout
+## 仓库结构
 
-- `core/`: shared Rust capability layer
-- `desktop/`: Tauri + React desktop app
-- `server/`: Go server, Docker deployment files, and update guides
-- `mobile/android/`: Flutter Android remote console
-- `docs/`: product, architecture, UI, deployment, and historical design documents
+- `core/`：共享 Rust 能力层
+- `desktop/`：Tauri + React 桌面端
+- `server/`：Go 服务端、Docker 部署文件和更新说明
+- `mobile/android/`：Flutter Android 远程控制台
+- `docs/`：产品、架构、部署和历史工程文档
 
-## Notes
+## English Version
 
-- Public-facing docs have been aligned to the `YiboVibe` brand and the `0.9.7` release line.
-- Some historical design reports in `docs/` still describe older migration context. They are retained as engineering records, not as the current public product definition.
+For an English-first overview, see [README.en.md](README.en.md).
