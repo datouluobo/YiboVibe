@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "PROJECT_DIR=%~dp0mobile\android"
-cd /d "%PROJECT_DIR%" || (
+if not exist "%PROJECT_DIR%" (
   echo [error] Mobile project directory not found: "%PROJECT_DIR%"
   exit /b 1
 )
@@ -25,9 +25,16 @@ if defined PORT_OWNER (
   timeout /t 1 /nobreak >nul
 )
 
-echo [info] Starting mobile app on device: %DEVICE%
-echo [info] Usage: restart-mobile.bat ^<deviceId^>
+set "LAUNCH_VBS=%temp%\yibovibe_restart_mobile_silent.vbs"
+
+echo [info] Starting mobile app silently on device: %DEVICE%
 echo [info] Web port: %WEB_PORT%
 
-flutter run -d "%DEVICE%" --web-port %WEB_PORT%
-exit /b %ERRORLEVEL%
+> "%LAUNCH_VBS%" echo Set WshShell = CreateObject("WScript.Shell")
+>>"%LAUNCH_VBS%" echo WshShell.CurrentDirectory = "%PROJECT_DIR%"
+>>"%LAUNCH_VBS%" echo WshShell.Run "cmd /c flutter run -d ""%DEVICE%"" --web-port %WEB_PORT%", 0, false
+
+wscript.exe "%LAUNCH_VBS%"
+del "%LAUNCH_VBS%" 2>nul
+
+exit /b 0

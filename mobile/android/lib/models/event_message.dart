@@ -27,6 +27,7 @@ class EventMessage {
   final String? resourceType;
   final String? action;
   final String? result;
+  final String? wireType;
 
   const EventMessage({
     required this.type,
@@ -43,6 +44,7 @@ class EventMessage {
     this.resourceType,
     this.action,
     this.result,
+    this.wireType,
   });
 
   factory EventMessage.fromJson(Map<String, dynamic> json) {
@@ -70,6 +72,7 @@ class EventMessage {
       resourceType: json['resource_type'] as String?,
       action: json['action'] as String?,
       result: json['result'] as String?,
+      wireType: json['wire_type'] as String?,
     );
   }
 
@@ -89,6 +92,7 @@ class EventMessage {
       'resource_type': resourceType,
       'action': action,
       'result': result,
+      'wire_type': wireType,
     };
   }
 
@@ -107,6 +111,7 @@ class EventMessage {
     String? resourceType,
     String? action,
     String? result,
+    String? wireType,
   }) {
     return EventMessage(
       type: type ?? this.type,
@@ -123,6 +128,7 @@ class EventMessage {
       resourceType: resourceType ?? this.resourceType,
       action: action ?? this.action,
       result: result ?? this.result,
+      wireType: wireType ?? this.wireType,
     );
   }
 

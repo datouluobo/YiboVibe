@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/session_provider.dart';
 import '../../theme/app_theme.dart';
@@ -17,11 +18,15 @@ class BottomInputArea extends StatefulWidget {
 class _BottomInputAreaState extends State<BottomInputArea> {
   final _ctrl = TextEditingController();
   final _focus = FocusNode();
+  final _screenCtrl = TextEditingController();
+  final FocusNode _screenFocus = FocusNode();
 
   @override
   void dispose() {
     _ctrl.dispose();
     _focus.dispose();
+    _screenCtrl.dispose();
+    _screenFocus.dispose();
     super.dispose();
   }
 
@@ -33,13 +38,33 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     _focus.requestFocus();
   }
 
+  bool get _hasScreenDraft =>
+      _screenCtrl.text.isNotEmpty;
+
+  void _sendScreenDraft(SessionProvider provider, {bool appendEnter = false}) {
+    final text = _screenCtrl.text;
+    if (text.isEmpty && !appendEnter) return;
+    if (text.isNotEmpty) {
+      provider.sendRawInput(text);
+    }
+    if (appendEnter) {
+      provider.sendRawInput('\n');
+    }
+    _screenCtrl.clear();
+    setState(() {});
+    _screenFocus.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<SessionProvider>(
       builder: (context, p, _) {
         final running = p.activeSession?.isRunning ?? false;
         final interactive = p.isInteractiveSession;
-        final prompt = p.currentPrompt;
+        final screenMode = p.isScreenMode;
+        final viewport = MediaQuery.sizeOf(context);
+        final compact = viewport.width < 390 || viewport.height < 820;
+        final prompt = screenMode ? null : p.currentPrompt;
         final promptText = prompt == null
             ? null
             : TerminalTextFormatter.displayBody(
@@ -96,24 +121,23 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                     ],
                   ),
                 ),
-              // 输入行 — 统一 36px 高度
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // 模式指示 (终端/对话)
                     _ModeToggle(p: p, disabled: interactive),
                     const SizedBox(width: 6),
-                    // 输入框
                     Expanded(
                       child: SizedBox(
                         height: 36,
                         child: TextField(
-                          controller: _ctrl,
-                          focusNode: _focus,
+                          controller: screenMode ? _screenCtrl : _ctrl,
+                          focusNode: screenMode ? _screenFocus : _focus,
                           enabled: running,
                           maxLines: 1,
+                          autocorrect: !screenMode,
+                          enableSuggestions: !screenMode,
                           style: const TextStyle(
                             color: AppTheme.textPrimary,
                             fontSize: 13,
@@ -126,7 +150,9 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                               horizontal: 10,
                               vertical: 9,
                             ),
-                            hintText: running ? '输入命令…' : 'Session 未运行',
+                            hintText: running
+                                ? (screenMode ? '输入内容到终端…' : '输入命令…')
+                                : 'Session 未运行',
                             hintStyle: const TextStyle(
                               color: AppTheme.textTertiary,
                               fontSize: 13,
@@ -138,46 +164,79 @@ class _BottomInputAreaState extends State<BottomInputArea> {
                               borderRadius: BorderRadius.circular(8),
                               borderSide: BorderSide.none,
                             ),
-                            suffixIcon: _ctrl.text.isNotEmpty
-                                ? GestureDetector(
-                                    onTap: () => _ctrl.clear(),
-                                    child: const Padding(
-                                      padding: EdgeInsets.all(8),
-                                      child: Icon(
-                                        Icons.close,
-                                        size: 14,
-                                        color: AppTheme.textTertiary,
-                                      ),
-                                    ),
-                                  )
-                                : null,
+                            suffixIcon: screenMode
+                                ? (_hasScreenDraft
+                                      ? GestureDetector(
+                                          onTap: () {
+                                            _screenCtrl.clear();
+                                            setState(() {});
+                                          },
+                                          child: const Padding(
+                                            padding: EdgeInsets.all(8),
+                                            child: Icon(
+                                              Icons.close,
+                                              size: 14,
+                                              color: AppTheme.textTertiary,
+                                            ),
+                                          ),
+                                        )
+                                      : null)
+                                : (_ctrl.text.isNotEmpty
+                                      ? GestureDetector(
+                                          onTap: () {
+                                            _ctrl.clear();
+                                            setState(() {});
+                                          },
+                                          child: const Padding(
+                                            padding: EdgeInsets.all(8),
+                                            child: Icon(
+                                              Icons.close,
+                                              size: 14,
+                                              color: AppTheme.textTertiary,
+                                            ),
+                                          ),
+                                        )
+                                      : null),
                           ),
-                          onChanged: (_) => setState(() {}),
-                          onSubmitted: (_) => _send(),
+                          onChanged: (value) {
+                            setState(() {});
+                          },
+                          onSubmitted: (_) => screenMode
+                              ? _sendScreenDraft(p, appendEnter: true)
+                              : _send(),
                         ),
                       ),
                     ),
                     const SizedBox(width: 6),
-                    // 发送按钮 — 36x36
                     GestureDetector(
-                      onTap: running && _ctrl.text.trim().isNotEmpty
-                          ? _send
-                          : null,
+                      onTap: screenMode
+                          ? (running && _hasScreenDraft
+                                ? () => _sendScreenDraft(p, appendEnter: true)
+                                : null)
+                          : (running && _ctrl.text.trim().isNotEmpty
+                                ? _send
+                                : null),
                       child: Container(
                         width: 36,
                         height: 36,
                         decoration: BoxDecoration(
-                          color: running && _ctrl.text.trim().isNotEmpty
-                              ? AppTheme.brand
-                              : AppTheme.bgTertiary,
+                          color: screenMode
+                              ? (running ? AppTheme.brand : AppTheme.bgTertiary)
+                              : (running && _ctrl.text.trim().isNotEmpty
+                                    ? AppTheme.brand
+                                    : AppTheme.bgTertiary),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Icon(
                           Icons.arrow_upward_rounded,
                           size: 18,
-                          color: running && _ctrl.text.trim().isNotEmpty
-                              ? Colors.white
-                              : AppTheme.textTertiary,
+                          color: screenMode
+                              ? (running && _hasScreenDraft
+                                    ? Colors.white
+                                    : AppTheme.textTertiary)
+                              : (running && _ctrl.text.trim().isNotEmpty
+                                    ? Colors.white
+                                    : AppTheme.textTertiary),
                         ),
                       ),
                     ),
@@ -186,50 +245,51 @@ class _BottomInputAreaState extends State<BottomInputArea> {
               ),
               // 工具行 — 关键操作
               Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                child: Row(
+                padding: EdgeInsets.fromLTRB(4, 0, 4, compact ? 4 : 6),
+                child: _MobileToolStrip(
+                  compact: compact,
                   children: [
                     Builder(
                       builder: (innerContext) => _ToolBtn(
                         Icons.dns_outlined,
                         'Sessions',
                         () => Scaffold.maybeOf(innerContext)?.openDrawer(),
+                        compact: compact,
                       ),
                     ),
                     _ToolBtn(
                       Icons.bolt,
                       'FlowMind',
                       () => _openFlowMind(context),
+                      compact: compact,
                     ),
                     _ToolBtn(
                       Icons.flash_on,
                       '快捷',
-                      () => _openActions(context, p),
+                      () => _openActions(context, p, interactive || screenMode),
+                      compact: compact,
                     ),
                     _ToolBtn(
                       Icons.folder_outlined,
                       '文件',
                       () => _comingSoon(context),
+                      compact: compact,
                     ),
                     _ToolBtn(
                       Icons.image_outlined,
                       '图片',
                       () => _comingSoon(context),
+                      compact: compact,
                     ),
-                    const Spacer(),
                     _ToolBtn(
                       Icons.more_horiz,
                       '更多',
                       () => _openMore(context, p),
+                      compact: compact,
                     ),
                   ],
                 ),
               ),
-              if (interactive)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                  child: _InteractiveToolbar(provider: p),
-                ),
             ],
           ),
         );
@@ -245,10 +305,78 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     );
   }
 
-  void _openActions(BuildContext ctx, SessionProvider p) {
+  void _openActions(BuildContext ctx, SessionProvider p, bool showInteractive) {
+    final actionItems = <Widget>[
+      _sheetActionBtn('Enter', Icons.keyboard_return, () {
+        p.sendRawInput('\n');
+      }, closeOnTap: true),
+      _sheetActionBtn('Ctrl+C', Icons.cancel, () {
+        p.sendRawInput('\x03');
+      }, closeOnTap: true),
+      _sheetActionBtn('Ctrl+A', Icons.select_all, () {
+        p.sendRawInput('\x01');
+      }, closeOnTap: true),
+      _sheetActionBtn('粘贴', Icons.content_paste_rounded, () async {
+        final data = await Clipboard.getData(Clipboard.kTextPlain);
+        final text = data?.text ?? '';
+        if (text.isNotEmpty) {
+          p.sendRawInput(text);
+        }
+        if (ctx.mounted) {
+          Navigator.pop(ctx);
+          ScaffoldMessenger.of(ctx).showSnackBar(
+            SnackBar(
+              content: Text(
+                text.isEmpty ? '剪贴板为空' : '已粘贴 ${text.length} 个字符',
+                style: const TextStyle(fontSize: 12),
+              ),
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        }
+      }, closeOnTap: false),
+      _sheetActionBtn('y', Icons.check, () {
+        p.sendInput('y\n');
+      }, closeOnTap: true),
+      _sheetActionBtn('n', Icons.close, () {
+        p.sendInput('n\n');
+      }, closeOnTap: true),
+      _sheetActionBtn('重试', Icons.refresh, null),
+      _sheetActionBtn('总结', Icons.summarize, null),
+    ];
+    if (showInteractive) {
+      actionItems.insertAll(0, [
+        _sheetActionBtn('Up', Icons.keyboard_arrow_up, () {
+          p.sendRawInput('\x1B[A');
+        }, closeOnTap: false),
+        _sheetActionBtn('Down', Icons.keyboard_arrow_down, () {
+          p.sendRawInput('\x1B[B');
+        }, closeOnTap: false),
+        _sheetActionBtn('Left', Icons.keyboard_arrow_left, () {
+          p.sendRawInput('\x1B[D');
+        }, closeOnTap: false),
+        _sheetActionBtn('Right', Icons.keyboard_arrow_right, () {
+          p.sendRawInput('\x1B[C');
+        }, closeOnTap: false),
+        _sheetActionBtn('Bksp', Icons.backspace_outlined, () {
+          p.sendRawInput('\b');
+        }, closeOnTap: false),
+        _sheetActionBtn('Tab', Icons.keyboard_tab, () {
+          p.sendRawInput('\t');
+        }, closeOnTap: false),
+        _sheetActionBtn('Esc', Icons.close_fullscreen, () {
+          p.sendRawInput('\x1B');
+        }, closeOnTap: false),
+        _sheetActionBtn('Space', Icons.space_bar, () {
+          p.sendRawInput(' ');
+        }, closeOnTap: false),
+      ]);
+    }
+
     showModalBottomSheet(
       context: ctx,
       backgroundColor: AppTheme.bgPrimary,
+      isScrollControlled: true,
       builder: (_) => Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -265,16 +393,9 @@ class _BottomInputAreaState extends State<BottomInputArea> {
             ),
             const SizedBox(height: 10),
             Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _quickBtn('Enter', Icons.keyboard_return, '\n', p),
-                _quickBtn('Ctrl+C', Icons.cancel, '\x03', p),
-                _quickBtn('y', Icons.check, 'y\n', p),
-                _quickBtn('n', Icons.close, 'n\n', p),
-                _quickBtn('重试', Icons.refresh, '', p),
-                _quickBtn('总结', Icons.summarize, '', p),
-              ],
+              spacing: 10,
+              runSpacing: 10,
+              children: actionItems,
             ),
           ],
         ),
@@ -282,21 +403,24 @@ class _BottomInputAreaState extends State<BottomInputArea> {
     );
   }
 
-  Widget _quickBtn(
+  Widget _sheetActionBtn(
     String label,
     IconData icon,
-    String text,
-    SessionProvider p,
-  ) {
+    VoidCallback? onTap, {
+    bool closeOnTap = false,
+  }) {
     return GestureDetector(
-      onTap: text.isNotEmpty
-          ? () {
-              p.sendInput(text);
-              Navigator.pop(context);
-            }
-          : null,
+      onTap: onTap == null
+          ? null
+          : () {
+              onTap();
+              if (closeOnTap && context.mounted) {
+                Navigator.pop(context);
+              }
+            },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        constraints: const BoxConstraints(minWidth: 88),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: AppTheme.bgTertiary,
           borderRadius: BorderRadius.circular(6),
@@ -309,7 +433,12 @@ class _BottomInputAreaState extends State<BottomInputArea> {
             const SizedBox(width: 4),
             Text(
               label,
-              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
+              style: TextStyle(
+                color: onTap == null
+                    ? AppTheme.textTertiary
+                    : AppTheme.textPrimary,
+                fontSize: 12,
+              ),
             ),
           ],
         ),
@@ -414,75 +543,21 @@ class _ModeToggle extends StatelessWidget {
   }
 }
 
-class _InteractiveToolbar extends StatelessWidget {
-  final SessionProvider provider;
+class _MobileToolStrip extends StatelessWidget {
+  final bool compact;
+  final List<Widget> children;
 
-  const _InteractiveToolbar({required this.provider});
+  const _MobileToolStrip({required this.compact, required this.children});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.bgSecondary,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '交互模式',
-            style: TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _interactiveKey('Up', Icons.keyboard_arrow_up, '\x1B[A'),
-              _interactiveKey('Down', Icons.keyboard_arrow_down, '\x1B[B'),
-              _interactiveKey('Left', Icons.keyboard_arrow_left, '\x1B[D'),
-              _interactiveKey('Right', Icons.keyboard_arrow_right, '\x1B[C'),
-              _interactiveKey('Enter', Icons.keyboard_return, '\n'),
-              _interactiveKey('Tab', Icons.keyboard_tab, '\t'),
-              _interactiveKey('Esc', Icons.close_fullscreen, '\x1B'),
-              _interactiveKey('Space', Icons.space_bar, ' '),
-              _interactiveKey('Ctrl+C', Icons.cancel_outlined, '\x03'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+    if (!compact) {
+      return Wrap(spacing: 2, runSpacing: 2, children: children);
+    }
 
-  Widget _interactiveKey(String label, IconData icon, String value) {
-    return GestureDetector(
-      onTap: () => provider.sendRawInput(value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: AppTheme.bgPrimary,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.borderColor),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: AppTheme.brand),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
-            ),
-          ],
-        ),
-      ),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: children),
     );
   }
 }
@@ -494,27 +569,36 @@ class _ToolBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  const _ToolBtn(this.icon, this.label, this.onTap);
+  final bool compact;
+
+  const _ToolBtn(this.icon, this.label, this.onTap, {this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 1),
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 6 : 7,
+            vertical: compact ? 5 : 4,
+          ),
           decoration: BoxDecoration(borderRadius: BorderRadius.circular(4)),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 14, color: AppTheme.textSecondary),
-              const SizedBox(width: 3),
+              Icon(
+                icon,
+                size: compact ? 15 : 14,
+                color: AppTheme.textSecondary,
+              ),
+              SizedBox(width: compact ? 4 : 3),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppTheme.textTertiary,
-                  fontSize: 10,
+                  fontSize: compact ? 10.5 : 10,
                 ),
               ),
             ],

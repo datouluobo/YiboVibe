@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/session.dart';
 import '../models/device.dart';
 import '../models/event_message.dart';
+import '../models/terminal_screen_state.dart';
 import '../services/api_service.dart';
 import '../services/signal_client.dart';
 import '../utils/terminal_text_formatter.dart';
@@ -30,6 +31,12 @@ class SessionProvider extends ChangeNotifier {
   final Map<String, String> _ansiCarryBySession = {};
   final Map<String, String> _pendingEchoBySession = {};
   final Map<String, DateTime> _closingSessions = {};
+  final Map<String, String> _renderModeBySession = {};
+  final Map<String, String> _renderReasonBySession = {};
+  final Map<String, TerminalScreenState> _screenStateBySession = {};
+  final Map<String, int> _lastScreenSeqBySession = {};
+  String? _preferredSessionId;
+  DateTime? _preferredSessionSetAt;
 
   Timer? _pollTimer;
   String? _lastInitToken;
@@ -43,6 +50,18 @@ class SessionProvider extends ChangeNotifier {
   String? get error => _error;
   bool get isDialogMode => _isDialogMode;
   List<int> get onlineDeviceIds => _onlineDeviceIds;
+  String renderModeForSession(String sessionId) =>
+      _renderModeBySession[sessionId] ?? 'text';
+  String renderReasonForSession(String sessionId) =>
+      _renderReasonBySession[sessionId] ?? 'none';
+  int? lastScreenSeqForSession(String sessionId) =>
+      _lastScreenSeqBySession[sessionId];
+  bool get isScreenMode =>
+      _activeSession != null &&
+      renderModeForSession(_activeSession!.sessionId) == 'screen';
+  TerminalScreenState? get activeScreenState => _activeSession == null
+      ? null
+      : _screenStateBySession[_activeSession!.sessionId];
 
   StreamSubscription<EventMessage>? _eventSub;
   StreamSubscription<bool>? _connSub;
@@ -78,6 +97,8 @@ class SessionProvider extends ChangeNotifier {
       _devices = [];
       _sessions = [];
       _activeSession = null;
+      _preferredSessionId = null;
+      _preferredSessionSetAt = null;
       _onlineDeviceIds = [];
       _error = null;
       _lastInitToken = authKey;
@@ -108,6 +129,7 @@ class SessionProvider extends ChangeNotifier {
   Future<void> _pollSessions() async {
     try {
       _purgeClosingSessions();
+      final previousSessions = List<Session>.from(_sessions);
       final sessionData = await _api.getSessions();
       var newSessions = sessionData.map((s) => Session.fromJson(s)).toList();
 
@@ -136,6 +158,7 @@ class SessionProvider extends ChangeNotifier {
 
       if (_listChanged(_sessions, newSessions)) {
         _sessions = newSessions;
+        _selectNewestAddedSession(previousSessions, newSessions);
         _syncActiveSession();
         notifyListeners();
       }
@@ -200,6 +223,28 @@ class SessionProvider extends ChangeNotifier {
   }
 
   void _syncActiveSession() {
+    if (_preferredSessionId != null) {
+      final preferred = _sessions
+          .where((s) => s.sessionId == _preferredSessionId)
+          .firstOrNull;
+      if (preferred != null) {
+        _activeSession = preferred;
+        _maybeRequestActiveScreenSnapshot();
+        return;
+      }
+      final preferredStillFresh =
+          _preferredSessionSetAt != null &&
+          DateTime.now().difference(_preferredSessionSetAt!) <
+              const Duration(seconds: 4);
+      if (preferredStillFresh &&
+          _activeSession?.sessionId == _preferredSessionId) {
+        _maybeRequestActiveScreenSnapshot();
+        return;
+      }
+      _preferredSessionId = null;
+      _preferredSessionSetAt = null;
+    }
+
     if (_activeSession == null) {
       // 默认选第一个
       if (_sessions.isNotEmpty) {
@@ -218,6 +263,7 @@ class SessionProvider extends ChangeNotifier {
         _activeSession = null;
       }
     }
+    _maybeRequestActiveScreenSnapshot();
   }
 
   /// 单次加载设备列表和 session 列表
@@ -226,6 +272,7 @@ class SessionProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final previousSessions = List<Session>.from(_sessions);
       // 加载设备列表 — 失败不阻塞 sessions
       try {
         final deviceData = await _api.getDevices();
@@ -253,6 +300,7 @@ class SessionProvider extends ChangeNotifier {
       } catch (_) {}
 
       _sessions = _normalizeSessions(_sessions);
+      _selectNewestAddedSession(previousSessions, _sessions);
       _syncActiveSession();
       _error = null;
     } catch (e) {
@@ -271,17 +319,24 @@ class SessionProvider extends ChangeNotifier {
       return;
     }
 
+    if (_handleScreenEvent(normalizedEvent)) {
+      notifyListeners();
+      return;
+    }
+
     if (normalizedEvent.type == EventType.sessionListUpdate) {
       // session:list_update / session:update / session:register — 实时同步session变更
       try {
         final decoded = jsonDecode(normalizedEvent.text);
         if (decoded is List) {
+          final previousSessions = List<Session>.from(_sessions);
           _sessions = _normalizeSessions(
             decoded
                 .whereType<Map<String, dynamic>>()
                 .map(Session.fromJson)
                 .toList(),
           );
+          _selectNewestAddedSession(previousSessions, _sessions);
         } else if (decoded is Map<String, dynamic>) {
           final action = decoded['action'] as String?;
           final sessionData = decoded['session'] as Map<String, dynamic>?;
@@ -372,6 +427,25 @@ class SessionProvider extends ChangeNotifier {
     _sessions = _normalizeSessions(_sessions);
   }
 
+  void _selectNewestAddedSession(
+    List<Session> previous,
+    List<Session> current,
+  ) {
+    final previousIds = previous.map((session) => session.sessionId).toSet();
+    final added = current
+        .where((session) => !previousIds.contains(session.sessionId))
+        .toList();
+    if (added.isEmpty) return;
+    added.sort((left, right) {
+      final leftStarted = left.startedAt?.millisecondsSinceEpoch ?? 0;
+      final rightStarted = right.startedAt?.millisecondsSinceEpoch ?? 0;
+      return leftStarted.compareTo(rightStarted);
+    });
+    _activeSession = added.last;
+    _preferredSessionId = _activeSession?.sessionId;
+    _preferredSessionSetAt = DateTime.now();
+  }
+
   /// 检查是否有桌面端在线（除了移动端自己之外的在线设备）
   bool _isDesktopOnline() {
     return _onlineDeviceIds.where((id) => id != _auth.deviceId).isNotEmpty;
@@ -410,6 +484,9 @@ class SessionProvider extends ChangeNotifier {
   /// 当前活跃 session
   void selectSession(Session session) {
     _activeSession = session;
+    _preferredSessionId = session.sessionId;
+    _preferredSessionSetAt = DateTime.now();
+    _maybeRequestActiveScreenSnapshot();
     notifyListeners();
   }
 
@@ -425,6 +502,9 @@ class SessionProvider extends ChangeNotifier {
   }
 
   bool get isInteractiveSession {
+    if (isScreenMode) {
+      return true;
+    }
     final events = activeSessionEvents.reversed.take(24);
     for (final event in events) {
       if (TerminalTextFormatter.looksLikeInteractiveSurface(event.text)) {
@@ -451,6 +531,12 @@ class SessionProvider extends ChangeNotifier {
   /// 发送输入
   void sendInput(String text) {
     if (_activeSession == null) return;
+    if (isScreenMode) {
+      _previewScreenInput(text);
+      _signal.sendInput(_activeSession!.sessionId, text);
+      notifyListeners();
+      return;
+    }
     final command = text.trim();
     if (command.isNotEmpty) {
       _pendingEchoBySession[_activeSession!.sessionId] = command;
@@ -471,8 +557,165 @@ class SessionProvider extends ChangeNotifier {
 
   void sendRawInput(String text) {
     if (_activeSession == null || text.isEmpty) return;
+    _previewScreenInput(text);
     _signal.sendInput(_activeSession!.sessionId, text);
     notifyListeners();
+  }
+
+  void _previewScreenInput(String text) {
+    if (!isScreenMode || text.isEmpty) return;
+    final session = _activeSession;
+    if (session == null) return;
+    if (text.contains('\x1B')) return;
+    final state = _screenStateBySession[session.sessionId];
+    state?.applyLocalInputPreview(text);
+  }
+
+  void _maybeRequestActiveScreenSnapshot() {
+    final session = _activeSession;
+    if (session == null) return;
+    if (renderModeForSession(session.sessionId) != 'screen') return;
+    if (_screenStateBySession.containsKey(session.sessionId)) return;
+    _signal.requestScreenSnapshot(
+      session.sessionId,
+      lastSeq: _lastScreenSeqBySession[session.sessionId],
+    );
+  }
+
+  bool _handleScreenEvent(EventMessage event) {
+    switch (event.wireType) {
+      case 'session:screen_mode':
+        final payload = _decodePayload(event.text);
+        if (payload == null) return false;
+        final sessionId = payload['session_id'] as String? ?? event.sessionId;
+        if (sessionId.isEmpty) return false;
+        final mode = payload['mode'] as String? ?? 'text';
+        final reason = payload['reason'] as String? ?? 'none';
+        final allowScreen = mode == 'screen'
+            ? _shouldUseScreenMode(
+                reason: reason,
+                state: _screenStateBySession[sessionId],
+              )
+            : false;
+        _renderModeBySession[sessionId] = allowScreen ? 'screen' : 'text';
+        _renderReasonBySession[sessionId] = reason;
+        final seq = (payload['seq'] as num?)?.toInt();
+        if (seq != null) {
+          _lastScreenSeqBySession[sessionId] = seq;
+        }
+        if (!allowScreen) {
+          _screenStateBySession.remove(sessionId);
+        } else if (_screenStateBySession[sessionId] == null) {
+          _signal.requestScreenSnapshot(
+            sessionId,
+            lastSeq: _lastScreenSeqBySession[sessionId],
+          );
+        }
+        return true;
+      case 'session:screen_snapshot':
+        final payload = _decodePayload(event.text);
+        if (payload == null) return false;
+        final snapshot = TerminalScreenState.fromJson(payload);
+        final lastSeq = _lastScreenSeqBySession[snapshot.sessionId] ?? -1;
+        if (snapshot.seq <= lastSeq) {
+          return true;
+        }
+        _screenStateBySession[snapshot.sessionId] = snapshot;
+        _lastScreenSeqBySession[snapshot.sessionId] = snapshot.seq;
+        final reason = _renderReasonBySession[snapshot.sessionId] ?? 'snapshot';
+        final allowScreen = _shouldUseScreenMode(
+          reason: reason,
+          state: snapshot,
+        );
+        _renderModeBySession[snapshot.sessionId] = allowScreen
+            ? 'screen'
+            : 'text';
+        _renderReasonBySession[snapshot.sessionId] = reason;
+        if (!allowScreen) {
+          _screenStateBySession.remove(snapshot.sessionId);
+        }
+        return true;
+      case 'session:screen_patch':
+        final payload = _decodePayload(event.text);
+        if (payload == null) return false;
+        final sessionId = payload['session_id'] as String? ?? event.sessionId;
+        if (sessionId.isEmpty) return false;
+        final seq = (payload['seq'] as num?)?.toInt() ?? 0;
+        final lastSeq = _lastScreenSeqBySession[sessionId] ?? 0;
+        final state = _screenStateBySession[sessionId];
+        if (state == null) {
+          _signal.requestScreenSnapshot(sessionId, lastSeq: lastSeq);
+          return true;
+        }
+        if (seq <= lastSeq) {
+          return true;
+        }
+        if (seq > lastSeq + 1) {
+          _signal.requestScreenSnapshot(sessionId, lastSeq: lastSeq);
+          return true;
+        }
+        state.applyPatch(payload);
+        final nextState = state.copyWith(seq: seq);
+        _lastScreenSeqBySession[sessionId] = seq;
+        final reason = _renderReasonBySession[sessionId] ?? 'patch';
+        final allowScreen = _shouldUseScreenMode(
+          reason: reason,
+          state: nextState,
+        );
+        if (allowScreen) {
+          _screenStateBySession[sessionId] = nextState;
+          _renderModeBySession[sessionId] = 'screen';
+        } else {
+          _screenStateBySession.remove(sessionId);
+          _renderModeBySession[sessionId] = 'text';
+        }
+        _renderReasonBySession[sessionId] = reason;
+        return true;
+      case 'session:screen_resize':
+        final payload = _decodePayload(event.text);
+        if (payload == null) return false;
+        final sessionId = payload['session_id'] as String? ?? event.sessionId;
+        if (sessionId.isEmpty) return false;
+        _signal.requestScreenSnapshot(
+          sessionId,
+          lastSeq: _lastScreenSeqBySession[sessionId],
+        );
+        return true;
+      case 'session:screen_reset':
+        final payload = _decodePayload(event.text);
+        final sessionId = payload?['session_id'] as String? ?? event.sessionId;
+        if (sessionId.isEmpty) return false;
+        _screenStateBySession.remove(sessionId);
+        _lastScreenSeqBySession.remove(sessionId);
+        _renderReasonBySession[sessionId] = 'reset';
+        _signal.requestScreenSnapshot(sessionId);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Map<String, dynamic>? _decodePayload(String text) {
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  bool _shouldUseScreenMode({
+    required String reason,
+    TerminalScreenState? state,
+  }) {
+    if (reason == 'alternate_screen' || reason == 'known_tui') {
+      return true;
+    }
+    return state?.activeBuffer == 'alternate' || state?.mouseSupport == true;
   }
 
   EventMessage? _normalizeEventForDisplay(EventMessage event) {
@@ -574,7 +817,25 @@ class SessionProvider extends ChangeNotifier {
 
   /// 创建新 session
   void createSession(String shellKind) {
-    _signal.createSession(shellKind);
+    final sessionId = _signal.createSession(shellKind);
+    final provisional = Session(
+      sessionId: sessionId,
+      ownerDevice: _auth.deviceId ?? 0,
+      title: sessionId.substring(0, sessionId.length.clamp(0, 18)),
+      shellKind: shellKind,
+      cwd: '',
+      status: 'running',
+      startedAt: DateTime.now(),
+      lastActiveAt: DateTime.now(),
+    );
+    _upsertSession(provisional);
+    _activeSession = _sessions
+        .where((session) => session.sessionId == sessionId)
+        .firstOrNull ??
+        provisional;
+    _preferredSessionId = sessionId;
+    _preferredSessionSetAt = DateTime.now();
+    notifyListeners();
     unawaited(
       Future<void>.delayed(const Duration(milliseconds: 600), () async {
         _signal.requestSessions();

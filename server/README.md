@@ -254,7 +254,7 @@ curl --noproxy '*' http://127.0.0.1:11434/api/v1/ping
 如果这里返回：
 
 ```json
-{"message":"pong","version":"server-2026-05-18-r1"}
+{"message":"pong","version":"0.9.7"}
 ```
 
 说明 NAS 已运行新服务端镜像。

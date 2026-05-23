@@ -67,6 +67,15 @@ class _ConsolePageState extends State<ConsolePage> {
         final statusColor = session != null
             ? AppTheme.sessionStatusColor(session.status)
             : AppTheme.statusGray;
+        final renderMode = session == null
+            ? 'text'
+            : provider.renderModeForSession(session.sessionId);
+        final renderReason = session == null
+            ? 'none'
+            : provider.renderReasonForSession(session.sessionId);
+        final renderSeq = session == null
+            ? null
+            : provider.lastScreenSeqForSession(session.sessionId);
 
         return Scaffold(
           key: _scaffoldKey,
@@ -80,6 +89,9 @@ class _ConsolePageState extends State<ConsolePage> {
                 session,
                 connected,
                 statusColor,
+                renderMode,
+                renderReason,
+                renderSeq,
               ),
               // 主视图区 — 最大化
               Expanded(
@@ -103,6 +115,9 @@ class _ConsolePageState extends State<ConsolePage> {
     Session? session,
     bool connected,
     Color statusColor,
+    String renderMode,
+    String renderReason,
+    int? renderSeq,
   ) {
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
@@ -112,119 +127,132 @@ class _ConsolePageState extends State<ConsolePage> {
       ),
       child: SafeArea(
         bottom: false,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              height: 34,
-              child: Row(
-                children: [
-                  Builder(
-                    builder: (innerContext) => GestureDetector(
-                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                      child: const Padding(
-                        padding: EdgeInsets.all(6),
-                        child: Icon(
-                          Icons.dns_outlined,
-                          size: 18,
-                          color: AppTheme.textSecondary,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 390;
+            return Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  height: 34,
+                  child: Row(
+                    children: [
+                      Builder(
+                        builder: (innerContext) => GestureDetector(
+                          onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                          child: Padding(
+                            padding: EdgeInsets.all(compact ? 5 : 6),
+                            child: const Icon(
+                              Icons.dns_outlined,
+                              size: 18,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: () {
-                      if (!connected) {
-                        provider.loadDevicesAndSessions();
-                        provider.initWithAuth();
-                      }
-                    },
-                    child: Tooltip(
-                      message: connected
-                          ? '已连接'
-                          : (provider.error ?? '未连接，点击重试'),
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: connected
-                              ? AppTheme.statusGreen
-                              : AppTheme.statusRed,
-                          shape: BoxShape.circle,
+                      SizedBox(width: compact ? 4 : 6),
+                      GestureDetector(
+                        onTap: () {
+                          if (!connected) {
+                            provider.loadDevicesAndSessions();
+                            provider.initWithAuth();
+                          }
+                        },
+                        child: Tooltip(
+                          message: connected
+                              ? '已连接'
+                              : (provider.error ?? '未连接，点击重试'),
+                          child: Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: connected
+                                  ? AppTheme.statusGreen
+                                  : AppTheme.statusRed,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => provider.loadDevicesAndSessions(),
-                      child: Text(
-                        session != null
-                            ? '${provider.sessionDisplayTitle(session)}  ·  ${_statusLabel(session.status)}'
-                            : '无活跃 Session',
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                      SizedBox(width: compact ? 6 : 8),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => provider.loadDevicesAndSessions(),
+                          child: Text(
+                            session != null
+                                ? '${provider.sessionDisplayTitle(session)}  ·  ${_statusLabel(session.status)}'
+                                : '无活跃 Session',
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                  ),
-                  Container(
-                    margin: const EdgeInsets.only(right: 6),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.bgTertiary,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: AppTheme.borderColor),
-                    ),
-                    child: Text(
-                      mobileAppVersion,
-                      style: const TextStyle(
-                        color: AppTheme.textTertiary,
-                        fontSize: 10,
-                        fontFamily: 'monospace',
+                      SizedBox(width: compact ? 4 : 6),
+                      _RenderModeBadge(
+                        mode: renderMode,
+                        reason: renderReason,
+                        seq: renderSeq,
+                        compact: compact,
                       ),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () => _showNewSessionDialog(context, provider),
-                    child: const Padding(
-                      padding: EdgeInsets.all(6),
-                      child: Icon(
-                        Icons.add,
-                        size: 18,
-                        color: AppTheme.textSecondary,
+                      if (!compact)
+                        Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.bgTertiary,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppTheme.borderColor),
+                          ),
+                          child: Text(
+                            mobileAppVersion,
+                            style: const TextStyle(
+                              color: AppTheme.textTertiary,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ),
+                      GestureDetector(
+                        onTap: () => _showNewSessionDialog(context, provider),
+                        child: Padding(
+                          padding: EdgeInsets.all(compact ? 5 : 6),
+                          child: const Icon(
+                            Icons.add,
+                            size: 18,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  GestureDetector(
-                    onTap: () => _logout(context),
-                    child: const Padding(
-                      padding: EdgeInsets.all(6),
-                      child: Icon(
-                        Icons.logout,
-                        size: 16,
-                        color: AppTheme.textTertiary,
+                      SizedBox(width: compact ? 2 : 4),
+                      GestureDetector(
+                        onTap: () => _logout(context),
+                        child: Padding(
+                          padding: EdgeInsets.all(compact ? 5 : 6),
+                          child: const Icon(
+                            Icons.logout,
+                            size: 16,
+                            color: AppTheme.textTertiary,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            if (provider.sessions.length > 1)
-              SizedBox(
-                height: 26,
-                child: _buildSessionChips(provider, session),
-              ),
-          ],
+                ),
+                if (provider.sessions.length > 1)
+                  SizedBox(
+                    height: 26,
+                    child: _buildSessionChips(provider, session),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -383,6 +411,80 @@ class _ConsolePageState extends State<ConsolePage> {
     if (context.mounted) {
       Navigator.of(context).popUntil((route) => route.isFirst);
     }
+  }
+}
+
+class _RenderModeBadge extends StatelessWidget {
+  final String mode;
+  final String reason;
+  final int? seq;
+  final bool compact;
+
+  const _RenderModeBadge({
+    required this.mode,
+    required this.reason,
+    required this.seq,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isScreen = mode == 'screen';
+    final bg = isScreen
+        ? AppTheme.statusGreen.withAlpha(18)
+        : AppTheme.statusYellow.withAlpha(16);
+    final border = isScreen
+        ? AppTheme.statusGreen.withAlpha(80)
+        : AppTheme.statusYellow.withAlpha(90);
+    final textColor = isScreen ? AppTheme.statusGreen : const Color(0xFF9A6700);
+    final label = isScreen ? 'SCREEN' : 'TEXT';
+    final normalizedReason = reason.isEmpty || reason == 'none'
+        ? 'idle'
+        : reason;
+    final detail = compact
+        ? ''
+        : (seq == null ? normalizedReason : '$normalizedReason #$seq');
+
+    return Tooltip(
+      message: 'render=$mode, reason=$reason, seq=${seq ?? '-'}',
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 6 : 7,
+          vertical: compact ? 3 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: textColor,
+                fontSize: compact ? 9 : 9.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+            if (detail.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              Text(
+                detail,
+                style: const TextStyle(
+                  color: AppTheme.textTertiary,
+                  fontSize: 8.5,
+                  fontFamily: 'monospace',
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 

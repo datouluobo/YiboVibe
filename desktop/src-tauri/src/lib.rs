@@ -11,6 +11,7 @@ use tokio::time::{self, Duration};
 mod agent_bridge;
 mod probe;
 mod terminal;
+mod terminal_screen;
 
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
@@ -36,7 +37,6 @@ use yibovibe_core::ws::WsClient;
 
 const MAIN_WINDOW_DEFAULT_WIDTH: f64 = 1440.0;
 const MAIN_WINDOW_DEFAULT_HEIGHT: f64 = 900.0;
-const DESKTOP_DEBUG_LABEL: &str = "d-0522-r12";
 const SESSION_CLOSE_TOMBSTONE_SECS: u64 = 8;
 
 // We can store shared state here later, like the WsClient channel for sending new text.
@@ -114,7 +114,6 @@ struct FlowSyncDiagnostics {
 #[derive(serde::Serialize)]
 struct DesktopBuildLabel {
     app_version: String,
-    debug_label: String,
     build_id: String,
 }
 
@@ -2184,7 +2183,6 @@ fn set_flowsync_receive_only_mode(enabled: bool) -> Result<bool, String> {
 fn get_desktop_build_label() -> Result<DesktopBuildLabel, String> {
     Ok(DesktopBuildLabel {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        debug_label: DESKTOP_DEBUG_LABEL.to_string(),
         build_id: env!("YIBOVIBE_BUILD_ID").to_string(),
     })
 }
@@ -3738,6 +3736,49 @@ fn spawn_ws_broker(
                     if !session_id.is_empty() {
                         let mut mgr = sm.lock().await;
                         let _ = mgr.resize_session(session_id, cols, rows).await;
+                        let _ = sync_tx
+                            .send(yibovibe_core::ws::WsMessage {
+                                sender_uid: 0,
+                                sender_device_id: 0,
+                                target_devices: vec![],
+                                r#type: "session:screen_resize".to_string(),
+                                payload: serde_json::json!({
+                                    "session_id": session_id,
+                                    "cols": cols,
+                                    "rows": rows,
+                                }),
+                            })
+                            .await;
+                    }
+                }
+                "session:screen_request_snapshot" => {
+                    let session_id = msg.payload["session_id"].as_str().unwrap_or("");
+                    if !session_id.is_empty() {
+                        let mgr = sm.lock().await;
+                        match mgr.request_screen_snapshot(session_id).await {
+                            Ok(snapshot) => {
+                                let _ = sync_tx
+                                    .send(yibovibe_core::ws::WsMessage {
+                                        sender_uid: 0,
+                                        sender_device_id: 0,
+                                        target_devices: if msg.sender_device_id > 0 {
+                                            vec![msg.sender_device_id]
+                                        } else {
+                                            vec![]
+                                        },
+                                        r#type: "session:screen_snapshot".to_string(),
+                                        payload: serde_json::to_value(snapshot)
+                                            .unwrap_or_else(|_| serde_json::json!({})),
+                                    })
+                                    .await;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "[WS Broker] Screen snapshot request for {} failed: {}",
+                                    session_id, err
+                                );
+                            }
+                        }
                     }
                 }
                 _ => {}

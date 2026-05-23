@@ -2,6 +2,10 @@
 // Use a real pseudo terminal so interactive shells and TUIs keep prompts,
 // completion, cursor movement, and full-screen layouts.
 
+use crate::terminal_screen::{
+    ScreenUpdate, TerminalRenderMode, TerminalScreenEngine, TerminalScreenModeChange,
+    TerminalScreenPatch, TerminalScreenSnapshot,
+};
 use encoding_rs::GBK;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -221,6 +225,7 @@ struct PtySession {
     exit_code: Arc<StdMutex<Option<i32>>>,
     error_message: Arc<StdMutex<Option<String>>>,
     input_sync_state: Arc<StdMutex<InputSyncState>>,
+    screen_engine: Arc<StdMutex<TerminalScreenEngine>>,
 }
 
 #[derive(Default)]
@@ -303,6 +308,7 @@ impl PtySession {
     }
 
     fn new_with_id(session_id: SessionId, shell_kind: String, cwd: String) -> Self {
+        let screen_session_id = session_id.clone();
         Self {
             session_id,
             shell_kind: normalize_shell_kind(&shell_kind),
@@ -319,6 +325,11 @@ impl PtySession {
             exit_code: Arc::new(StdMutex::new(None)),
             error_message: Arc::new(StdMutex::new(None)),
             input_sync_state: Arc::new(StdMutex::new(InputSyncState::default())),
+            screen_engine: Arc::new(StdMutex::new(TerminalScreenEngine::new(
+                32,
+                120,
+                screen_session_id,
+            ))),
         }
     }
 
@@ -440,6 +451,9 @@ impl PtySession {
 
         let pty_system = native_pty_system();
         let (cols, rows) = initial_size.unwrap_or((120, 32));
+        if let Ok(mut engine) = self.screen_engine.lock() {
+            *engine = TerminalScreenEngine::new(rows, cols, self.session_id.clone());
+        }
         let pair = pty_system
             .openpty(PtySize {
                 rows,
@@ -578,7 +592,11 @@ impl PtySession {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| format!("pty resize failed: {e}"))
+            .map_err(|e| format!("pty resize failed: {e}"))?;
+        if let Ok(mut engine) = self.screen_engine.lock() {
+            engine.resize(cols, rows);
+        }
+        Ok(())
     }
 
     fn kill(&mut self) {
@@ -591,6 +609,14 @@ impl PtySession {
             state.suppress_echo.clear();
             state.escape_sequence.clear();
         }
+    }
+
+    fn request_screen_snapshot(&self) -> Result<TerminalScreenSnapshot, String> {
+        let mut engine = self
+            .screen_engine
+            .lock()
+            .map_err(|_| "screen engine lock poisoned".to_string())?;
+        Ok(engine.request_snapshot())
     }
 }
 
@@ -692,10 +718,18 @@ impl SessionManager {
         let exit_app = app_handle.clone();
         let ws_tx_out = ws_tx.clone();
         let sync_filter = session.input_sync_state.clone();
+        let screen_engine = session.screen_engine.clone();
         session.start_with_callbacks(
             initial_size,
             move |text| {
                 let _ = stdout_app.emit(&format!("term:stdout:{stdout_sid}"), &text);
+
+                let screen_messages =
+                    collect_screen_ws_messages(&screen_engine, &stdout_sid, &text);
+                for msg in screen_messages {
+                    let _ = ws_tx_out.try_send(msg);
+                }
+
                 let filtered = filter_sync_output(&sync_filter, &text);
                 let Some(text) = filtered else {
                     return;
@@ -778,6 +812,17 @@ impl SessionManager {
         session.resize(cols, rows)
     }
 
+    pub async fn request_screen_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<TerminalScreenSnapshot, String> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        session.request_screen_snapshot()
+    }
+
     pub async fn kill_session(&mut self, session_id: &str) -> Result<(), String> {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.kill();
@@ -815,6 +860,84 @@ pub type SharedSessionManager = Arc<Mutex<SessionManager>>;
 
 pub fn new_shared_manager(default_shell: &str) -> SharedSessionManager {
     Arc::new(Mutex::new(SessionManager::new(default_shell)))
+}
+
+fn collect_screen_ws_messages(
+    engine: &Arc<StdMutex<TerminalScreenEngine>>,
+    session_id: &str,
+    text: &str,
+) -> Vec<yibovibe_core::ws::WsMessage> {
+    let mut messages = Vec::new();
+    let Ok(mut engine) = engine.lock() else {
+        return messages;
+    };
+
+    match engine.process(text) {
+        ScreenUpdate::None => {}
+        ScreenUpdate::ModeChange(change) => {
+            let entered_screen = change.mode == TerminalRenderMode::Screen;
+            messages.push(screen_mode_message(change));
+            if entered_screen {
+                let snapshot = engine.request_snapshot();
+                messages.push(screen_snapshot_message(snapshot));
+            }
+        }
+        ScreenUpdate::Snapshot(snapshot) => {
+            messages.push(screen_snapshot_message(snapshot));
+        }
+        ScreenUpdate::Patch(patch) => {
+            messages.push(screen_patch_message(patch));
+        }
+    }
+
+    if messages
+        .iter()
+        .any(|msg| msg.r#type == "session:screen_snapshot")
+    {
+        messages.retain(|msg| msg.r#type != "session:screen_patch");
+    }
+
+    for message in &mut messages {
+        if message.payload["session_id"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty()
+        {
+            message.payload["session_id"] = serde_json::Value::String(session_id.to_string());
+        }
+    }
+
+    messages
+}
+
+fn screen_mode_message(change: TerminalScreenModeChange) -> yibovibe_core::ws::WsMessage {
+    yibovibe_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![],
+        r#type: "session:screen_mode".to_string(),
+        payload: serde_json::to_value(change).unwrap_or_else(|_| serde_json::json!({})),
+    }
+}
+
+fn screen_snapshot_message(snapshot: TerminalScreenSnapshot) -> yibovibe_core::ws::WsMessage {
+    yibovibe_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![],
+        r#type: "session:screen_snapshot".to_string(),
+        payload: serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({})),
+    }
+}
+
+fn screen_patch_message(patch: TerminalScreenPatch) -> yibovibe_core::ws::WsMessage {
+    yibovibe_core::ws::WsMessage {
+        sender_uid: 0,
+        sender_device_id: 0,
+        target_devices: vec![],
+        r#type: "session:screen_patch".to_string(),
+        payload: serde_json::to_value(patch).unwrap_or_else(|_| serde_json::json!({})),
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
