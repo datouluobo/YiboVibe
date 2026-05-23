@@ -19,10 +19,7 @@ class SignalClient {
   Stream<bool> get connectionState => _connectionController.stream;
   bool get isConnected => _channel != null;
 
-  void configure({
-    required String serverUrl,
-    required String token,
-  }) {
+  void configure({required String serverUrl, required String token}) {
     _serverUrl = serverUrl;
     _token = token;
   }
@@ -38,20 +35,24 @@ class SignalClient {
         .replaceFirst('https://', 'wss://');
 
     // 移除末尾 /
-    final base = wsUrl.endsWith('/') ? wsUrl.substring(0, wsUrl.length - 1) : wsUrl;
+    final base = wsUrl.endsWith('/')
+        ? wsUrl.substring(0, wsUrl.length - 1)
+        : wsUrl;
     final uri = Uri.parse('$base/api/v1/sync/ws?token=$_token');
 
     try {
       _channel = WebSocketChannel.connect(uri);
 
       // 等待连接确认（web_socket_channel 3.x 支持 ready）
-      _channel!.ready.then((_) {
-        _connectionController.add(true);
-      }).catchError((error) {
-        _connectionController.add(false);
-        _channel = null;
-        _scheduleReconnect();
-      });
+      _channel!.ready
+          .then((_) {
+            _connectionController.add(true);
+          })
+          .catchError((error) {
+            _connectionController.add(false);
+            _channel = null;
+            _scheduleReconnect();
+          });
 
       _channel!.stream.listen(
         (data) => _handleMessage(data as String),
@@ -140,6 +141,14 @@ class SignalClient {
     if (msgType == 'session_list') {
       text = jsonEncode(payload['sessions'] ?? const []);
     } else if ({
+      'session:screen_mode',
+      'session:screen_snapshot',
+      'session:screen_patch',
+      'session:screen_resize',
+      'session:screen_reset',
+    }.contains(msgType)) {
+      text = jsonEncode(payload);
+    } else if ({
       'session:list_update',
       'session:update',
       'session:register',
@@ -148,7 +157,8 @@ class SignalClient {
     }.contains(msgType)) {
       text = jsonEncode(payload);
     } else {
-      text = innerPayload['text'] as String? ??
+      text =
+          innerPayload['text'] as String? ??
           innerPayload['label'] as String? ??
           payload['text'] as String? ??
           '';
@@ -165,7 +175,8 @@ class SignalClient {
     }
 
     // 提取 state
-    final state = innerPayload['state'] as String? ??
+    final state =
+        innerPayload['state'] as String? ??
         payload['state'] as String? ??
         (msgType == 'session_list' ? 'session_list' : null);
 
@@ -179,20 +190,29 @@ class SignalClient {
       ts = DateTime.now();
     }
 
-    _eventController.add(EventMessage(
-      type: eventType,
-      sessionId: sessionId,
-      text: text,
-      ts: ts,
-      stream: stream,
-      state: state,
-      senderDevice: senderDevice?.toString(),
-    ));
+    _eventController.add(
+      EventMessage(
+        type: eventType,
+        sessionId: sessionId,
+        text: text,
+        ts: ts,
+        stream: stream,
+        state: state,
+        senderDevice: senderDevice?.toString(),
+        wireType: msgType,
+      ),
+    );
   }
 
   /// 映射服务端 WS type → 移动端 EventType
   EventType _mapEnvelopeType(String type) {
     switch (type) {
+      case 'session:screen_mode':
+      case 'session:screen_snapshot':
+      case 'session:screen_patch':
+      case 'session:screen_resize':
+      case 'session:screen_reset':
+        return EventType.controlEvent;
       case 'session:output':
       case 'terminal_output':
         return EventType.terminalOutput;
@@ -223,29 +243,34 @@ class SignalClient {
   void _handleFlatMessage(Map<String, dynamic> data) {
     // session 列表推送
     if (data['type'] == 'session_list') {
-      final sessions = (data['sessions'] as List<dynamic>?)
+      final sessions =
+          (data['sessions'] as List<dynamic>?)
               ?.map((s) => s as Map<String, dynamic>)
               .toList() ??
           [];
-      _eventController.add(EventMessage(
-        type: EventType.sessionState,
-        sessionId: '',
-        text: jsonEncode(sessions),
-        ts: DateTime.now(),
-        state: 'session_list',
-      ));
+      _eventController.add(
+        EventMessage(
+          type: EventType.sessionState,
+          sessionId: '',
+          text: jsonEncode(sessions),
+          ts: DateTime.now(),
+          state: 'session_list',
+        ),
+      );
       return;
     }
 
     // session 状态更新
     if (data['type'] == 'session_state' || data['type'] == 'session:update') {
-      _eventController.add(EventMessage(
-        type: EventType.sessionState,
-        sessionId: data['session_id']?.toString() ?? '',
-        text: data['state']?.toString() ?? '',
-        ts: DateTime.now(),
-        state: data['state']?.toString(),
-      ));
+      _eventController.add(
+        EventMessage(
+          type: EventType.sessionState,
+          sessionId: data['session_id']?.toString() ?? '',
+          text: data['state']?.toString() ?? '',
+          ts: DateTime.now(),
+          state: data['state']?.toString(),
+        ),
+      );
       return;
     }
 
@@ -256,11 +281,7 @@ class SignalClient {
 
   /// 发送文本到指定 session
   void sendInput(String sessionId, String text) {
-    _send({
-      'type': 'session:stdin',
-      'session_id': sessionId,
-      'text': text,
-    });
+    _send({'type': 'session:stdin', 'session_id': sessionId, 'text': text});
   }
 
   /// 控制 session 生命周期
@@ -301,19 +322,23 @@ class SignalClient {
 
   /// 请求 session 列表
   void requestSessions() {
+    _send({'type': 'session:list'});
+  }
+
+  void requestScreenSnapshot(String sessionId, {int? lastSeq}) {
     _send({
-      'type': 'session:list',
+      'type': 'session:screen_request_snapshot',
+      'session_id': sessionId,
+      // ignore: use_null_aware_elements
+      if (lastSeq case final value?) 'last_seq': value,
     });
   }
 
   /// 创建新 session — 通过 session:start 发给桌面端（不存在则自动创建）
-  void createSession(String shellKind) {
+  String createSession(String shellKind) {
     final id = 'mobile-${DateTime.now().millisecondsSinceEpoch}';
-    _send({
-      'type': 'session:start',
-      'session_id': id,
-      'shell_kind': shellKind,
-    });
+    _send({'type': 'session:start', 'session_id': id, 'shell_kind': shellKind});
+    return id;
   }
 
   void _send(Map<String, dynamic> data) {
@@ -323,10 +348,7 @@ class SignalClient {
       payload.remove('type');
       // 服务端 Message 结构只解析 type + payload
       // session_id/text/action 等字段必须放在 payload 里，否则被 json.Unmarshal 丢弃
-      _channel!.sink.add(jsonEncode({
-        'type': type,
-        'payload': payload,
-      }));
+      _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
     }
   }
 

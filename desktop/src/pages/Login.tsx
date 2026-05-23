@@ -43,9 +43,9 @@ export default function Login() {
     }, []);
 
     useEffect(() => {
-        invoke<{ app_version: string; debug_label: string }>("get_desktop_build_label")
+        invoke<{ app_version: string }>("get_desktop_build_label")
             .then((info) => {
-                setDesktopBuildLabel(`v${info.app_version} / ${info.debug_label}`);
+                setDesktopBuildLabel(`v${info.app_version}`);
             })
             .catch(() => {
                 setDesktopBuildLabel("");

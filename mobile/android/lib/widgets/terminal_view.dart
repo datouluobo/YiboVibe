@@ -5,6 +5,7 @@ import '../../models/event_message.dart';
 import '../../providers/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/terminal_text_formatter.dart';
+import 'terminal_surface_view.dart';
 
 /// 终端模式视图 — 等宽字体，日志流风格，原生终端体验
 class TerminalView extends StatefulWidget {
@@ -43,6 +44,10 @@ class _TerminalViewState extends State<TerminalView> {
   Widget build(BuildContext context) {
     final provider = context.watch<SessionProvider>();
     final events = provider.activeSessionEvents;
+    final screenState = provider.activeScreenState;
+    if (provider.isScreenMode && screenState != null) {
+      return TerminalSurfaceView(state: screenState);
+    }
     if (provider.isInteractiveSession) {
       return _InteractiveTerminalSurface(events: events);
     }

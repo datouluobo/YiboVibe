@@ -117,6 +117,7 @@ export default function VibeConsole() {
   const bufferHydrationRef = useRef<Set<string>>(new Set());
   const liveOutputSeenRef = useRef<Set<string>>(new Set());
   const hydratedSnapshotTailRef = useRef<Map<string, string>>(new Map());
+  const initialSessionLoadDoneRef = useRef(false);
 
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => a.started_at - b.started_at),
@@ -311,6 +312,7 @@ export default function VibeConsole() {
 
   const refreshSessions = useCallback(async () => {
     try {
+      const previousIds = new Set(sessions.map((item) => item.session_id));
       const list = (await invoke<SessionInfo[]>("list_sessions")).filter(
         (item) => !closingSessionIdsRef.current.has(item.session_id)
       );
@@ -325,6 +327,14 @@ export default function VibeConsole() {
       }
 
       setSessions(list);
+      const added = list.filter((item) => !previousIds.has(item.session_id));
+      if (initialSessionLoadDoneRef.current && added.length > 0) {
+        const newest = [...added].sort((a, b) => a.started_at - b.started_at)[added.length - 1];
+        if (newest) {
+          activeSessionRef.current = newest.session_id;
+          setSessionId(newest.session_id);
+        }
+      }
       const active = activeSessionRef.current;
       if (!active || !list.some((item) => item.session_id === active)) {
         const fallback = chooseFallbackSession(list);
@@ -604,6 +614,7 @@ export default function VibeConsole() {
           traceDebug("mount:fallback", { fallback, sessionIds: existing.map((item) => item.session_id) });
           activeSessionRef.current = fallback;
           setSessionId(fallback);
+          initialSessionLoadDoneRef.current = true;
           focusTerminal(fallback);
           return;
         }
@@ -611,6 +622,7 @@ export default function VibeConsole() {
         // ignore
       }
 
+      initialSessionLoadDoneRef.current = true;
       await createAndStartSession();
     })();
 
@@ -628,8 +640,9 @@ export default function VibeConsole() {
       });
       terminalBundlesRef.current.clear();
       terminalHostsRef.current.clear();
+      initialSessionLoadDoneRef.current = false;
     };
-  }, []);
+  }, [chooseFallbackSession, createAndStartSession, focusTerminal, syncSessionBindings, traceDebug]);
 
   useEffect(() => {
     void syncSessionBindings(sessions);
