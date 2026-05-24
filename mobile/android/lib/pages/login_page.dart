@@ -12,7 +12,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _serverUrlController = TextEditingController(text: 'https://lisibo.top:98');
+  final _serverUrlController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _deviceNameController = TextEditingController(text: 'Android Phone');
