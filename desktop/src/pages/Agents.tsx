@@ -160,6 +160,15 @@ interface TurnStartResult {
   turn?: CodexTurn;
 }
 
+interface DesktopIpcResponse<T> {
+  type?: string;
+  resultType?: string;
+  method?: string;
+  handledByClientId?: string;
+  result?: T;
+  error?: string;
+}
+
 interface ThreadResumeResult {
   thread?: CodexThread;
 }
@@ -180,7 +189,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r14";
+const CLIENT_VERSION = "0.9.7-r15";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -272,6 +281,14 @@ function getRpcResult<T>(value: unknown): T {
   const envelope = value as RpcEnvelope<T> | undefined | null;
   if (envelope?.error) {
     throw new Error(envelope.error.message || formatJson(envelope.error));
+  }
+  return (envelope?.result ?? {}) as T;
+}
+
+function getIpcResult<T>(value: unknown): T {
+  const envelope = value as DesktopIpcResponse<T> | undefined | null;
+  if (envelope?.resultType === "error" || envelope?.error) {
+    throw new Error(envelope?.error || "Codex Desktop IPC request failed");
   }
   return (envelope?.result ?? {}) as T;
 }
@@ -508,6 +525,17 @@ function Agents() {
     return getRpcResult<T>(response);
   }, []);
 
+  const callDesktopIpc = useCallback(async <T,>(ipcMethod: string, params: unknown, version = 0) => {
+    const response = await invoke<unknown>("codex_desktop_ipc_request", {
+      request: {
+        method: ipcMethod,
+        params,
+        version,
+      },
+    });
+    return getIpcResult<T>(response);
+  }, []);
+
   const projects = useMemo<ProjectSummary[]>(() => {
     const groups = new Map<string, CodexThread[]>();
     for (const thread of threads) {
@@ -677,17 +705,23 @@ function Agents() {
   }, [callRpc, selectedProjectPath]);
 
   useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
+    const unlisteners: UnlistenFn[] = [];
     let refreshTimer: number | undefined;
     const currentThreadId = selectedThread?.id;
 
-    void listen<unknown>("codex-app-server-event", (event) => {
-      const payload = event.payload as {
+    const handleEvent = (rawPayload: unknown) => {
+      const payload = rawPayload as {
         method?: string;
         type?: string;
         line?: string;
         message?: string;
-        params?: { threadId?: string; turnId?: string; status?: string; message?: string };
+        params?: {
+          threadId?: string;
+          turnId?: string;
+          conversationId?: string;
+          status?: string;
+          message?: string;
+        };
       };
       const methodName = payload?.method || payload?.type || "event";
       setLiveEventCount((count) => count + 1);
@@ -702,7 +736,8 @@ function Agents() {
         setLiveWarning(payload?.params?.message || payload?.message || formatJson(payload));
       }
 
-      const belongsToCurrentThread = !payload?.params?.threadId || payload.params.threadId === currentThreadId;
+      const eventThreadId = payload?.params?.threadId || payload?.params?.conversationId;
+      const belongsToCurrentThread = !eventThreadId || eventThreadId === currentThreadId;
       const shouldRefresh =
         belongsToCurrentThread &&
         (methodName === "turn/started" ||
@@ -712,7 +747,8 @@ function Agents() {
           methodName === "item/started" ||
           methodName === "item/updated" ||
           methodName === "item/completed" ||
-          methodName === "item/agentMessage/delta");
+          methodName === "item/agentMessage/delta" ||
+          methodName === "thread-stream-state-changed");
 
       if (shouldRefresh && currentThreadId) {
         if (refreshTimer) window.clearTimeout(refreshTimer);
@@ -722,13 +758,18 @@ function Agents() {
           setSendStatus("");
         }, methodName === "turn/completed" ? 250 : 900);
       }
-    }).then((cleanup) => {
-      unlisten = cleanup;
+    };
+
+    void listen<unknown>("codex-app-server-event", (event) => handleEvent(event.payload)).then((cleanup) => {
+      unlisteners.push(cleanup);
+    });
+    void listen<unknown>("codex-desktop-ipc-event", (event) => handleEvent(event.payload)).then((cleanup) => {
+      unlisteners.push(cleanup);
     });
 
     return () => {
       if (refreshTimer) window.clearTimeout(refreshTimer);
-      if (unlisten) unlisten();
+      unlisteners.forEach((unlisten) => unlisten());
     };
   }, [loadThreadDetail, loadWorkbench, selectedThread?.id]);
 
@@ -773,6 +814,42 @@ function Agents() {
     setIsSendingTurn(true);
 
     try {
+      const turnInput = [
+        {
+          type: "text",
+          text,
+          text_elements: [],
+        },
+      ];
+      const cwd = currentPath && currentPath !== "unknown" ? currentPath : null;
+
+      try {
+        setSendStatus("通过 Codex Desktop 发送...");
+        await callDesktopIpc<{ result?: TurnStartResult }>(
+          "thread-follower-start-turn",
+          {
+            conversationId: selectedThread.id,
+            turnStartParams: {
+              input: turnInput,
+              cwd,
+              model: selectedModel || null,
+              effort: selectedEffort || null,
+              collaborationMode: null,
+            },
+          },
+          1,
+        );
+        setDraftMessage("");
+        setSendStatus("已提交到 Codex Desktop，等待回复...");
+        window.setTimeout(() => {
+          void loadThreadDetail(selectedThread.id);
+          void loadWorkbench();
+        }, 1200);
+        return;
+      } catch (ipcErr) {
+        setLiveWarning(`Codex Desktop IPC 不可用，已回退 stdio：${String(ipcErr)}`);
+      }
+
       const loaded = await callPersistentRpc<ThreadLoadedListResult>("thread/loaded/list", {});
       if (!loaded.data?.includes(selectedThread.id)) {
         setSendStatus("正在载入对话...");
@@ -787,14 +864,8 @@ function Agents() {
       setSendStatus("发送中...");
       const params = {
         threadId: selectedThread.id,
-        input: [
-          {
-            type: "text",
-            text,
-            text_elements: [],
-          },
-        ],
-        cwd: currentPath && currentPath !== "unknown" ? currentPath : null,
+        input: turnInput,
+        cwd,
         model: selectedModel || null,
         effort: selectedEffort || null,
         summary: selectedSummary || null,
@@ -814,6 +885,7 @@ function Agents() {
       setIsSendingTurn(false);
     }
   }, [
+    callDesktopIpc,
     callPersistentRpc,
     config?.service_tier,
     currentPath,

@@ -40,6 +40,14 @@ pub struct CodexAppServerRpcRequest {
     pub params: Value,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CodexDesktopIpcRequest {
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+    pub version: Option<u32>,
+}
+
 struct CodexAppServerSession {
     stdin: Mutex<tokio::process::ChildStdin>,
     child: Mutex<Option<tokio::process::Child>>,
@@ -79,6 +87,14 @@ pub async fn disconnect_persistent_session() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub async fn desktop_ipc_request(
+    app: AppHandle,
+    request: CodexDesktopIpcRequest,
+) -> Result<Value, String> {
+    let method = trimmed_non_empty(&request.method, "IPC method")?;
+    desktop_ipc_request_platform(app, method, request.params, request.version.unwrap_or(0)).await
 }
 
 async fn ensure_persistent_session(app: AppHandle) -> Result<Arc<CodexAppServerSession>, String> {
@@ -621,6 +637,174 @@ async fn probe_named_pipe(
     })
 }
 
+#[cfg(windows)]
+async fn desktop_ipc_request_platform(
+    app: AppHandle,
+    method: String,
+    params: Value,
+    version: u32,
+) -> Result<Value, String> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const CODEX_IPC_PIPE: &str = r"\\.\pipe\codex-ipc";
+    const INITIALIZING_CLIENT: &str = "initializing-client";
+
+    let mut client = ClientOptions::new()
+        .open(CODEX_IPC_PIPE)
+        .map_err(|err| format!("Failed to open Codex Desktop IPC pipe {CODEX_IPC_PIPE}: {err}"))?;
+
+    let initialize_id = uuid::Uuid::new_v4().to_string();
+    let initialize = serde_json::json!({
+        "type": "request",
+        "requestId": initialize_id,
+        "sourceClientId": INITIALIZING_CLIENT,
+        "method": "initialize",
+        "params": {
+            "clientType": "yibovibe-desktop"
+        }
+    });
+    write_ipc_frame(&mut client, &initialize).await?;
+
+    let initialize_response = read_ipc_response(
+        &mut client,
+        &app,
+        initialize_id.as_str(),
+        Duration::from_secs(5),
+    )
+    .await?;
+
+    if initialize_response
+        .get("resultType")
+        .and_then(Value::as_str)
+        != Some("success")
+    {
+        return Err(format!(
+            "Codex Desktop IPC initialize failed: {}",
+            format_json_compact(&initialize_response)
+        ));
+    }
+
+    let client_id = initialize_response
+        .get("result")
+        .and_then(|value| value.get("clientId"))
+        .and_then(Value::as_str)
+        .ok_or("Codex Desktop IPC initialize did not return a clientId")?
+        .to_string();
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let body = serde_json::json!({
+        "type": "request",
+        "requestId": request_id,
+        "sourceClientId": client_id,
+        "version": version,
+        "method": method,
+        "params": params,
+    });
+    write_ipc_frame(&mut client, &body).await?;
+
+    read_ipc_response(
+        &mut client,
+        &app,
+        request_id.as_str(),
+        Duration::from_secs(12),
+    )
+    .await
+}
+
+#[cfg(windows)]
+async fn write_ipc_frame(
+    client: &mut tokio::net::windows::named_pipe::NamedPipeClient,
+    body: &Value,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let payload =
+        serde_json::to_vec(body).map_err(|err| format!("Failed to encode IPC JSON: {err}"))?;
+    let len = u32::try_from(payload.len()).map_err(|_| "IPC payload is too large".to_string())?;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&len.to_le_bytes());
+    frame.extend_from_slice(&payload);
+    timeout(Duration::from_secs(3), client.write_all(&frame))
+        .await
+        .map_err(|_| "Timed out writing Codex Desktop IPC frame".to_string())?
+        .map_err(|err| format!("Failed to write Codex Desktop IPC frame: {err}"))
+}
+
+#[cfg(windows)]
+async fn read_ipc_response(
+    client: &mut tokio::net::windows::named_pipe::NamedPipeClient,
+    app: &AppHandle,
+    request_id: &str,
+    wait_for: Duration,
+) -> Result<Value, String> {
+    timeout(wait_for, async {
+        loop {
+            let message = read_ipc_frame(client).await?;
+            let message_type = message.get("type").and_then(Value::as_str).unwrap_or("");
+
+            if message_type == "response"
+                && message.get("requestId").and_then(Value::as_str) == Some(request_id)
+            {
+                if message.get("resultType").and_then(Value::as_str) == Some("error") {
+                    return Err(message
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| format_json_compact(&message)));
+                }
+                return Ok(message);
+            }
+
+            if message_type == "client-discovery-request" {
+                if let Some(discovery_id) = message.get("requestId").and_then(Value::as_str) {
+                    let response = serde_json::json!({
+                        "type": "client-discovery-response",
+                        "requestId": discovery_id,
+                        "response": {
+                            "canHandle": false
+                        }
+                    });
+                    write_ipc_frame(client, &response).await?;
+                }
+                continue;
+            }
+
+            let _ = app.emit("codex-desktop-ipc-event", message);
+        }
+    })
+    .await
+    .map_err(|_| format!("Timed out waiting for Codex Desktop IPC response to {request_id}"))?
+}
+
+#[cfg(windows)]
+async fn read_ipc_frame(
+    client: &mut tokio::net::windows::named_pipe::NamedPipeClient,
+) -> Result<Value, String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut len_bytes = [0u8; 4];
+    client
+        .read_exact(&mut len_bytes)
+        .await
+        .map_err(|err| format!("Failed to read Codex Desktop IPC frame length: {err}"))?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    if len > 256 * 1024 * 1024 {
+        return Err(format!("Codex Desktop IPC frame is too large: {len} bytes"));
+    }
+
+    let mut payload = vec![0u8; len];
+    client
+        .read_exact(&mut payload)
+        .await
+        .map_err(|err| format!("Failed to read Codex Desktop IPC frame payload: {err}"))?;
+    serde_json::from_slice::<Value>(&payload)
+        .map_err(|err| format!("Failed to parse Codex Desktop IPC JSON: {err}"))
+}
+
+fn format_json_compact(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
 #[cfg(not(windows))]
 async fn probe_named_pipe(
     endpoint: &str,
@@ -629,4 +813,14 @@ async fn probe_named_pipe(
     Err(format!(
         "Named pipe endpoint {endpoint} can only be probed on Windows"
     ))
+}
+
+#[cfg(not(windows))]
+async fn desktop_ipc_request_platform(
+    _app: AppHandle,
+    _method: String,
+    _params: Value,
+    _version: u32,
+) -> Result<Value, String> {
+    Err("Codex Desktop IPC is only available on Windows".to_string())
 }

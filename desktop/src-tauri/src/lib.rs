@@ -3156,6 +3156,14 @@ async fn codex_app_server_request(
 }
 
 #[tauri::command]
+async fn codex_desktop_ipc_request(
+    app: tauri::AppHandle,
+    request: codex_app_server::CodexDesktopIpcRequest,
+) -> Result<serde_json::Value, String> {
+    codex_app_server::desktop_ipc_request(app, request).await
+}
+
+#[tauri::command]
 async fn codex_app_server_disconnect() -> Result<(), String> {
     codex_app_server::disconnect_persistent_session().await
 }
@@ -4488,6 +4496,7 @@ pub fn run() {
             crate::agent_bridge::get_host_diagnostics,
             codex_app_server_probe,
             codex_app_server_request,
+            codex_desktop_ipc_request,
             codex_app_server_disconnect,
             get_user_role,
             logout_engine,
