@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Activity,
   AlertCircle,
+  Archive,
   ArrowDownToLine,
   ArrowUpToLine,
   Bot,
@@ -12,13 +13,18 @@ import {
   CheckCircle2,
   Copy,
   Cpu,
+  Edit3,
   FileText,
   Folder,
   GitBranch,
   Loader2,
+  Pin,
+  Plus,
   Play,
   RefreshCw,
+  Search,
   Send,
+  Square,
   WandSparkles,
 } from "lucide-react";
 
@@ -196,6 +202,10 @@ interface ThreadResumeResult {
   thread?: CodexThread;
 }
 
+interface ThreadStartResult {
+  thread?: CodexThread;
+}
+
 interface ThreadLoadedListResult {
   data?: string[];
   nextCursor?: string | null;
@@ -212,19 +222,26 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r20";
+const CLIENT_VERSION = "0.9.7-r21";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
+const APPROVAL_POLICIES = ["on-request", "untrusted", "on-failure", "never"];
+const SANDBOX_MODES = ["workspace-write", "read-only", "danger-full-access"];
 const CHAT_VISIBLE_TYPES = new Set(["userMessage", "agentMessage"]);
 
 const SAMPLE_METHODS = [
   "initialize",
   "thread/list",
+  "thread/start",
   "thread/read",
   "thread/loaded/list",
+  "thread/name/set",
+  "thread/archive",
+  "turn/interrupt",
   "model/list",
   "config/read",
+  "config/batchWrite",
   "account/read",
   "getAuthStatus",
 ];
@@ -233,10 +250,15 @@ const DEFAULT_PARAMS_BY_METHOD: Record<string, string> = {
   initialize:
     `{\n  "clientInfo": {\n    "name": "yibovibe-desktop",\n    "version": "${CLIENT_VERSION}"\n  },\n  "capabilities": {\n    "experimentalApi": true\n  }\n}`,
   "thread/list": "{\n  \"limit\": 50,\n  \"archived\": false\n}",
+  "thread/start": "{\n  \"cwd\": \"\",\n  \"model\": null\n}",
   "thread/read": "{\n  \"threadId\": \"\",\n  \"includeTurns\": true\n}",
   "thread/loaded/list": "{}",
+  "thread/name/set": "{\n  \"threadId\": \"\",\n  \"name\": \"\"\n}",
+  "thread/archive": "{\n  \"threadId\": \"\"\n}",
+  "turn/interrupt": "{\n  \"threadId\": \"\",\n  \"turnId\": \"\"\n}",
   "model/list": "{\n  \"includeHidden\": false\n}",
   "config/read": "{\n  \"includeLayers\": true\n}",
+  "config/batchWrite": "{\n  \"edits\": [],\n  \"reloadUserConfig\": true\n}",
   "account/read": "{}",
   getAuthStatus: "{\n  \"includeToken\": false,\n  \"refreshToken\": false\n}",
 };
@@ -549,6 +571,27 @@ function hasInProgressTurn(thread?: CodexThread | null) {
   return Boolean(thread?.turns?.some((turn) => turn.status === "inProgress"));
 }
 
+function latestInProgressTurnId(thread?: CodexThread | null) {
+  const turns = thread?.turns ?? [];
+  return [...turns].reverse().find((turn) => turn.status === "inProgress")?.id;
+}
+
+function sandboxPolicyFromMode(mode: string, cwd: string | null) {
+  if (mode === "read-only") {
+    return { type: "readOnly", networkAccess: true };
+  }
+  if (mode === "danger-full-access") {
+    return { type: "dangerFullAccess" };
+  }
+  return {
+    type: "workspaceWrite",
+    writableRoots: cwd ? [cwd] : [],
+    networkAccess: true,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -581,6 +624,10 @@ function Agents() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("medium");
   const [selectedSummary, setSelectedSummary] = useState("auto");
+  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState("on-request");
+  const [selectedSandboxMode, setSelectedSandboxMode] = useState("workspace-write");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [pinnedProjectPath, setPinnedProjectPath] = useState("");
   const [draftMessage, setDraftMessage] = useState("");
   const [sendError, setSendError] = useState("");
   const [sendStatus, setSendStatus] = useState("");
@@ -594,6 +641,7 @@ function Agents() {
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isSendingTurn, setIsSendingTurn] = useState(false);
+  const [isMutatingThread, setIsMutatingThread] = useState(false);
   const [, setLastRefreshAt] = useState<Date | null>(null);
 
   const parsedParams = useMemo(() => {
@@ -668,9 +716,31 @@ function Agents() {
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }, [threads]);
 
+  const filteredProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+    const visible = !query
+      ? projects
+      : projects.filter((project) => {
+          const haystack = [
+            project.name,
+            project.cwd,
+            project.branches.join(" "),
+            ...project.threads.map((thread) => summarizeThread(thread)),
+          ]
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(query);
+        });
+    return [...visible].sort((a, b) => {
+      if (a.cwd === pinnedProjectPath) return -1;
+      if (b.cwd === pinnedProjectPath) return 1;
+      return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    });
+  }, [pinnedProjectPath, projectSearch, projects]);
+
   const selectedProject = useMemo(
-    () => projects.find((project) => project.cwd === selectedProjectPath) ?? projects[0],
-    [projects, selectedProjectPath],
+    () => projects.find((project) => project.cwd === selectedProjectPath) ?? filteredProjects[0] ?? projects[0],
+    [filteredProjects, projects, selectedProjectPath],
   );
 
   const visibleThreads = selectedProject?.threads ?? [];
@@ -778,6 +848,8 @@ function Agents() {
       setAuthStatus(authRead.result);
       setSelectedModel((current) => current || defaultModel);
       setSelectedEffort((current) => current || defaultEffort);
+      setSelectedApprovalPolicy((current) => current || configRead.result.config?.approval_policy || "on-request");
+      setSelectedSandboxMode((current) => current || configRead.result.config?.sandbox_mode || "workspace-write");
       setLastRefreshAt(new Date());
 
       const fallbackProjectPath = nextThreads[0]?.cwd || "";
@@ -902,6 +974,12 @@ function Agents() {
       .then(({ result: nextConfig }) => {
         setConfig(nextConfig.config ?? null);
         setSelectedModel((current) => current || nextConfig.config?.model || "");
+        if (nextConfig.config?.approval_policy) {
+          setSelectedApprovalPolicy(nextConfig.config.approval_policy);
+        }
+        if (nextConfig.config?.sandbox_mode) {
+          setSelectedSandboxMode(nextConfig.config.sandbox_mode);
+        }
       })
       .catch((err) => setWorkbenchError(String(err)));
   }, [callRpc, selectedProjectPath]);
@@ -1033,6 +1111,115 @@ function Agents() {
 
   const currentBranch = selectedThread?.gitInfo?.branch || selectedProject?.branches[0] || "unknown";
   const currentPath = selectedThread?.cwd || selectedProject?.cwd || "unknown";
+  const currentThreadStatus = threadDetail?.status?.type || selectedThread?.status?.type || "notLoaded";
+  const activeTurnId = latestInProgressTurnId(threadDetail ?? selectedThread);
+
+  const createThread = useCallback(async () => {
+    const cwd = currentPath && currentPath !== "unknown" ? currentPath : null;
+    setIsMutatingThread(true);
+    setSendError("");
+    setSendStatus("正在新建对话...");
+    try {
+      const response = await callPersistentRpc<ThreadStartResult>("thread/start", {
+        cwd,
+        model: selectedModel || null,
+        serviceTier: config?.service_tier || null,
+        approvalPolicy: selectedApprovalPolicy || null,
+        sandbox: selectedSandboxMode || null,
+      });
+      const nextThread = response.thread;
+      await loadWorkbench();
+      if (nextThread?.cwd) setSelectedProjectPath(nextThread.cwd);
+      if (nextThread?.id) {
+        setSelectedThreadId(nextThread.id);
+        await loadThreadDetail(nextThread.id);
+      }
+      setSendStatus("已新建对话");
+    } catch (err) {
+      setSendError(String(err));
+      setSendStatus("");
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [
+    callPersistentRpc,
+    config?.service_tier,
+    currentPath,
+    loadThreadDetail,
+    loadWorkbench,
+    selectedApprovalPolicy,
+    selectedModel,
+    selectedSandboxMode,
+  ]);
+
+  const renameThread = useCallback(async () => {
+    if (!selectedThread?.id) return;
+    const nextName = window.prompt("重命名对话", summarizeThread(selectedThread));
+    if (!nextName?.trim()) return;
+    setIsMutatingThread(true);
+    try {
+      await callPersistentRpc("thread/name/set", { threadId: selectedThread.id, name: nextName.trim() });
+      await loadWorkbench();
+      await loadThreadDetail(selectedThread.id);
+    } catch (err) {
+      setSendError(String(err));
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [callPersistentRpc, loadThreadDetail, loadWorkbench, selectedThread]);
+
+  const archiveThread = useCallback(async () => {
+    if (!selectedThread?.id) return;
+    setIsMutatingThread(true);
+    try {
+      await callPersistentRpc("thread/archive", { threadId: selectedThread.id });
+      setThreadDetail(null);
+      setSelectedThreadId("");
+      await loadWorkbench();
+    } catch (err) {
+      setSendError(String(err));
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [callPersistentRpc, loadWorkbench, selectedThread?.id]);
+
+  const interruptTurn = useCallback(async () => {
+    if (!selectedThread?.id || !activeTurnId) return;
+    setIsMutatingThread(true);
+    setSendStatus("正在中断回复...");
+    try {
+      await callPersistentRpc("turn/interrupt", { threadId: selectedThread.id, turnId: activeTurnId });
+      await loadThreadDetail(selectedThread.id, { silent: true });
+      setSendStatus("已请求中断");
+    } catch (err) {
+      setSendError(String(err));
+      setSendStatus("");
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [activeTurnId, callPersistentRpc, loadThreadDetail, selectedThread?.id]);
+
+  const applyProjectConfig = useCallback(async () => {
+    setIsMutatingThread(true);
+    setSendStatus("正在写入 Codex 配置...");
+    try {
+      await callPersistentRpc("config/batchWrite", {
+        edits: [
+          { keyPath: "model", value: selectedModel || null, mergeStrategy: "upsert" },
+          { keyPath: "approval_policy", value: selectedApprovalPolicy, mergeStrategy: "upsert" },
+          { keyPath: "sandbox_mode", value: selectedSandboxMode, mergeStrategy: "upsert" },
+        ],
+        reloadUserConfig: true,
+      });
+      await loadWorkbench();
+      setSendStatus("配置已写入并热加载");
+    } catch (err) {
+      setSendError(String(err));
+      setSendStatus("");
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [callPersistentRpc, loadWorkbench, selectedApprovalPolicy, selectedModel, selectedSandboxMode]);
 
   const sendTurn = useCallback(async () => {
     const text = draftMessage.trim();
@@ -1065,6 +1252,9 @@ function Agents() {
               cwd,
               model: selectedModel || null,
               effort: selectedEffort || null,
+              summary: selectedSummary || null,
+              approvalPolicy: selectedApprovalPolicy || null,
+              sandboxPolicy: sandboxPolicyFromMode(selectedSandboxMode, cwd),
               collaborationMode: null,
             },
           },
@@ -1084,9 +1274,11 @@ function Agents() {
         await callPersistentRpc<ThreadResumeResult>("thread/resume", {
           threadId: selectedThread.id,
           cwd: currentPath && currentPath !== "unknown" ? currentPath : null,
-          model: selectedModel || null,
-          serviceTier: config?.service_tier || null,
-        });
+        model: selectedModel || null,
+        approvalPolicy: selectedApprovalPolicy || null,
+        sandbox: selectedSandboxMode || null,
+        serviceTier: config?.service_tier || null,
+      });
       }
 
       setSendStatus("发送中...");
@@ -1095,6 +1287,8 @@ function Agents() {
         input: turnInput,
         cwd,
         model: selectedModel || null,
+        approvalPolicy: selectedApprovalPolicy || null,
+        sandboxPolicy: sandboxPolicyFromMode(selectedSandboxMode, cwd),
         effort: selectedEffort || null,
         summary: selectedSummary || null,
         serviceTier: config?.service_tier || null,
@@ -1117,9 +1311,11 @@ function Agents() {
     draftMessage,
     isSendingTurn,
     refreshThreadUntilSettled,
+    selectedApprovalPolicy,
     selectedEffort,
     selectedModel,
     selectedSummary,
+    selectedSandboxMode,
     selectedThread?.id,
   ]);
 
@@ -1299,9 +1495,59 @@ function Agents() {
         }}
       >
         <div style={codexSidebarPanelStyle}>
-          <div style={codexSectionTitleStyle}>项目</div>
+          <div style={{ ...codexSectionTitleStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>项目</span>
+            <button
+              type="button"
+              title="新建对话"
+              onClick={() => void createThread()}
+              disabled={isMutatingThread}
+              style={messageCopyButtonStyle}
+            >
+              {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            </button>
+          </div>
+          <div style={{ padding: "0 10px 10px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "auto minmax(0, 1fr) auto",
+                alignItems: "center",
+                gap: 8,
+                border: "1px solid #d9e0ea",
+                background: "#fff",
+                borderRadius: 8,
+                padding: "7px 9px",
+              }}
+            >
+              <Search size={15} style={{ color: "#8b949e" }} />
+              <input
+                value={projectSearch}
+                onChange={(event) => setProjectSearch(event.target.value)}
+                placeholder="搜索项目或对话"
+                style={{
+                  minWidth: 0,
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  color: "var(--color-text-main)",
+                  fontSize: 13,
+                }}
+              />
+              <button
+                type="button"
+                title={selectedProject?.cwd === pinnedProjectPath ? "取消置顶" : "置顶当前项目"}
+                onClick={() =>
+                  setPinnedProjectPath((current) => (current === selectedProject?.cwd ? "" : selectedProject?.cwd || ""))
+                }
+                style={{ ...messageCopyButtonStyle, width: 26, height: 26, background: "transparent", boxShadow: "none" }}
+              >
+                <Pin size={13} />
+              </button>
+            </div>
+          </div>
           <div style={{ overflow: "auto", padding: "0 10px 14px", display: "flex", flexDirection: "column", gap: 2 }}>
-            {projects.map((project) => {
+            {filteredProjects.map((project) => {
               const projectActive = project.cwd === selectedProject?.cwd;
               return (
                 <div key={project.cwd} style={codexProjectGroupStyle}>
@@ -1353,8 +1599,11 @@ function Agents() {
                 </div>
               );
             })}
-            {!projects.length && (
-              <EmptyState icon={<Folder size={18} />} text="还没有读取到项目。先确认 Codex Desktop 有历史线程。" />
+            {!filteredProjects.length && (
+              <EmptyState
+                icon={<Folder size={18} />}
+                text={projects.length ? "没有匹配的项目或对话。" : "还没有读取到项目。先确认 Codex Desktop 有历史线程。"}
+              />
             )}
           </div>
         </div>
@@ -1364,7 +1613,9 @@ function Agents() {
             icon={<Bot size={15} />}
             title="对话"
             meta={
-              isLoadingThread
+              activeTurnId
+                ? "运行中"
+                : isLoadingThread
                 ? "读取中"
                 : showTechnicalEvents
                   ? `${visibleConversationItems.length} 项`
@@ -1382,8 +1633,42 @@ function Agents() {
             }}
           >
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>
-                {selectedThread ? summarizeThread(selectedThread) : "未选择"}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {selectedThread ? summarizeThread(selectedThread) : "未选择"}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    type="button"
+                    title="重命名"
+                    onClick={() => void renameThread()}
+                    disabled={!selectedThread || isMutatingThread}
+                    style={messageCopyButtonStyle}
+                  >
+                    <Edit3 size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    title="归档"
+                    onClick={() => void archiveThread()}
+                    disabled={!selectedThread || isMutatingThread}
+                    style={messageCopyButtonStyle}
+                  >
+                    <Archive size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    title="中断回复"
+                    onClick={() => void interruptTurn()}
+                    disabled={!activeTurnId || isMutatingThread}
+                    style={{
+                      ...messageCopyButtonStyle,
+                      color: activeTurnId ? "#ef4444" : "var(--color-text-muted)",
+                    }}
+                  >
+                    {isMutatingThread && activeTurnId ? <Loader2 size={14} className="animate-spin" /> : <Square size={13} />}
+                  </button>
+                </div>
               </div>
               <div
                 style={{
@@ -1397,6 +1682,7 @@ function Agents() {
               >
                 <span>来源: {conversationSummary?.source || selectedThread?.source || "unknown"}</span>
                 <span>CLI: {conversationSummary?.cliVersion || selectedThread?.cliVersion || "unknown"}</span>
+                <span>状态: {currentThreadStatus}{activeTurnId ? ` / ${activeTurnId.slice(0, 8)}` : ""}</span>
                 <span>{isLoadingSummary ? "摘要读取中" : `更新: ${formatTime(conversationSummary?.updatedAt || selectedThread?.updatedAt)}`}</span>
               </div>
             </div>
@@ -1438,7 +1724,7 @@ function Agents() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(180px, 1fr) 92px 92px auto",
+                gridTemplateColumns: "minmax(180px, 1fr) 92px 92px 128px 142px auto auto",
                 gap: 8,
                 alignItems: "end",
               }}
@@ -1496,6 +1782,46 @@ function Agents() {
                   ))}
                 </select>
               </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                审批
+                <select
+                  className="modern-input custom-select"
+                  value={selectedApprovalPolicy}
+                  onChange={(event) => setSelectedApprovalPolicy(event.target.value)}
+                  style={{ fontSize: 12 }}
+                >
+                  {APPROVAL_POLICIES.map((policy) => (
+                    <option key={policy} value={policy}>
+                      {policy}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                沙箱
+                <select
+                  className="modern-input custom-select"
+                  value={selectedSandboxMode}
+                  onChange={(event) => setSelectedSandboxMode(event.target.value)}
+                  style={{ fontSize: 12 }}
+                >
+                  {SANDBOX_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void applyProjectConfig()}
+                disabled={isMutatingThread}
+                style={{ minHeight: 35, borderRadius: 8, whiteSpace: "nowrap", fontSize: 12 }}
+              >
+                {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                应用
+              </button>
               <label
                 style={{
                   display: "flex",
