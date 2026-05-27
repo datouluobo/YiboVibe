@@ -5,6 +5,8 @@
     "nav": {
         "console": "Console",
         "tooltip_console": "Vibe Coding console - terminal and session hub",
+        "agents": "Agents",
+        "tooltip_agents": "Local Agent Host, Codex structured adapter, and session probes",
         "flowdeck": "FlowDeck",
         "flowmind": "FlowMind",
         "flowsync": "FlowSync",

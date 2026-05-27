@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
 
 mod agent_bridge;
+mod codex_app_server;
 mod probe;
 mod terminal;
 mod terminal_screen;
@@ -3140,6 +3141,26 @@ async fn get_user_role(state: tauri::State<'_, AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
+async fn codex_app_server_probe(
+    request: codex_app_server::CodexAppServerProbeRequest,
+) -> Result<codex_app_server::CodexAppServerProbeResponse, String> {
+    codex_app_server::probe(request).await
+}
+
+#[tauri::command]
+async fn codex_app_server_request(
+    app: tauri::AppHandle,
+    request: codex_app_server::CodexAppServerRpcRequest,
+) -> Result<serde_json::Value, String> {
+    codex_app_server::persistent_request(app, request).await
+}
+
+#[tauri::command]
+async fn codex_app_server_disconnect() -> Result<(), String> {
+    codex_app_server::disconnect_persistent_session().await
+}
+
+#[tauri::command]
 async fn logout_engine(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     *state.is_connected.lock().await = false;
     *state.ws_tx.lock().await = None;
@@ -4465,6 +4486,9 @@ pub fn run() {
             crate::agent_bridge::get_host_state,
             crate::agent_bridge::restart_host,
             crate::agent_bridge::get_host_diagnostics,
+            codex_app_server_probe,
+            codex_app_server_request,
+            codex_app_server_disconnect,
             get_user_role,
             logout_engine,
             admin_list_users,
