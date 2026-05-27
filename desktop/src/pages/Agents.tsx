@@ -12,7 +12,6 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  Cpu,
   Edit3,
   FileText,
   Folder,
@@ -222,7 +221,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r22";
+const CLIENT_VERSION = "0.9.7-r23";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -678,6 +677,22 @@ function Agents() {
     return getRpcResult<T>(response);
   }, []);
 
+  const callBridgeRpc = useCallback(
+    async <T,>(rpcMethod: string, params: unknown) => {
+      try {
+        return await callPersistentRpc<T>(rpcMethod, params);
+      } catch (persistentErr) {
+        try {
+          const { result } = await callRpc<T>(rpcMethod, params);
+          return result;
+        } catch {
+          throw persistentErr;
+        }
+      }
+    },
+    [callPersistentRpc, callRpc],
+  );
+
   const callDesktopIpc = useCallback(async <T,>(ipcMethod: string, params: unknown, version = 0) => {
     const response = await invoke<unknown>("codex_desktop_ipc_request", {
       request: {
@@ -824,17 +839,17 @@ function Agents() {
 
     try {
       const [threadList, modelList, configRead, authRead] = await Promise.all([
-        callRpc<ThreadListResult>("thread/list", { limit: 50, archived: false }),
-        callRpc<ModelListResult>("model/list", { includeHidden: false }),
-        callRpc<ConfigReadResult>("config/read", { includeLayers: true }),
-        callRpc<AuthStatusResult>("getAuthStatus", { includeToken: false, refreshToken: false }),
+        callBridgeRpc<ThreadListResult>("thread/list", { limit: 50, archived: false }),
+        callBridgeRpc<ModelListResult>("model/list", { includeHidden: false }),
+        callBridgeRpc<ConfigReadResult>("config/read", { includeLayers: true }),
+        callBridgeRpc<AuthStatusResult>("getAuthStatus", { includeToken: false, refreshToken: false }),
       ]);
 
-      const nextThreads = threadList.result.data ?? [];
-      const nextModels = modelList.result.data ?? [];
+      const nextThreads = threadList.data ?? [];
+      const nextModels = modelList.data ?? [];
       const defaultModel =
         nextModels.find((model) => model.isDefault)?.id ||
-        configRead.result.config?.model ||
+        configRead.config?.model ||
         nextModels[0]?.id ||
         "";
       const defaultEffort =
@@ -844,12 +859,12 @@ function Agents() {
 
       setThreads(nextThreads);
       setModels(nextModels);
-      setConfig(configRead.result.config ?? null);
-      setAuthStatus(authRead.result);
+      setConfig(configRead.config ?? null);
+      setAuthStatus(authRead);
       setSelectedModel((current) => current || defaultModel);
       setSelectedEffort((current) => current || defaultEffort);
-      setSelectedApprovalPolicy((current) => current || configRead.result.config?.approval_policy || "on-request");
-      setSelectedSandboxMode((current) => current || configRead.result.config?.sandbox_mode || "workspace-write");
+      setSelectedApprovalPolicy((current) => current || configRead.config?.approval_policy || "on-request");
+      setSelectedSandboxMode((current) => current || configRead.config?.sandbox_mode || "workspace-write");
       setLastRefreshAt(new Date());
 
       const fallbackProjectPath = nextThreads[0]?.cwd || "";
@@ -861,7 +876,7 @@ function Agents() {
     } finally {
       setIsLoadingWorkbench(false);
     }
-  }, [callRpc]);
+  }, [callBridgeRpc]);
 
   const loadThreadDetail = useCallback(
     async (threadId: string, options?: { silent?: boolean }) => {
@@ -871,7 +886,7 @@ function Agents() {
         setWorkbenchError("");
       }
       try {
-        const { result: detail } = await callRpc<ThreadReadResult>("thread/read", {
+        const detail = await callBridgeRpc<ThreadReadResult>("thread/read", {
           threadId,
           includeTurns: true,
         });
@@ -895,7 +910,7 @@ function Agents() {
         }
       }
     },
-    [callRpc],
+    [callBridgeRpc],
   );
 
   const refreshThreadUntilSettled = useCallback(
@@ -967,11 +982,11 @@ function Agents() {
   useEffect(() => {
     if (!selectedProjectPath || selectedProjectPath === "(unknown)") return;
 
-    void callRpc<ConfigReadResult>("config/read", {
+    void callBridgeRpc<ConfigReadResult>("config/read", {
       includeLayers: true,
       cwd: selectedProjectPath,
     })
-      .then(({ result: nextConfig }) => {
+      .then((nextConfig) => {
         setConfig(nextConfig.config ?? null);
         setSelectedModel((current) => current || nextConfig.config?.model || "");
         if (nextConfig.config?.approval_policy) {
@@ -982,7 +997,7 @@ function Agents() {
         }
       })
       .catch((err) => setWorkbenchError(String(err)));
-  }, [callRpc, selectedProjectPath]);
+  }, [callBridgeRpc, selectedProjectPath]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -1128,6 +1143,12 @@ function Agents() {
         sandbox: selectedSandboxMode || null,
       });
       const nextThread = response.thread;
+      if (nextThread) {
+        setThreads((current) => {
+          const rest = current.filter((thread) => thread.id !== nextThread.id);
+          return [nextThread, ...rest];
+        });
+      }
       await loadWorkbench();
       if (nextThread?.cwd) setSelectedProjectPath(nextThread.cwd);
       if (nextThread?.id) {
@@ -1320,12 +1341,6 @@ function Agents() {
   ]);
 
   const resultTone = result?.ok ? "#7ee787" : result ? "#f2cc60" : "#8b949e";
-  const selectedModelLabel =
-    models.find((model) => model.id === selectedModel)?.displayName ||
-    models.find((model) => model.id === selectedModel)?.model ||
-    config?.model ||
-    selectedModel ||
-    "未选择";
   const modelEfforts = asStringArray(
     models.find((model) => model.id === selectedModel)?.supportedReasoningEfforts ||
       models.find((model) => model.model === selectedModel)?.supportedReasoningEfforts,
@@ -1858,18 +1873,76 @@ function Agents() {
               style={{
                 display: "flex",
                 flexDirection: "column",
-                gap: 8,
+                gap: 10,
                 border: "1px solid var(--color-border)",
                 borderRadius: 16,
                 background: "var(--color-surface-elevated)",
-                padding: "10px 10px 8px 12px",
+                padding: "10px",
               }}
             >
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  gap: 10,
+                  alignItems: "end",
+                }}
+              >
+                <textarea
+                  value={draftMessage}
+                  onChange={(event) => setDraftMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendTurn();
+                    }
+                  }}
+                  disabled={!selectedThread || isSendingTurn}
+                  placeholder={selectedThread ? "给 Codex 发送消息" : "请选择一个对话"}
+                  rows={1}
+                  style={{
+                    minHeight: 40,
+                    maxHeight: 140,
+                    resize: "vertical",
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: "var(--color-text-main)",
+                    font: "inherit",
+                    fontSize: 15,
+                    lineHeight: 1.6,
+                    padding: "8px 6px",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendTurn()}
+                  disabled={!draftMessage.trim() || !selectedThread || isSendingTurn}
+                  title="发送"
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: 13,
+                    border: "none",
+                    display: "grid",
+                    placeItems: "center",
+                    background:
+                      draftMessage.trim() && selectedThread && !isSendingTurn
+                        ? "var(--color-primary)"
+                        : "rgba(148,163,184,0.35)",
+                    color: "#fff",
+                    cursor: draftMessage.trim() && selectedThread && !isSendingTurn ? "pointer" : "default",
+                  }}
+                >
+                  {isSendingTurn ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                </button>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(160px, 1fr) minmax(100px, 0.8fr) minmax(150px, 1fr) 88px 86px 120px 132px auto auto",
                   gap: 8,
+                  alignItems: "center",
                 }}
               >
                 <div style={toolbarMetricStyle}>
@@ -1888,28 +1961,12 @@ function Agents() {
                   </span>
                 </div>
                 <div style={toolbarMetricStyle}>
-                  <Cpu size={14} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {selectedModelLabel}
-                  </span>
-                </div>
-                <div style={toolbarMetricStyle}>
                   {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {authStatus?.authMethod || (authStatus ? "authenticated" : "auth unknown")}
                   </span>
                 </div>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(180px, 1fr) 92px 92px 128px 142px auto auto",
-                  gap: 8,
-                  alignItems: "end",
-                }}
-              >
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                  模型
                   <select
                     className="modern-input custom-select"
                     value={selectedModel}
@@ -1932,7 +1989,6 @@ function Agents() {
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                  推理
                   <select
                     className="modern-input custom-select"
                     value={selectedEffort}
@@ -1947,7 +2003,6 @@ function Agents() {
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                  摘要
                   <select
                     className="modern-input custom-select"
                     value={selectedSummary}
@@ -1962,7 +2017,6 @@ function Agents() {
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                  审批
                   <select
                     className="modern-input custom-select"
                     value={selectedApprovalPolicy}
@@ -1977,7 +2031,6 @@ function Agents() {
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                  沙箱
                   <select
                     className="modern-input custom-select"
                     value={selectedSandboxMode}
@@ -2020,63 +2073,6 @@ function Agents() {
                   />
                   技术事件
                 </label>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  gap: 10,
-                  alignItems: "end",
-                }}
-              >
-                <textarea
-                  value={draftMessage}
-                  onChange={(event) => setDraftMessage(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void sendTurn();
-                    }
-                  }}
-                  disabled={!selectedThread || isSendingTurn}
-                  placeholder={selectedThread ? "给 Codex 发送消息" : "请选择一个对话"}
-                  rows={1}
-                  style={{
-                    minHeight: 36,
-                    maxHeight: 140,
-                    resize: "vertical",
-                    border: "none",
-                    outline: "none",
-                    background: "transparent",
-                    color: "var(--color-text-main)",
-                    font: "inherit",
-                    fontSize: 14,
-                    lineHeight: 1.6,
-                    padding: "7px 4px",
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => void sendTurn()}
-                  disabled={!draftMessage.trim() || !selectedThread || isSendingTurn}
-                  title="发送"
-                  style={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: 12,
-                    border: "none",
-                    display: "grid",
-                    placeItems: "center",
-                    background:
-                      draftMessage.trim() && selectedThread && !isSendingTurn
-                        ? "var(--color-primary)"
-                        : "rgba(148,163,184,0.35)",
-                    color: "#fff",
-                    cursor: draftMessage.trim() && selectedThread && !isSendingTurn ? "pointer" : "default",
-                  }}
-                >
-                  {isSendingTurn ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                </button>
               </div>
             </div>
           </div>
