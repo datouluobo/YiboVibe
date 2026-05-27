@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.9.7-r19"
+version = "0.9.7-r20"
 description = "YiboVibe Desktop Native"
 authors = ["YiboSoft"]
 edition = "2021"

@@ -212,7 +212,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r19";
+const CLIENT_VERSION = "0.9.7-r20";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -1271,35 +1271,6 @@ function Agents() {
         </section>
       )}
 
-      <section
-        style={{
-          ...panelStyle,
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-          gap: 10,
-          padding: 12,
-        }}
-      >
-        <div style={toolbarMetricStyle}>
-          <Folder size={14} />
-          <span title={currentPath} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {currentPath}
-          </span>
-        </div>
-        <div style={toolbarMetricStyle}>
-          <GitBranch size={14} />
-          <span>{currentBranch}</span>
-        </div>
-        <div style={toolbarMetricStyle}>
-          <Cpu size={14} />
-          <span>{selectedModelLabel}</span>
-        </div>
-        <div style={toolbarMetricStyle}>
-          {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
-          <span>{authStatus?.authMethod || (authStatus ? "authenticated" : "auth unknown")}</span>
-        </div>
-      </section>
-
       {workbenchError && (
         <div
           style={{
@@ -1427,6 +1398,41 @@ function Agents() {
                 <span>来源: {conversationSummary?.source || selectedThread?.source || "unknown"}</span>
                 <span>CLI: {conversationSummary?.cliVersion || selectedThread?.cliVersion || "unknown"}</span>
                 <span>{isLoadingSummary ? "摘要读取中" : `更新: ${formatTime(conversationSummary?.updatedAt || selectedThread?.updatedAt)}`}</span>
+              </div>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                gap: 8,
+              }}
+            >
+              <div style={toolbarMetricStyle}>
+                <Folder size={14} />
+                <span
+                  title={currentPath}
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {currentPath}
+                </span>
+              </div>
+              <div style={toolbarMetricStyle}>
+                <GitBranch size={14} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {currentBranch}
+                </span>
+              </div>
+              <div style={toolbarMetricStyle}>
+                <Cpu size={14} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {selectedModelLabel}
+                </span>
+              </div>
+              <div style={toolbarMetricStyle}>
+                {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {authStatus?.authMethod || (authStatus ? "authenticated" : "auth unknown")}
+                </span>
               </div>
             </div>
             <div
