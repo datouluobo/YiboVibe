@@ -1,10 +1,12 @@
 import type { CSSProperties, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Activity,
   AlertCircle,
+  ArrowDownToLine,
+  ArrowUpToLine,
   Bot,
   CheckCircle2,
   Cpu,
@@ -208,7 +210,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r16";
+const CLIENT_VERSION = "0.9.7-r17";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -278,6 +280,20 @@ const codexProjectGroupStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
+};
+
+const scrollJumpButtonStyle: CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 8,
+  border: "1px solid var(--color-border)",
+  background: "rgba(255,255,255,0.92)",
+  color: "var(--color-text-muted)",
+  display: "grid",
+  placeItems: "center",
+  cursor: "pointer",
+  pointerEvents: "auto",
+  boxShadow: "0 4px 16px rgba(15,23,42,0.12)",
 };
 
 function formatJson(value: unknown) {
@@ -475,6 +491,10 @@ function chatTitle(role: string, title: string) {
   return title;
 }
 
+function isNearBottom(element: HTMLElement, threshold = 120) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
+}
+
 function threadFromDesktopState(
   state: DesktopConversationState,
   fallback: CodexThread | undefined,
@@ -493,6 +513,10 @@ function threadFromDesktopState(
 }
 
 function Agents() {
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const selectedThreadRef = useRef<CodexThread | undefined>(undefined);
+  const threadDetailRef = useRef<CodexThread | null>(null);
   const [endpoint, setEndpoint] = useState(ENDPOINT);
   const bearerToken = "";
   const [method, setMethod] = useState("thread/list");
@@ -625,6 +649,46 @@ function Agents() {
     () => conversationItems.filter((item) => !isChatVisibleItem(item)).length,
     [conversationItems],
   );
+
+  const conversationScrollKey = useMemo(
+    () =>
+      visibleConversationItems
+        .map((item, index) => {
+          const described = describeItem(item);
+          return `${index}:${item.type ?? ""}:${described.text.length}:${item.status ?? ""}`;
+        })
+        .join("|"),
+    [visibleConversationItems],
+  );
+
+  const scrollChatToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const element = chatScrollRef.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior });
+    shouldStickToBottomRef.current = true;
+  }, []);
+
+  const scrollChatToTop = useCallback(() => {
+    const element = chatScrollRef.current;
+    if (!element) return;
+    element.scrollTo({ top: 0, behavior: "smooth" });
+    shouldStickToBottomRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    selectedThreadRef.current = selectedThread;
+  }, [selectedThread]);
+
+  useEffect(() => {
+    threadDetailRef.current = threadDetail;
+  }, [threadDetail]);
+
+  useLayoutEffect(() => {
+    if (!chatScrollRef.current) return;
+    if (shouldStickToBottomRef.current || isSendingTurn) {
+      scrollChatToBottom("auto");
+    }
+  }, [conversationScrollKey, isSendingTurn, scrollChatToBottom, selectedThread?.id]);
 
   const loadWorkbench = useCallback(async () => {
     setWorkbenchError("");
@@ -787,7 +851,7 @@ function Agents() {
       ) {
         const liveThread = threadFromDesktopState(
           payload.params.change.conversationState,
-          threadDetail ?? selectedThread,
+          threadDetailRef.current ?? selectedThreadRef.current,
           currentThreadId,
         );
         setThreadDetail(liveThread);
@@ -834,7 +898,7 @@ function Agents() {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadThreadDetail, loadWorkbench, selectedThread, selectedThread?.id, threadDetail]);
+  }, [loadThreadDetail, loadWorkbench, selectedThread?.id]);
 
   const runProbe = useCallback(async () => {
     setError("");
@@ -1351,6 +1415,10 @@ function Agents() {
           </div>
 
           <div
+            ref={chatScrollRef}
+            onScroll={(event) => {
+              shouldStickToBottomRef.current = isNearBottom(event.currentTarget);
+            }}
             style={{
               overflow: "auto",
               padding: "18px 24px",
@@ -1359,8 +1427,39 @@ function Agents() {
               display: "flex",
               flexDirection: "column",
               gap: 14,
+              scrollBehavior: "smooth",
+              scrollbarGutter: "stable",
             }}
           >
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 6,
+                height: 0,
+                pointerEvents: "none",
+              }}
+            >
+              <button
+                type="button"
+                title="到顶部"
+                onClick={scrollChatToTop}
+                style={scrollJumpButtonStyle}
+              >
+                <ArrowUpToLine size={14} />
+              </button>
+              <button
+                type="button"
+                title="到底部"
+                onClick={() => scrollChatToBottom()}
+                style={scrollJumpButtonStyle}
+              >
+                <ArrowDownToLine size={14} />
+              </button>
+            </div>
             {isLoadingThread && <EmptyState icon={<Loader2 size={18} />} text="正在读取 thread/read..." />}
             {!isLoadingThread &&
               !showTechnicalEvents &&
