@@ -74,16 +74,35 @@ interface CodexThread {
   turns?: CodexTurn[];
 }
 
+interface DesktopConversationState {
+  id?: string;
+  title?: string | null;
+  cwd?: string | null;
+  source?: string | null;
+  modelProvider?: string | null;
+  gitInfo?: CodexThread["gitInfo"];
+  turns?: CodexTurn[];
+}
+
 interface ThreadReadResult {
   thread?: CodexThread;
 }
 
 interface CodexTurn {
   id?: string;
+  turnId?: string;
   input?: string;
+  params?: {
+    input?: unknown;
+    cwd?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    [key: string]: unknown;
+  };
   items?: CodexThreadItem[];
   startedAt?: string;
   completedAt?: string;
+  status?: string;
 }
 
 interface CodexThreadItem {
@@ -189,7 +208,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r15";
+const CLIENT_VERSION = "0.9.7-r16";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -454,6 +473,23 @@ function chatTitle(role: string, title: string) {
   if (role === "user") return "";
   if (role === "assistant") return "Codex";
   return title;
+}
+
+function threadFromDesktopState(
+  state: DesktopConversationState,
+  fallback: CodexThread | undefined,
+  threadId: string,
+): CodexThread {
+  return {
+    ...(fallback ?? { id: threadId }),
+    id: state.id || threadId,
+    name: state.title ?? fallback?.name,
+    cwd: state.cwd ?? fallback?.cwd,
+    source: state.source ?? fallback?.source,
+    gitInfo: state.gitInfo ?? fallback?.gitInfo,
+    updatedAt: Date.now(),
+    turns: state.turns ?? fallback?.turns ?? [],
+  };
 }
 
 function Agents() {
@@ -721,6 +757,10 @@ function Agents() {
           conversationId?: string;
           status?: string;
           message?: string;
+          change?: {
+            type?: string;
+            conversationState?: DesktopConversationState;
+          };
         };
       };
       const methodName = payload?.method || payload?.type || "event";
@@ -738,6 +778,30 @@ function Agents() {
 
       const eventThreadId = payload?.params?.threadId || payload?.params?.conversationId;
       const belongsToCurrentThread = !eventThreadId || eventThreadId === currentThreadId;
+
+      if (
+        methodName === "thread-stream-state-changed" &&
+        belongsToCurrentThread &&
+        currentThreadId &&
+        payload?.params?.change?.conversationState?.turns
+      ) {
+        const liveThread = threadFromDesktopState(
+          payload.params.change.conversationState,
+          threadDetail ?? selectedThread,
+          currentThreadId,
+        );
+        setThreadDetail(liveThread);
+        setThreads((current) =>
+          current.map((thread) => (thread.id === liveThread.id ? { ...thread, ...liveThread } : thread)),
+        );
+        if (liveThread.turns?.some((turn) => turn.status === "inProgress")) {
+          setSendStatus("Codex 正在回复...");
+        } else {
+          setSendStatus("");
+        }
+        return;
+      }
+
       const shouldRefresh =
         belongsToCurrentThread &&
         (methodName === "turn/started" ||
@@ -747,8 +811,7 @@ function Agents() {
           methodName === "item/started" ||
           methodName === "item/updated" ||
           methodName === "item/completed" ||
-          methodName === "item/agentMessage/delta" ||
-          methodName === "thread-stream-state-changed");
+          methodName === "item/agentMessage/delta");
 
       if (shouldRefresh && currentThreadId) {
         if (refreshTimer) window.clearTimeout(refreshTimer);
@@ -771,7 +834,7 @@ function Agents() {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadThreadDetail, loadWorkbench, selectedThread?.id]);
+  }, [loadThreadDetail, loadWorkbench, selectedThread, selectedThread?.id, threadDetail]);
 
   const runProbe = useCallback(async () => {
     setError("");
