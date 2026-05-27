@@ -222,7 +222,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r21";
+const CLIENT_VERSION = "0.9.7-r22";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -1686,161 +1686,6 @@ function Agents() {
                 <span>{isLoadingSummary ? "摘要读取中" : `更新: ${formatTime(conversationSummary?.updatedAt || selectedThread?.updatedAt)}`}</span>
               </div>
             </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                gap: 8,
-              }}
-            >
-              <div style={toolbarMetricStyle}>
-                <Folder size={14} />
-                <span
-                  title={currentPath}
-                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >
-                  {currentPath}
-                </span>
-              </div>
-              <div style={toolbarMetricStyle}>
-                <GitBranch size={14} />
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {currentBranch}
-                </span>
-              </div>
-              <div style={toolbarMetricStyle}>
-                <Cpu size={14} />
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {selectedModelLabel}
-                </span>
-              </div>
-              <div style={toolbarMetricStyle}>
-                {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {authStatus?.authMethod || (authStatus ? "authenticated" : "auth unknown")}
-                </span>
-              </div>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(180px, 1fr) 92px 92px 128px 142px auto auto",
-                gap: 8,
-                alignItems: "end",
-              }}
-            >
-              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                模型选择
-                <select
-                  className="modern-input custom-select"
-                  value={selectedModel}
-                  onChange={(event) => {
-                    const nextModel = event.target.value;
-                    setSelectedModel(nextModel);
-                    const defaultEffort = models.find((model) => model.id === nextModel)?.defaultReasoningEffort;
-                    if (defaultEffort) setSelectedEffort(defaultEffort);
-                  }}
-                  style={{ fontSize: 12 }}
-                >
-                  {models.map((model) => {
-                    const value = model.id || model.model || "";
-                    return (
-                      <option key={value} value={value}>
-                        {model.displayName || model.model || value}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                推理
-                <select
-                  className="modern-input custom-select"
-                  value={selectedEffort}
-                  onChange={(event) => setSelectedEffort(event.target.value)}
-                  style={{ fontSize: 12 }}
-                >
-                  {modelEfforts.map((effort) => (
-                    <option key={effort} value={effort}>
-                      {effort}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                摘要
-                <select
-                  className="modern-input custom-select"
-                  value={selectedSummary}
-                  onChange={(event) => setSelectedSummary(event.target.value)}
-                  style={{ fontSize: 12 }}
-                >
-                  {REASONING_SUMMARIES.map((summary) => (
-                    <option key={summary} value={summary}>
-                      {summary}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                审批
-                <select
-                  className="modern-input custom-select"
-                  value={selectedApprovalPolicy}
-                  onChange={(event) => setSelectedApprovalPolicy(event.target.value)}
-                  style={{ fontSize: 12 }}
-                >
-                  {APPROVAL_POLICIES.map((policy) => (
-                    <option key={policy} value={policy}>
-                      {policy}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
-                沙箱
-                <select
-                  className="modern-input custom-select"
-                  value={selectedSandboxMode}
-                  onChange={(event) => setSelectedSandboxMode(event.target.value)}
-                  style={{ fontSize: 12 }}
-                >
-                  {SANDBOX_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {mode}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => void applyProjectConfig()}
-                disabled={isMutatingThread}
-                style={{ minHeight: 35, borderRadius: 8, whiteSpace: "nowrap", fontSize: 12 }}
-              >
-                {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                应用
-              </button>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: "var(--color-text-muted)",
-                  fontSize: 12,
-                  paddingBottom: 9,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={showTechnicalEvents}
-                  onChange={(event) => setShowTechnicalEvents(event.target.checked)}
-                />
-                技术事件
-              </label>
-            </div>
           </div>
 
           <div
@@ -2011,64 +1856,228 @@ function Agents() {
             )}
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr) auto",
-                gap: 10,
-                alignItems: "end",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
                 border: "1px solid var(--color-border)",
                 borderRadius: 16,
                 background: "var(--color-surface-elevated)",
-                padding: "8px 8px 8px 12px",
+                padding: "10px 10px 8px 12px",
               }}
             >
-              <textarea
-                value={draftMessage}
-                onChange={(event) => setDraftMessage(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void sendTurn();
-                  }
-                }}
-                disabled={!selectedThread || isSendingTurn}
-                placeholder={selectedThread ? "给 Codex 发送消息" : "请选择一个对话"}
-                rows={1}
+              <div
                 style={{
-                  minHeight: 36,
-                  maxHeight: 140,
-                  resize: "vertical",
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  color: "var(--color-text-main)",
-                  font: "inherit",
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                  padding: "7px 4px",
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => void sendTurn()}
-                disabled={!draftMessage.trim() || !selectedThread || isSendingTurn}
-                title="发送"
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: 12,
-                  border: "none",
                   display: "grid",
-                  placeItems: "center",
-                  background:
-                    draftMessage.trim() && selectedThread && !isSendingTurn
-                      ? "var(--color-primary)"
-                      : "rgba(148,163,184,0.35)",
-                  color: "#fff",
-                  cursor: draftMessage.trim() && selectedThread && !isSendingTurn ? "pointer" : "default",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gap: 8,
                 }}
               >
-                {isSendingTurn ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-              </button>
+                <div style={toolbarMetricStyle}>
+                  <Folder size={14} />
+                  <span
+                    title={currentPath}
+                    style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  >
+                    {currentPath}
+                  </span>
+                </div>
+                <div style={toolbarMetricStyle}>
+                  <GitBranch size={14} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {currentBranch}
+                  </span>
+                </div>
+                <div style={toolbarMetricStyle}>
+                  <Cpu size={14} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {selectedModelLabel}
+                  </span>
+                </div>
+                <div style={toolbarMetricStyle}>
+                  {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {authStatus?.authMethod || (authStatus ? "authenticated" : "auth unknown")}
+                  </span>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(180px, 1fr) 92px 92px 128px 142px auto auto",
+                  gap: 8,
+                  alignItems: "end",
+                }}
+              >
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  模型
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedModel}
+                    onChange={(event) => {
+                      const nextModel = event.target.value;
+                      setSelectedModel(nextModel);
+                      const defaultEffort = models.find((model) => model.id === nextModel)?.defaultReasoningEffort;
+                      if (defaultEffort) setSelectedEffort(defaultEffort);
+                    }}
+                    style={{ fontSize: 12 }}
+                  >
+                    {models.map((model) => {
+                      const value = model.id || model.model || "";
+                      return (
+                        <option key={value} value={value}>
+                          {model.displayName || model.model || value}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  推理
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedEffort}
+                    onChange={(event) => setSelectedEffort(event.target.value)}
+                    style={{ fontSize: 12 }}
+                  >
+                    {modelEfforts.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  摘要
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedSummary}
+                    onChange={(event) => setSelectedSummary(event.target.value)}
+                    style={{ fontSize: 12 }}
+                  >
+                    {REASONING_SUMMARIES.map((summary) => (
+                      <option key={summary} value={summary}>
+                        {summary}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  审批
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedApprovalPolicy}
+                    onChange={(event) => setSelectedApprovalPolicy(event.target.value)}
+                    style={{ fontSize: 12 }}
+                  >
+                    {APPROVAL_POLICIES.map((policy) => (
+                      <option key={policy} value={policy}>
+                        {policy}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  沙箱
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedSandboxMode}
+                    onChange={(event) => setSelectedSandboxMode(event.target.value)}
+                    style={{ fontSize: 12 }}
+                  >
+                    {SANDBOX_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => void applyProjectConfig()}
+                  disabled={isMutatingThread}
+                  title="写回 Codex 配置"
+                  style={{ minHeight: 35, borderRadius: 8, whiteSpace: "nowrap", fontSize: 12 }}
+                >
+                  {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  应用
+                </button>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    color: "var(--color-text-muted)",
+                    fontSize: 12,
+                    paddingBottom: 9,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showTechnicalEvents}
+                    onChange={(event) => setShowTechnicalEvents(event.target.checked)}
+                  />
+                  技术事件
+                </label>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  gap: 10,
+                  alignItems: "end",
+                }}
+              >
+                <textarea
+                  value={draftMessage}
+                  onChange={(event) => setDraftMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendTurn();
+                    }
+                  }}
+                  disabled={!selectedThread || isSendingTurn}
+                  placeholder={selectedThread ? "给 Codex 发送消息" : "请选择一个对话"}
+                  rows={1}
+                  style={{
+                    minHeight: 36,
+                    maxHeight: 140,
+                    resize: "vertical",
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: "var(--color-text-main)",
+                    font: "inherit",
+                    fontSize: 14,
+                    lineHeight: 1.6,
+                    padding: "7px 4px",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendTurn()}
+                  disabled={!draftMessage.trim() || !selectedThread || isSendingTurn}
+                  title="发送"
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 12,
+                    border: "none",
+                    display: "grid",
+                    placeItems: "center",
+                    background:
+                      draftMessage.trim() && selectedThread && !isSendingTurn
+                        ? "var(--color-primary)"
+                        : "rgba(148,163,184,0.35)",
+                    color: "#fff",
+                    cursor: draftMessage.trim() && selectedThread && !isSendingTurn ? "pointer" : "default",
+                  }}
+                >
+                  {isSendingTurn ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                </button>
+              </div>
             </div>
           </div>
         </div>
