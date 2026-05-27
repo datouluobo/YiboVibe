@@ -210,7 +210,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r17";
+const CLIENT_VERSION = "0.9.7-r18";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -512,11 +512,34 @@ function threadFromDesktopState(
   };
 }
 
+function threadAssistantSignature(thread?: CodexThread | null) {
+  const turns = thread?.turns ?? [];
+  return turns
+    .flatMap((turn) => turn.items ?? [])
+    .filter((item) => item.type === "agentMessage")
+    .map((item, index) => {
+      const text = toDisplayText(item.text) || collectText(item.content);
+      return `${index}:${item.status ?? ""}:${text.length}:${text.slice(-32)}`;
+    })
+    .join("|");
+}
+
+function hasInProgressTurn(thread?: CodexThread | null) {
+  return Boolean(thread?.turns?.some((turn) => turn.status === "inProgress"));
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function Agents() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const selectedThreadRef = useRef<CodexThread | undefined>(undefined);
   const threadDetailRef = useRef<CodexThread | null>(null);
+  const refreshGenerationRef = useRef(0);
   const [endpoint, setEndpoint] = useState(ENDPOINT);
   const bearerToken = "";
   const [method, setMethod] = useState("thread/list");
@@ -734,24 +757,68 @@ function Agents() {
   }, [callRpc]);
 
   const loadThreadDetail = useCallback(
-    async (threadId: string) => {
-      if (!threadId) return;
-      setIsLoadingThread(true);
-      setWorkbenchError("");
+    async (threadId: string, options?: { silent?: boolean }) => {
+      if (!threadId) return null;
+      if (!options?.silent) {
+        setIsLoadingThread(true);
+        setWorkbenchError("");
+      }
       try {
         const { result: detail } = await callRpc<ThreadReadResult>("thread/read", {
           threadId,
           includeTurns: true,
         });
-        setThreadDetail(detail.thread ?? null);
+        const nextThread = detail.thread ?? null;
+        setThreadDetail(nextThread);
+        if (nextThread) {
+          setThreads((current) =>
+            current.map((thread) => (thread.id === nextThread.id ? { ...thread, ...nextThread } : thread)),
+          );
+        }
+        return nextThread;
       } catch (err) {
-        setThreadDetail(null);
-        setWorkbenchError(String(err));
+        if (!options?.silent) {
+          setThreadDetail(null);
+          setWorkbenchError(String(err));
+        }
+        return null;
       } finally {
-        setIsLoadingThread(false);
+        if (!options?.silent) {
+          setIsLoadingThread(false);
+        }
       }
     },
     [callRpc],
+  );
+
+  const refreshThreadUntilSettled = useCallback(
+    async (threadId: string, previousAssistantSignature?: string) => {
+      if (!threadId) return;
+      const generation = refreshGenerationRef.current + 1;
+      refreshGenerationRef.current = generation;
+      const delays = [250, 500, 800, 1200, 1600, 2200, 3000, 4000];
+      let sawAssistantChange = false;
+
+      for (const delay of delays) {
+        await wait(delay);
+        if (refreshGenerationRef.current !== generation) return;
+
+        const detail = await loadThreadDetail(threadId, { silent: true });
+        const nextAssistantSignature = threadAssistantSignature(detail);
+        sawAssistantChange =
+          sawAssistantChange || Boolean(nextAssistantSignature && nextAssistantSignature !== previousAssistantSignature);
+
+        if (detail && sawAssistantChange && !hasInProgressTurn(detail)) {
+          setSendStatus("");
+          void loadWorkbench();
+          return;
+        }
+      }
+
+      setSendStatus("");
+      void loadWorkbench();
+    },
+    [loadThreadDetail, loadWorkbench],
   );
 
   const loadConversationSummary = useCallback(
@@ -880,9 +947,10 @@ function Agents() {
       if (shouldRefresh && currentThreadId) {
         if (refreshTimer) window.clearTimeout(refreshTimer);
         refreshTimer = window.setTimeout(() => {
-          void loadThreadDetail(currentThreadId);
-          void loadWorkbench();
-          setSendStatus("");
+          void refreshThreadUntilSettled(
+            currentThreadId,
+            threadAssistantSignature(threadDetailRef.current ?? selectedThreadRef.current),
+          );
         }, methodName === "turn/completed" ? 250 : 900);
       }
     };
@@ -898,7 +966,7 @@ function Agents() {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadThreadDetail, loadWorkbench, selectedThread?.id]);
+  }, [refreshThreadUntilSettled, selectedThread?.id]);
 
   const runProbe = useCallback(async () => {
     setError("");
@@ -941,6 +1009,7 @@ function Agents() {
     setIsSendingTurn(true);
 
     try {
+      const previousAssistantSignature = threadAssistantSignature(threadDetailRef.current ?? selectedThreadRef.current);
       const turnInput = [
         {
           type: "text",
@@ -968,10 +1037,7 @@ function Agents() {
         );
         setDraftMessage("");
         setSendStatus("已提交到 Codex Desktop，等待回复...");
-        window.setTimeout(() => {
-          void loadThreadDetail(selectedThread.id);
-          void loadWorkbench();
-        }, 1200);
+        void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
         return;
       } catch (ipcErr) {
         setLiveWarning(`Codex Desktop IPC 不可用，已回退 stdio：${String(ipcErr)}`);
@@ -1001,10 +1067,7 @@ function Agents() {
       await callPersistentRpc<TurnStartResult>("turn/start", params);
       setDraftMessage("");
       setSendStatus("已提交，等待 Codex 回复...");
-      window.setTimeout(() => {
-        void loadThreadDetail(selectedThread.id);
-        void loadWorkbench();
-      }, 1200);
+      void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
     } catch (err) {
       setSendError(String(err));
       setSendStatus("");
@@ -1018,8 +1081,7 @@ function Agents() {
     currentPath,
     draftMessage,
     isSendingTurn,
-    loadThreadDetail,
-    loadWorkbench,
+    refreshThreadUntilSettled,
     selectedEffort,
     selectedModel,
     selectedSummary,
