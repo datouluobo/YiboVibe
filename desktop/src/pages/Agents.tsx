@@ -8,7 +8,9 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bot,
+  Check,
   CheckCircle2,
+  Copy,
   Cpu,
   FileText,
   Folder,
@@ -210,7 +212,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r18";
+const CLIENT_VERSION = "0.9.7-r19";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -294,6 +296,19 @@ const scrollJumpButtonStyle: CSSProperties = {
   cursor: "pointer",
   pointerEvents: "auto",
   boxShadow: "0 4px 16px rgba(15,23,42,0.12)",
+};
+
+const messageCopyButtonStyle: CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 8,
+  border: "1px solid var(--color-border)",
+  background: "rgba(255,255,255,0.84)",
+  color: "var(--color-text-muted)",
+  display: "grid",
+  placeItems: "center",
+  cursor: "pointer",
+  flexShrink: 0,
 };
 
 function formatJson(value: unknown) {
@@ -462,6 +477,8 @@ function chatMessageStyle(role: string): CSSProperties {
       color: "var(--color-text-main)",
       padding: "10px 14px",
       boxShadow: "0 1px 0 rgba(0,0,0,0.05)",
+      userSelect: "text",
+      WebkitUserSelect: "text",
     };
   }
 
@@ -472,6 +489,8 @@ function chatMessageStyle(role: string): CSSProperties {
       borderLeft: "3px solid #52d66b",
       color: "var(--color-text-main)",
       padding: "6px 0 6px 12px",
+      userSelect: "text",
+      WebkitUserSelect: "text",
     };
   }
 
@@ -482,6 +501,8 @@ function chatMessageStyle(role: string): CSSProperties {
     border: "1px dashed var(--color-border)",
     color: "var(--color-text-muted)",
     padding: 10,
+    userSelect: "text",
+    WebkitUserSelect: "text",
   };
 }
 
@@ -566,6 +587,7 @@ function Agents() {
   const [liveStatus, setLiveStatus] = useState("");
   const [liveWarning, setLiveWarning] = useState("");
   const [liveEventCount, setLiveEventCount] = useState(0);
+  const [copiedMessageKey, setCopiedMessageKey] = useState("");
   const [threadDetail, setThreadDetail] = useState<CodexThread | null>(null);
   const [workbenchError, setWorkbenchError] = useState("");
   const [isLoadingWorkbench, setIsLoadingWorkbench] = useState(false);
@@ -696,6 +718,19 @@ function Agents() {
     if (!element) return;
     element.scrollTo({ top: 0, behavior: "smooth" });
     shouldStickToBottomRef.current = false;
+  }, []);
+
+  const copyMessageText = useCallback(async (key: string, text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageKey(key);
+      window.setTimeout(() => {
+        setCopiedMessageKey((current) => (current === key ? "" : current));
+      }, 1400);
+    } catch (err) {
+      setLiveWarning(`复制失败：${String(err)}`);
+    }
   }, []);
 
   useEffect(() => {
@@ -1491,6 +1526,8 @@ function Agents() {
               gap: 14,
               scrollBehavior: "smooth",
               scrollbarGutter: "stable",
+              userSelect: "text",
+              WebkitUserSelect: "text",
             }}
           >
             <div
@@ -1545,11 +1582,29 @@ function Agents() {
                 const described = describeItem(item);
                 const color = roleColor(described.role);
                 const title = chatTitle(described.role, described.title);
+                const messageKey = `${item.type ?? "item"}-${index}-${described.text.length}`;
                 return (
                   <div
-                    key={`${described.title}-${index}`}
-                    style={chatMessageStyle(described.role)}
+                    key={messageKey}
+                    style={{
+                      ...chatMessageStyle(described.role),
+                      position: "relative",
+                      paddingRight: described.role === "user" ? 42 : 36,
+                    }}
                   >
+                    <button
+                      type="button"
+                      title={copiedMessageKey === messageKey ? "已复制" : "复制消息"}
+                      onClick={() => void copyMessageText(messageKey, described.text)}
+                      style={{
+                        ...messageCopyButtonStyle,
+                        position: "absolute",
+                        top: described.role === "user" ? 6 : 2,
+                        right: described.role === "user" ? 8 : 0,
+                      }}
+                    >
+                      {copiedMessageKey === messageKey ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
                     {title && <div style={{ color, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{title}</div>}
                     <pre
                       style={{
@@ -1563,6 +1618,8 @@ function Agents() {
                         lineHeight: 1.75,
                         whiteSpace: "pre-wrap",
                         wordBreak: "break-word",
+                        userSelect: "text",
+                        WebkitUserSelect: "text",
                       }}
                     >
                       {described.text || "(empty)"}
