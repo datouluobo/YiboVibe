@@ -221,7 +221,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r23";
+const CLIENT_VERSION = "0.9.7-r24";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -570,6 +570,11 @@ function hasInProgressTurn(thread?: CodexThread | null) {
   return Boolean(thread?.turns?.some((turn) => turn.status === "inProgress"));
 }
 
+function isUnmaterializedThreadError(value: unknown) {
+  const message = String(value);
+  return message.includes("not materialized yet") || message.includes("includeTurns is unavailable before first user message");
+}
+
 function latestInProgressTurnId(thread?: CodexThread | null) {
   const turns = thread?.turns ?? [];
   return [...turns].reverse().find((turn) => turn.status === "inProgress")?.id;
@@ -857,7 +862,10 @@ function Agents() {
         nextModels.find((model) => model.isDefault)?.defaultReasoningEffort ||
         "medium";
 
-      setThreads(nextThreads);
+      setThreads((current) => {
+        const localOnly = current.filter((thread) => !nextThreads.some((nextThread) => nextThread.id === thread.id));
+        return [...localOnly, ...nextThreads];
+      });
       setModels(nextModels);
       setConfig(configRead.config ?? null);
       setAuthStatus(authRead);
@@ -899,6 +907,22 @@ function Agents() {
         }
         return nextThread;
       } catch (err) {
+        if (isUnmaterializedThreadError(err)) {
+          const fallbackThread = selectedThreadRef.current?.id === threadId ? selectedThreadRef.current : undefined;
+          const emptyThread = {
+            ...(fallbackThread ?? { id: threadId }),
+            id: threadId,
+            turns: [],
+          } as CodexThread;
+          setThreadDetail(emptyThread);
+          setThreads((current) =>
+            current.map((thread) => (thread.id === threadId ? { ...thread, ...emptyThread } : thread)),
+          );
+          if (!options?.silent) {
+            setWorkbenchError("");
+          }
+          return emptyThread;
+        }
         if (!options?.silent) {
           setThreadDetail(null);
           setWorkbenchError(String(err));
@@ -1144,18 +1168,19 @@ function Agents() {
       });
       const nextThread = response.thread;
       if (nextThread) {
+        const emptyThread = { ...nextThread, turns: [] };
         setThreads((current) => {
           const rest = current.filter((thread) => thread.id !== nextThread.id);
-          return [nextThread, ...rest];
+          return [emptyThread, ...rest];
         });
+        setThreadDetail(emptyThread);
       }
-      await loadWorkbench();
       if (nextThread?.cwd) setSelectedProjectPath(nextThread.cwd);
       if (nextThread?.id) {
         setSelectedThreadId(nextThread.id);
-        await loadThreadDetail(nextThread.id);
       }
       setSendStatus("已新建对话");
+      void loadWorkbench();
     } catch (err) {
       setSendError(String(err));
       setSendStatus("");
