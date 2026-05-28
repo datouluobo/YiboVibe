@@ -8,6 +8,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/terminal_view.dart';
 import '../../widgets/dialog_view.dart';
 import '../../widgets/bottom_input_area.dart';
+import 'ai_workbench_page.dart';
 
 /// 远程控制台 — 移动端主力工作页面
 /// 布局: [AppBar] [SessionBar] [主视图区(最大化)] [底部输入区]
@@ -219,6 +220,24 @@ class _ConsolePageState extends State<ConsolePage> {
                             ),
                           ),
                         ),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const AiWorkbenchPage(),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: EdgeInsets.all(compact ? 5 : 6),
+                          child: const Icon(
+                            Icons.smart_toy_outlined,
+                            size: 17,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: compact ? 2 : 4),
                       GestureDetector(
                         onTap: () => _showNewSessionDialog(context, provider),
                         child: Padding(

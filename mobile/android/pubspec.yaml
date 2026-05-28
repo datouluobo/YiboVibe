@@ -1,7 +1,7 @@
 name: yibovibe_mobile
 description: "YiboVibe Mobile - Remote Console for Vibe Coding Tools"
 publish_to: 'none'
-version: 0.9.7+37
+version: 0.9.7+38
 
 environment:
   sdk: ^3.11.5
