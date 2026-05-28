@@ -1,6 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Activity,
@@ -26,241 +25,49 @@ import {
   Square,
   WandSparkles,
 } from "lucide-react";
-
-interface CodexAppServerProbeRequest {
-  endpoint: string;
-  bearer_token?: string | null;
-  method: string;
-  params: unknown;
-}
-
-interface CodexAppServerProbeResponse {
-  ok: boolean;
-  status: number;
-  elapsed_ms: number;
-  transport: string;
-  request_body: unknown;
-  response_json?: unknown | null;
-  response_text: string;
-  error?: string | null;
-}
-
-interface RpcEnvelope<T> {
-  id?: string;
-  result?: T;
-  error?: {
-    code?: number;
-    message?: string;
-  };
-}
-
-interface ThreadListResult {
-  data?: CodexThread[];
-  nextCursor?: string | null;
-  backwardsCursor?: string | null;
-}
-
-interface CodexThread {
-  id: string;
-  sessionId?: string;
-  name?: string | null;
-  preview?: string | null;
-  cwd?: string | null;
-  path?: string | null;
-  cliVersion?: string | null;
-  source?: string | null;
-  createdAt?: number;
-  updatedAt?: number;
-  gitInfo?: {
-    branch?: string | null;
-    originUrl?: string | null;
-    sha?: string | null;
-  } | null;
-  status?: {
-    type?: string;
-    [key: string]: unknown;
-  };
-  turns?: CodexTurn[];
-}
-
-interface DesktopConversationState {
-  id?: string;
-  title?: string | null;
-  cwd?: string | null;
-  source?: string | null;
-  modelProvider?: string | null;
-  gitInfo?: CodexThread["gitInfo"];
-  turns?: CodexTurn[];
-}
-
-interface ThreadReadResult {
-  thread?: CodexThread;
-}
-
-interface CodexTurn {
-  id?: string;
-  turnId?: string;
-  input?: string;
-  params?: {
-    input?: unknown;
-    cwd?: string | null;
-    model?: string | null;
-    effort?: string | null;
-    [key: string]: unknown;
-  };
-  items?: CodexThreadItem[];
-  startedAt?: string;
-  completedAt?: string;
-  status?: string;
-}
-
-interface CodexThreadItem {
-  type?: string;
-  text?: string;
-  content?: unknown;
-  summary?: unknown;
-  command?: string;
-  cwd?: string;
-  aggregatedOutput?: string;
-  exitCode?: number | null;
-  status?: string;
-  changes?: unknown;
-  name?: string;
-  arguments?: unknown;
-  result?: unknown;
-  [key: string]: unknown;
-}
-
-interface ModelListResult {
-  data?: CodexModel[];
-}
-
-interface CodexModel {
-  id?: string;
-  model?: string;
-  displayName?: string;
-  description?: string | null;
-  hidden?: boolean;
-  isDefault?: boolean;
-  defaultReasoningEffort?: string | null;
-  supportedReasoningEfforts?: string[];
-}
-
-interface ConfigReadResult {
-  config?: {
-    model?: string;
-    model_provider?: string;
-    approval_policy?: string;
-    sandbox_mode?: string;
-    service_tier?: string;
-    cwd?: string;
-    [key: string]: unknown;
-  };
-}
-
-interface AuthStatusResult {
-  authMethod?: string | null;
-  requiresOpenaiAuth?: boolean;
-}
-
-interface ConversationSummaryResult {
-  summary?: ConversationSummary;
-}
-
-interface ConversationSummary {
-  conversationId?: string;
-  path?: string;
-  preview?: string;
-  timestamp?: string | null;
-  updatedAt?: string | null;
-  modelProvider?: string;
-  cwd?: string;
-  cliVersion?: string;
-  source?: string;
-  gitInfo?: {
-    branch?: string | null;
-    originUrl?: string | null;
-    sha?: string | null;
-  } | null;
-}
-
-interface TurnStartResult {
-  turn?: CodexTurn;
-}
-
-interface DesktopIpcResponse<T> {
-  type?: string;
-  resultType?: string;
-  method?: string;
-  handledByClientId?: string;
-  result?: T;
-  error?: string;
-}
-
-interface ThreadResumeResult {
-  thread?: CodexThread;
-}
-
-interface ThreadStartResult {
-  thread?: CodexThread;
-}
-
-interface ThreadLoadedListResult {
-  data?: string[];
-  nextCursor?: string | null;
-}
-
-interface ProjectSummary {
-  cwd: string;
-  name: string;
-  threads: CodexThread[];
-  latestThread: CodexThread;
-  branches: string[];
-  originUrl?: string | null;
-  updatedAt?: number;
-}
-
-const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r25";
-
-const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
-const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
-const APPROVAL_POLICIES = ["on-request", "untrusted", "on-failure", "never"];
-const SANDBOX_MODES = ["workspace-write", "read-only", "danger-full-access"];
-const CHAT_VISIBLE_TYPES = new Set(["userMessage", "agentMessage"]);
-
-const SAMPLE_METHODS = [
-  "initialize",
-  "thread/list",
-  "thread/start",
-  "thread/read",
-  "thread/loaded/list",
-  "thread/name/set",
-  "thread/archive",
-  "turn/interrupt",
-  "model/list",
-  "config/read",
-  "config/batchWrite",
-  "account/read",
-  "getAuthStatus",
-];
-
-const DEFAULT_PARAMS_BY_METHOD: Record<string, string> = {
-  initialize:
-    `{\n  "clientInfo": {\n    "name": "yibovibe-desktop",\n    "version": "${CLIENT_VERSION}"\n  },\n  "capabilities": {\n    "experimentalApi": true\n  }\n}`,
-  "thread/list": "{\n  \"limit\": 50,\n  \"archived\": false\n}",
-  "thread/start": "{\n  \"cwd\": \"\",\n  \"model\": null\n}",
-  "thread/read": "{\n  \"threadId\": \"\",\n  \"includeTurns\": true\n}",
-  "thread/loaded/list": "{}",
-  "thread/name/set": "{\n  \"threadId\": \"\",\n  \"name\": \"\"\n}",
-  "thread/archive": "{\n  \"threadId\": \"\"\n}",
-  "turn/interrupt": "{\n  \"threadId\": \"\",\n  \"turnId\": \"\"\n}",
-  "model/list": "{\n  \"includeHidden\": false\n}",
-  "config/read": "{\n  \"includeLayers\": true\n}",
-  "config/batchWrite": "{\n  \"edits\": [],\n  \"reloadUserConfig\": true\n}",
-  "account/read": "{}",
-  getAuthStatus: "{\n  \"includeToken\": false,\n  \"refreshToken\": false\n}",
-};
+import {
+  APPROVAL_POLICIES,
+  CODEX_ENDPOINT,
+  DEFAULT_PARAMS_BY_METHOD,
+  REASONING_EFFORTS,
+  REASONING_SUMMARIES,
+  SAMPLE_METHODS,
+  SANDBOX_MODES,
+  asStringArray,
+  buildProjectSummaries,
+  describeItem,
+  formatJson,
+  formatRelativeAge,
+  formatTime,
+  hasInProgressTurn,
+  isChatVisibleItem,
+  isUnmaterializedThreadError,
+  latestInProgressTurnId,
+  normalizeThreadStatus,
+  probeCodexAppServer,
+  requestCodexAppServer,
+  requestCodexDesktopIpc,
+  sandboxPolicyFromMode,
+  summarizeThread,
+  threadAssistantSignature,
+  threadFromDesktopState,
+  wait,
+  type AuthStatusResult,
+  type CodexAppServerProbeResponse,
+  type CodexModel,
+  type CodexThread,
+  type ConfigReadResult,
+  type ConversationSummary,
+  type ConversationSummaryResult,
+  type DesktopConversationState,
+  type ModelListResult,
+  type ThreadListResult,
+  type ThreadLoadedListResult,
+  type ThreadReadResult,
+  type ThreadResumeResult,
+  type ThreadStartResult,
+  type TurnStartResult,
+} from "../services/codexBridge";
 
 const panelStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
@@ -332,155 +139,6 @@ const messageCopyButtonStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-function formatJson(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function getResult<T>(response: CodexAppServerProbeResponse): T {
-  const envelope = response.response_json as RpcEnvelope<T> | undefined | null;
-  if (!response.ok || envelope?.error) {
-    throw new Error(envelope?.error?.message || response.error || "Codex App Server request failed");
-  }
-  return (envelope?.result ?? {}) as T;
-}
-
-function getRpcResult<T>(value: unknown): T {
-  const envelope = value as RpcEnvelope<T> | undefined | null;
-  if (envelope?.error) {
-    throw new Error(envelope.error.message || formatJson(envelope.error));
-  }
-  return (envelope?.result ?? {}) as T;
-}
-
-function getIpcResult<T>(value: unknown): T {
-  const envelope = value as DesktopIpcResponse<T> | undefined | null;
-  if (envelope?.resultType === "error" || envelope?.error) {
-    throw new Error(envelope?.error || "Codex Desktop IPC request failed");
-  }
-  return (envelope?.result ?? {}) as T;
-}
-
-function projectNameFromPath(path: string) {
-  const clean = path.replace(/[\\/]+$/, "");
-  const parts = clean.split(/[\\/]/);
-  return parts[parts.length - 1] || clean;
-}
-
-function formatTime(value?: number | string) {
-  if (!value) return "未知";
-  const date =
-    typeof value === "number"
-      ? new Date(value > 20_000_000_000 ? value : value * 1000)
-      : new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知";
-  return date.toLocaleString();
-}
-
-function formatRelativeAge(value?: number | string) {
-  if (!value) return "";
-  const date =
-    typeof value === "number"
-      ? new Date(value > 20_000_000_000 ? value : value * 1000)
-      : new Date(value);
-  const diffMs = Date.now() - date.getTime();
-  if (Number.isNaN(diffMs) || diffMs < 0) return "";
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const week = 7 * day;
-  if (diffMs < hour) return `${Math.max(1, Math.round(diffMs / minute))} 分`;
-  if (diffMs < day) return `${Math.round(diffMs / hour)} 小时`;
-  if (diffMs < week) return `${Math.round(diffMs / day)} 天`;
-  return `${Math.round(diffMs / week)} 周`;
-}
-
-function summarizeThread(thread: CodexThread) {
-  return thread.name || thread.preview || thread.id;
-}
-
-function collectText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (item && typeof item === "object" && "text" in item) {
-          return String((item as { text?: unknown }).text ?? "");
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (value && typeof value === "object" && "text" in value) {
-    return String((value as { text?: unknown }).text ?? "");
-  }
-  return "";
-}
-
-function toDisplayText(value: unknown): string {
-  if (typeof value === "string") return value;
-  const collected = collectText(value);
-  if (collected) return collected;
-  if (value === null || value === undefined) return "";
-  return formatJson(value);
-}
-
-function asStringArray(value: unknown, fallback: string[]) {
-  if (!Array.isArray(value)) return fallback;
-  const values = value.filter((item): item is string => typeof item === "string" && item.length > 0);
-  return values.length ? values : fallback;
-}
-
-function describeItem(item: CodexThreadItem) {
-  const type = item.type || "item";
-
-  if (type === "userMessage") {
-    return { role: "user", title: "用户", text: collectText(item.content) || toDisplayText(item.text) };
-  }
-
-  if (type === "agentMessage") {
-    return { role: "assistant", title: "Codex", text: toDisplayText(item.text) || collectText(item.content) };
-  }
-
-  if (type === "reasoning") {
-    return { role: "system", title: "推理摘要", text: collectText(item.summary) || collectText(item.content) };
-  }
-
-  if (type === "commandExecution") {
-    const details = [
-      item.command ? `$ ${item.command}` : "",
-      item.cwd ? `cwd: ${item.cwd}` : "",
-      item.status ? `status: ${item.status}` : "",
-      item.exitCode !== undefined && item.exitCode !== null ? `exit: ${item.exitCode}` : "",
-      item.aggregatedOutput || "",
-    ].filter(Boolean);
-    return { role: "tool", title: "命令执行", text: details.join("\n") };
-  }
-
-  if (type === "fileChange") {
-    return { role: "tool", title: "文件变更", text: formatJson(item.changes ?? item) };
-  }
-
-  if (type === "mcpToolCall") {
-    return {
-      role: "tool",
-      title: item.name ? `工具调用: ${item.name}` : "工具调用",
-      text: formatJson({ arguments: item.arguments, result: item.result }),
-    };
-  }
-
-  return { role: "system", title: type, text: formatJson(item) };
-}
-
-function isChatVisibleItem(item: CodexThreadItem) {
-  return CHAT_VISIBLE_TYPES.has(item.type || "");
-}
-
 function roleColor(role: string) {
   if (role === "user") return "#8ab4ff";
   if (role === "assistant") return "#7ee787";
@@ -537,78 +195,13 @@ function isNearBottom(element: HTMLElement, threshold = 120) {
   return element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
 }
 
-function threadFromDesktopState(
-  state: DesktopConversationState,
-  fallback: CodexThread | undefined,
-  threadId: string,
-): CodexThread {
-  return {
-    ...(fallback ?? { id: threadId }),
-    id: state.id || threadId,
-    name: state.title ?? fallback?.name,
-    cwd: state.cwd ?? fallback?.cwd,
-    source: state.source ?? fallback?.source,
-    gitInfo: state.gitInfo ?? fallback?.gitInfo,
-    updatedAt: Date.now(),
-    turns: state.turns ?? fallback?.turns ?? [],
-  };
-}
-
-function threadAssistantSignature(thread?: CodexThread | null) {
-  const turns = thread?.turns ?? [];
-  return turns
-    .flatMap((turn) => turn.items ?? [])
-    .filter((item) => item.type === "agentMessage")
-    .map((item, index) => {
-      const text = toDisplayText(item.text) || collectText(item.content);
-      return `${index}:${item.status ?? ""}:${text.length}:${text.slice(-32)}`;
-    })
-    .join("|");
-}
-
-function hasInProgressTurn(thread?: CodexThread | null) {
-  return Boolean(thread?.turns?.some((turn) => turn.status === "inProgress"));
-}
-
-function isUnmaterializedThreadError(value: unknown) {
-  const message = String(value);
-  return message.includes("not materialized yet") || message.includes("includeTurns is unavailable before first user message");
-}
-
-function latestInProgressTurnId(thread?: CodexThread | null) {
-  const turns = thread?.turns ?? [];
-  return [...turns].reverse().find((turn) => turn.status === "inProgress")?.id;
-}
-
-function sandboxPolicyFromMode(mode: string, cwd: string | null) {
-  if (mode === "read-only") {
-    return { type: "readOnly", networkAccess: true };
-  }
-  if (mode === "danger-full-access") {
-    return { type: "dangerFullAccess" };
-  }
-  return {
-    type: "workspaceWrite",
-    writableRoots: cwd ? [cwd] : [],
-    networkAccess: true,
-    excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false,
-  };
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
 function Agents() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const selectedThreadRef = useRef<CodexThread | undefined>(undefined);
   const threadDetailRef = useRef<CodexThread | null>(null);
   const refreshGenerationRef = useRef(0);
-  const [endpoint, setEndpoint] = useState(ENDPOINT);
+  const [endpoint, setEndpoint] = useState(CODEX_ENDPOINT);
   const bearerToken = "";
   const [method, setMethod] = useState("thread/list");
   const [paramsText, setParamsText] = useState(DEFAULT_PARAMS_BY_METHOD["thread/list"]);
@@ -658,28 +251,13 @@ function Agents() {
 
   const callRpc = useCallback(
     async <T,>(rpcMethod: string, params: unknown) => {
-      const payload: CodexAppServerProbeRequest = {
-        endpoint,
-        bearer_token: bearerToken.trim() ? bearerToken.trim() : null,
-        method: rpcMethod,
-        params,
-      };
-      const response = await invoke<CodexAppServerProbeResponse>("codex_app_server_probe", {
-        request: payload,
-      });
-      return { response, result: getResult<T>(response) };
+      return probeCodexAppServer<T>(endpoint, rpcMethod, params, bearerToken);
     },
     [bearerToken, endpoint],
   );
 
   const callPersistentRpc = useCallback(async <T,>(rpcMethod: string, params: unknown) => {
-    const response = await invoke<unknown>("codex_app_server_request", {
-      request: {
-        method: rpcMethod,
-        params,
-      },
-    });
-    return getRpcResult<T>(response);
+    return requestCodexAppServer<T>(rpcMethod, params);
   }, []);
 
   const callBridgeRpc = useCallback(
@@ -699,42 +277,10 @@ function Agents() {
   );
 
   const callDesktopIpc = useCallback(async <T,>(ipcMethod: string, params: unknown, version = 0) => {
-    const response = await invoke<unknown>("codex_desktop_ipc_request", {
-      request: {
-        method: ipcMethod,
-        params,
-        version,
-      },
-    });
-    return getIpcResult<T>(response);
+    return requestCodexDesktopIpc<T>(ipcMethod, params, version);
   }, []);
 
-  const projects = useMemo<ProjectSummary[]>(() => {
-    const groups = new Map<string, CodexThread[]>();
-    for (const thread of threads) {
-      const cwd = thread.cwd || "(unknown)";
-      groups.set(cwd, [...(groups.get(cwd) ?? []), thread]);
-    }
-
-    return Array.from(groups.entries())
-      .map(([cwd, groupedThreads]) => {
-        const sorted = [...groupedThreads].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-        const latestThread = sorted[0];
-        const branches = Array.from(
-          new Set(sorted.map((thread) => thread.gitInfo?.branch).filter(Boolean) as string[]),
-        );
-        return {
-          cwd,
-          name: cwd === "(unknown)" ? "未知项目" : projectNameFromPath(cwd),
-          threads: sorted,
-          latestThread,
-          branches,
-          originUrl: latestThread.gitInfo?.originUrl,
-          updatedAt: latestThread.updatedAt,
-        };
-      })
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  }, [threads]);
+  const projects = useMemo(() => buildProjectSummaries(threads), [threads]);
 
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase();
@@ -1131,15 +677,7 @@ function Agents() {
 
     setIsRunning(true);
     try {
-      const payload: CodexAppServerProbeRequest = {
-        endpoint,
-        bearer_token: bearerToken.trim() ? bearerToken.trim() : null,
-        method,
-        params: parsedParams.value,
-      };
-      const response = await invoke<CodexAppServerProbeResponse>("codex_app_server_probe", {
-        request: payload,
-      });
+      const { response } = await probeCodexAppServer(endpoint, method, parsedParams.value, bearerToken);
       setResult(response);
     } catch (err) {
       setError(String(err));
@@ -1150,7 +688,7 @@ function Agents() {
 
   const currentBranch = selectedThread?.gitInfo?.branch || selectedProject?.branches[0] || "unknown";
   const currentPath = selectedThread?.cwd || selectedProject?.cwd || "unknown";
-  const currentThreadStatus = threadDetail?.status?.type || selectedThread?.status?.type || "notLoaded";
+  const currentThreadStatus = normalizeThreadStatus(threadDetail ?? selectedThread);
   const activeTurnId = latestInProgressTurnId(threadDetail ?? selectedThread);
 
   const createThread = useCallback(async () => {
