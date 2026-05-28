@@ -221,7 +221,7 @@ interface ProjectSummary {
 }
 
 const ENDPOINT = "stdio://";
-const CLIENT_VERSION = "0.9.7-r24";
+const CLIENT_VERSION = "0.9.7-r25";
 
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
@@ -1311,7 +1311,10 @@ function Agents() {
         void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
         return;
       } catch (ipcErr) {
-        setLiveWarning(`Codex Desktop IPC 不可用，已回退 stdio：${String(ipcErr)}`);
+        if (showTechnicalEvents) {
+          setLiveWarning(`Codex Desktop IPC 不可用，已回退 stdio：${String(ipcErr)}`);
+        }
+        setSendStatus("Codex Desktop IPC 未接管，改用 stdio 发送...");
       }
 
       const loaded = await callPersistentRpc<ThreadLoadedListResult>("thread/loaded/list", {});
@@ -1363,6 +1366,7 @@ function Agents() {
     selectedSummary,
     selectedSandboxMode,
     selectedThread?.id,
+    showTechnicalEvents,
   ]);
 
   const resultTone = result?.ok ? "#7ee787" : result ? "#f2cc60" : "#8b949e";
@@ -1856,7 +1860,7 @@ function Agents() {
               background: "var(--color-surface)",
             }}
           >
-            {(sendError || sendStatus || liveStatus || liveWarning) && (
+            {(sendError || sendStatus || (showTechnicalEvents && (liveStatus || liveWarning))) && (
               <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8, fontSize: 12 }}>
                 {sendError && (
                   <pre
@@ -1873,12 +1877,12 @@ function Agents() {
                   </pre>
                 )}
                 {!sendError && sendStatus && <div style={{ color: "var(--color-text-muted)" }}>{sendStatus}</div>}
-                {!sendError && liveStatus && (
+                {!sendError && showTechnicalEvents && liveStatus && (
                   <div style={{ color: "var(--color-text-muted)" }}>
                     {`连接事件：${liveStatus}${liveEventCount ? ` · ${liveEventCount}` : ""}`}
                   </div>
                 )}
-                {liveWarning && (
+                {showTechnicalEvents && liveWarning && (
                   <pre
                     style={{
                       margin: 0,
