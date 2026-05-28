@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   stableProjectId,
+  type AiWorkbenchAdapter,
   type AiWorkbenchConfig,
   type AiWorkbenchConversation,
   type AiWorkbenchMessage,
@@ -206,7 +207,7 @@ export interface ProjectSummary {
 export type CodexConversationStatus = AiWorkbenchStatus;
 
 export const CODEX_ENDPOINT = "stdio://";
-export const CODEX_CLIENT_VERSION = "0.9.7-r27";
+export const CODEX_CLIENT_VERSION = "0.9.7-r28";
 export const CODEX_PROVIDER: AiWorkbenchProvider = {
   id: "codex",
   name: "Codex",
@@ -571,6 +572,107 @@ export function toWorkbenchConfig(config?: ConfigReadResult["config"] | null): A
     serviceTier: config?.service_tier,
     cwd: config?.cwd,
     raw: config,
+  };
+}
+
+export function createCodexWorkbenchAdapter(): AiWorkbenchAdapter {
+  return {
+    provider: CODEX_PROVIDER,
+
+    async listConversations(params) {
+      const result = await requestCodexAppServer<ThreadListResult>("thread/list", {
+        limit: params?.limit ?? 50,
+        archived: params?.archived ?? false,
+      });
+      return (result.data ?? []).map(toWorkbenchConversation);
+    },
+
+    async readConversation(id) {
+      const result = await requestCodexAppServer<ThreadReadResult>("thread/read", {
+        threadId: id,
+        includeTurns: true,
+      });
+      if (!result.thread) {
+        throw new Error(`thread not found: ${id}`);
+      }
+      return toWorkbenchConversation(result.thread);
+    },
+
+    async createConversation(params) {
+      const result = await requestCodexAppServer<ThreadStartResult>("thread/start", {
+        cwd: params.cwd ?? null,
+        model: params.model ?? null,
+      });
+      if (!result.thread) {
+        throw new Error("thread/start did not return a thread");
+      }
+      return toWorkbenchConversation({ ...result.thread, turns: [] });
+    },
+
+    async renameConversation(id, name) {
+      await requestCodexAppServer("thread/name/set", { threadId: id, name });
+    },
+
+    async archiveConversation(id) {
+      await requestCodexAppServer("thread/archive", { threadId: id });
+    },
+
+    async sendMessage(conversationId, text, options) {
+      const input = [
+        {
+          type: "text",
+          text,
+          text_elements: [],
+        },
+      ];
+      const cwd = options?.cwd && options.cwd !== "unknown" ? options.cwd : null;
+      await requestCodexAppServer<TurnStartResult>("turn/start", {
+        threadId: conversationId,
+        input,
+        cwd,
+        model: options?.model ?? null,
+        approvalPolicy: options?.approvalPolicy ?? null,
+        sandboxPolicy: sandboxPolicyFromMode(options?.sandboxMode || "workspace-write", cwd),
+        effort: options?.effort ?? null,
+        summary: options?.summary ?? null,
+      });
+    },
+
+    async cancelTurn(conversationId, turnId) {
+      await requestCodexAppServer("turn/interrupt", { threadId: conversationId, turnId });
+    },
+
+    async listModels(params) {
+      const result = await requestCodexAppServer<ModelListResult>("model/list", {
+        includeHidden: params?.includeHidden ?? false,
+      });
+      return (result.data ?? []).map(toWorkbenchModel);
+    },
+
+    async readConfig(params) {
+      const result = await requestCodexAppServer<ConfigReadResult>("config/read", {
+        includeLayers: true,
+        cwd: params?.cwd ?? undefined,
+      });
+      return toWorkbenchConfig(result.config);
+    },
+
+    async updateConfig(config) {
+      const edits = [
+        config.model !== undefined ? { keyPath: "model", value: config.model ?? null, mergeStrategy: "upsert" } : null,
+        config.approvalPolicy !== undefined
+          ? { keyPath: "approval_policy", value: config.approvalPolicy ?? null, mergeStrategy: "upsert" }
+          : null,
+        config.sandboxMode !== undefined
+          ? { keyPath: "sandbox_mode", value: config.sandboxMode ?? null, mergeStrategy: "upsert" }
+          : null,
+      ].filter(Boolean);
+
+      await requestCodexAppServer("config/batchWrite", {
+        edits,
+        reloadUserConfig: true,
+      });
+    },
   };
 }
 

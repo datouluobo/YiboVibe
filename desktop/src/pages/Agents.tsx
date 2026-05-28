@@ -68,6 +68,7 @@ import {
   type ThreadStartResult,
   type TurnStartResult,
 } from "../services/codexBridge";
+import { normalizeWorkbenchError, workbenchErrorMessage } from "../services/aiWorkbench";
 
 const panelStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
@@ -240,6 +241,22 @@ function Agents() {
   const [isSendingTurn, setIsSendingTurn] = useState(false);
   const [isMutatingThread, setIsMutatingThread] = useState(false);
   const [, setLastRefreshAt] = useState<Date | null>(null);
+
+  const showWorkbenchError = useCallback((err: unknown) => {
+    const normalized = normalizeWorkbenchError(err);
+    setWorkbenchError(workbenchErrorMessage(normalized));
+    if (showTechnicalEvents) {
+      setLiveWarning(normalized.message);
+    }
+  }, [showTechnicalEvents]);
+
+  const showSendError = useCallback((err: unknown) => {
+    const normalized = normalizeWorkbenchError(err);
+    setSendError(workbenchErrorMessage(normalized));
+    if (showTechnicalEvents) {
+      setLiveWarning(normalized.message);
+    }
+  }, [showTechnicalEvents]);
 
   const parsedParams = useMemo(() => {
     try {
@@ -426,7 +443,7 @@ function Agents() {
       setSelectedProjectPath((current) => current || fallbackProjectPath);
       setSelectedThreadId((current) => current || fallbackThreadId);
     } catch (err) {
-      setWorkbenchError(String(err));
+      showWorkbenchError(err);
     } finally {
       setIsLoadingWorkbench(false);
     }
@@ -471,7 +488,7 @@ function Agents() {
         }
         if (!options?.silent) {
           setThreadDetail(null);
-          setWorkbenchError(String(err));
+        showWorkbenchError(err);
         }
         return null;
       } finally {
@@ -480,7 +497,7 @@ function Agents() {
         }
       }
     },
-    [callBridgeRpc],
+    [callBridgeRpc, showWorkbenchError],
   );
 
   const refreshThreadUntilSettled = useCallback(
@@ -566,8 +583,8 @@ function Agents() {
           setSelectedSandboxMode(nextConfig.config.sandbox_mode);
         }
       })
-      .catch((err) => setWorkbenchError(String(err)));
-  }, [callBridgeRpc, selectedProjectPath]);
+      .catch((err) => showWorkbenchError(err));
+  }, [callBridgeRpc, selectedProjectPath, showWorkbenchError]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -720,7 +737,7 @@ function Agents() {
       setSendStatus("已新建对话");
       void loadWorkbench();
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
       setSendStatus("");
     } finally {
       setIsMutatingThread(false);
@@ -734,6 +751,7 @@ function Agents() {
     selectedApprovalPolicy,
     selectedModel,
     selectedSandboxMode,
+    showSendError,
   ]);
 
   const renameThread = useCallback(async () => {
@@ -746,11 +764,11 @@ function Agents() {
       await loadWorkbench();
       await loadThreadDetail(selectedThread.id);
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
     } finally {
       setIsMutatingThread(false);
     }
-  }, [callPersistentRpc, loadThreadDetail, loadWorkbench, selectedThread]);
+  }, [callPersistentRpc, loadThreadDetail, loadWorkbench, selectedThread, showSendError]);
 
   const archiveThread = useCallback(async () => {
     if (!selectedThread?.id) return;
@@ -761,11 +779,11 @@ function Agents() {
       setSelectedThreadId("");
       await loadWorkbench();
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
     } finally {
       setIsMutatingThread(false);
     }
-  }, [callPersistentRpc, loadWorkbench, selectedThread?.id]);
+  }, [callPersistentRpc, loadWorkbench, selectedThread?.id, showSendError]);
 
   const interruptTurn = useCallback(async () => {
     if (!selectedThread?.id || !activeTurnId) return;
@@ -776,12 +794,12 @@ function Agents() {
       await loadThreadDetail(selectedThread.id, { silent: true });
       setSendStatus("已请求中断");
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
       setSendStatus("");
     } finally {
       setIsMutatingThread(false);
     }
-  }, [activeTurnId, callPersistentRpc, loadThreadDetail, selectedThread?.id]);
+  }, [activeTurnId, callPersistentRpc, loadThreadDetail, selectedThread?.id, showSendError]);
 
   const applyProjectConfig = useCallback(async () => {
     setIsMutatingThread(true);
@@ -798,12 +816,12 @@ function Agents() {
       await loadWorkbench();
       setSendStatus("配置已写入并热加载");
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
       setSendStatus("");
     } finally {
       setIsMutatingThread(false);
     }
-  }, [callPersistentRpc, loadWorkbench, selectedApprovalPolicy, selectedModel, selectedSandboxMode]);
+  }, [callPersistentRpc, loadWorkbench, selectedApprovalPolicy, selectedModel, selectedSandboxMode, showSendError]);
 
   const sendTurn = useCallback(async () => {
     const text = draftMessage.trim();
@@ -885,7 +903,7 @@ function Agents() {
       setSendStatus("已提交，等待 Codex 回复...");
       void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
     } catch (err) {
-      setSendError(String(err));
+      showSendError(err);
       setSendStatus("");
     } finally {
       setIsSendingTurn(false);
@@ -904,6 +922,7 @@ function Agents() {
     selectedSummary,
     selectedSandboxMode,
     selectedThread?.id,
+    showSendError,
     showTechnicalEvents,
   ]);
 
