@@ -1,4 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  stableProjectId,
+  type AiWorkbenchConfig,
+  type AiWorkbenchConversation,
+  type AiWorkbenchMessage,
+  type AiWorkbenchModel,
+  type AiWorkbenchProject,
+  type AiWorkbenchProvider,
+  type AiWorkbenchStatus,
+} from "./aiWorkbench";
 
 export interface CodexAppServerProbeRequest {
   endpoint: string;
@@ -193,17 +203,29 @@ export interface ProjectSummary {
   updatedAt?: number;
 }
 
-export type CodexConversationStatus =
-  | "notLoaded"
-  | "idle"
-  | "loading"
-  | "running"
-  | "waitingApproval"
-  | "failed"
-  | "offline";
+export type CodexConversationStatus = AiWorkbenchStatus;
 
 export const CODEX_ENDPOINT = "stdio://";
-export const CODEX_CLIENT_VERSION = "0.9.7-r26";
+export const CODEX_CLIENT_VERSION = "0.9.7-r27";
+export const CODEX_PROVIDER: AiWorkbenchProvider = {
+  id: "codex",
+  name: "Codex",
+  transport: "app-server",
+  capabilities: [
+    "project-list",
+    "conversation-list",
+    "conversation-read",
+    "conversation-create",
+    "conversation-rename",
+    "conversation-archive",
+    "message-send",
+    "turn-cancel",
+    "model-list",
+    "config-read",
+    "config-write",
+    "event-stream",
+  ],
+};
 export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 export const REASONING_SUMMARIES = ["auto", "concise", "detailed", "none"];
 export const APPROVAL_POLICIES = ["on-request", "untrusted", "on-failure", "never"];
@@ -379,6 +401,37 @@ export function buildProjectSummaries(threads: CodexThread[]): ProjectSummary[] 
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
+export function toWorkbenchProject(project: ProjectSummary): AiWorkbenchProject {
+  return {
+    id: stableProjectId(CODEX_PROVIDER.id, project.cwd),
+    providerId: CODEX_PROVIDER.id,
+    name: project.name,
+    path: project.cwd,
+    conversationIds: project.threads.map((thread) => thread.id),
+    branches: project.branches,
+    originUrl: project.originUrl,
+    updatedAt: project.updatedAt,
+  };
+}
+
+export function toWorkbenchConversation(thread: CodexThread): AiWorkbenchConversation {
+  return {
+    id: thread.id,
+    providerId: CODEX_PROVIDER.id,
+    projectId: stableProjectId(CODEX_PROVIDER.id, thread.cwd || "(unknown)"),
+    title: summarizeThread(thread),
+    preview: thread.preview,
+    cwd: thread.cwd,
+    source: thread.source,
+    cliVersion: thread.cliVersion,
+    status: normalizeThreadStatus(thread),
+    gitInfo: thread.gitInfo,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    raw: thread,
+  };
+}
+
 export function normalizeThreadStatus(thread?: CodexThread | null): CodexConversationStatus {
   if (!thread) return "notLoaded";
   const rawStatus = thread.status?.type;
@@ -465,6 +518,60 @@ export function describeItem(item: CodexThreadItem) {
   }
 
   return { role: "system", title: type, text: formatJson(item) };
+}
+
+export function toWorkbenchMessage(
+  item: CodexThreadItem,
+  index: number,
+  conversationId?: string,
+): AiWorkbenchMessage {
+  const described = describeItem(item);
+  return {
+    id: `${conversationId || "codex"}:${item.type || "item"}:${index}`,
+    providerId: CODEX_PROVIDER.id,
+    conversationId,
+    role: described.role as AiWorkbenchMessage["role"],
+    title: described.title,
+    text: described.text,
+    status: item.status,
+    rawType: item.type,
+    raw: item,
+  };
+}
+
+export function toWorkbenchMessages(thread?: CodexThread | null, includeTechnical = false): AiWorkbenchMessage[] {
+  const items = (thread?.turns ?? []).flatMap((turn) => turn.items ?? []);
+  return items
+    .filter((item) => includeTechnical || isChatVisibleItem(item))
+    .map((item, index) => toWorkbenchMessage(item, index, thread?.id));
+}
+
+export function toWorkbenchModel(model: CodexModel): AiWorkbenchModel {
+  const id = model.id || model.model || "";
+  return {
+    id,
+    providerId: CODEX_PROVIDER.id,
+    label: model.displayName || model.model || model.id || "Unknown model",
+    description: model.description,
+    hidden: model.hidden,
+    isDefault: model.isDefault,
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    supportedReasoningEfforts: model.supportedReasoningEfforts,
+    raw: model,
+  };
+}
+
+export function toWorkbenchConfig(config?: ConfigReadResult["config"] | null): AiWorkbenchConfig {
+  return {
+    providerId: CODEX_PROVIDER.id,
+    model: config?.model,
+    modelProvider: config?.model_provider,
+    approvalPolicy: config?.approval_policy,
+    sandboxMode: config?.sandbox_mode,
+    serviceTier: config?.service_tier,
+    cwd: config?.cwd,
+    raw: config,
+  };
 }
 
 export function isChatVisibleItem(item: CodexThreadItem) {
