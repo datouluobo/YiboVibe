@@ -207,7 +207,7 @@ export interface ProjectSummary {
 export type CodexConversationStatus = AiWorkbenchStatus;
 
 export const CODEX_ENDPOINT = "stdio://";
-export const CODEX_CLIENT_VERSION = "0.9.7-r28";
+export const CODEX_CLIENT_VERSION = "0.9.7-r29";
 export const CODEX_PROVIDER: AiWorkbenchProvider = {
   id: "codex",
   name: "Codex",

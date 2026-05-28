@@ -5067,7 +5067,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.9.7-r28"
+version = "0.9.7-r29"
 dependencies = [
  "arboard",
  "base64 0.22.1",

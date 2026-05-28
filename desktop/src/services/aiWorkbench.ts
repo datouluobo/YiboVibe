@@ -127,6 +127,19 @@ export interface AiWorkbenchSendOptions {
   sandboxMode?: string | null;
 }
 
+export interface AiWorkbenchSnapshot {
+  schemaVersion: 1;
+  generatedAt: string;
+  providers: AiWorkbenchProvider[];
+  projects: AiWorkbenchProject[];
+  conversations: AiWorkbenchConversation[];
+  activeConversationId?: string | null;
+  messagesByConversationId: Record<string, AiWorkbenchMessage[]>;
+  modelsByProviderId: Partial<Record<AiWorkbenchProviderId, AiWorkbenchModel[]>>;
+  configsByProviderId: Partial<Record<AiWorkbenchProviderId, AiWorkbenchConfig>>;
+  errors?: AiWorkbenchError[];
+}
+
 export interface AiWorkbenchAdapter {
   provider: AiWorkbenchProvider;
   listConversations(params?: { archived?: boolean; limit?: number }): Promise<AiWorkbenchConversation[]>;
@@ -143,6 +156,21 @@ export interface AiWorkbenchAdapter {
 
 export function stableProjectId(providerId: AiWorkbenchProviderId, path: string) {
   return `${providerId}:${path || "(unknown)"}`;
+}
+
+export function createEmptyWorkbenchSnapshot(provider: AiWorkbenchProvider): AiWorkbenchSnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    providers: [provider],
+    projects: [],
+    conversations: [],
+    activeConversationId: null,
+    messagesByConversationId: {},
+    modelsByProviderId: {},
+    configsByProviderId: {},
+    errors: [],
+  };
 }
 
 export function normalizeWorkbenchError(raw: unknown): AiWorkbenchError {
