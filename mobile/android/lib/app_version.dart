@@ -1,4 +1,4 @@
 /// 移动端可见版本号。
 /// 约定：每次修改移动端代码后，同步更新这里和 pubspec.yaml。
 /// 显示格式尽量短，避免挤占顶部栏空间，例如 `0.9.7-r1`.
-const mobileAppVersion = '0.9.7-r1';
+const mobileAppVersion = '0.9.7-r2';
