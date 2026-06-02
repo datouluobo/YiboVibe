@@ -5,6 +5,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="YiboVibe Mobile - Remote Console for Vibe Coding Tools">
 
   <!-- iOS meta tags & icons -->
@@ -18,9 +19,6 @@
 
   <title>YiboVibe Mobile</title>
   <link rel="manifest" href="manifest.json">
-  <script>
-    window.flutterWebRenderer = 'html';
-  </script>
 
   <style>
     @font-face {
@@ -47,10 +45,14 @@
       font-weight: 400;
       src: url(/fonts/MaterialIcons-Regular.woff2) format('woff2');
     }
+    html,
     body {
+      width: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
-      background: #0A0A0B;
+      background: #F0F0F3;
+      overflow: hidden;
     }
   </style>
 </head>

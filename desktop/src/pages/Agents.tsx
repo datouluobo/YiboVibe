@@ -39,16 +39,22 @@ import {
   formatJson,
   formatRelativeAge,
   formatTime,
+  getGitBranchState,
   hasInProgressTurn,
   isChatVisibleItem,
   isUnmaterializedThreadError,
   latestInProgressTurnId,
+  materializeCodexChatItems,
   normalizeThreadStatus,
   probeCodexAppServer,
   requestCodexAppServer,
   requestCodexDesktopIpc,
+  extractPendingApproval,
   sandboxPolicyFromMode,
   summarizeThread,
+  switchGitBranch,
+  mergeCodexThreadSnapshots,
+  pendingApprovalFromServerRequest,
   threadAssistantSignature,
   threadFromDesktopState,
   wait,
@@ -140,6 +146,8 @@ const messageCopyButtonStyle: CSSProperties = {
   flexShrink: 0,
 };
 
+const SERVICE_TIER_OPTIONS = ["default", "priority"];
+
 function roleColor(role: string) {
   if (role === "user") return "#8ab4ff";
   if (role === "assistant") return "#7ee787";
@@ -214,16 +222,17 @@ function Agents() {
 
   const [threads, setThreads] = useState<CodexThread[]>([]);
   const [models, setModels] = useState<CodexModel[]>([]);
-  const [config, setConfig] = useState<ConfigReadResult["config"] | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatusResult | null>(null);
   const [conversationSummary, setConversationSummary] = useState<ConversationSummary | null>(null);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedServiceTier, setSelectedServiceTier] = useState("default");
   const [selectedEffort, setSelectedEffort] = useState("medium");
   const [selectedSummary, setSelectedSummary] = useState("auto");
   const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState("on-request");
   const [selectedSandboxMode, setSelectedSandboxMode] = useState("workspace-write");
+  const [gitBranchStateByCwd, setGitBranchStateByCwd] = useState<Record<string, { branch: string; branches: string[] }>>({});
   const [projectSearch, setProjectSearch] = useState("");
   const [pinnedProjectPath, setPinnedProjectPath] = useState("");
   const [draftMessage, setDraftMessage] = useState("");
@@ -293,11 +302,46 @@ function Agents() {
     [callPersistentRpc, callRpc],
   );
 
-  const callDesktopIpc = useCallback(async <T,>(ipcMethod: string, params: unknown, version = 0) => {
-    return requestCodexDesktopIpc<T>(ipcMethod, params, version);
-  }, []);
+  const callDesktopIpc = useCallback(
+    async <T,>(ipcMethod: string, params: unknown, version = 0, routeThreadId?: string | null) => {
+      return requestCodexDesktopIpc<T>(ipcMethod, params, version, routeThreadId);
+    },
+    [],
+  );
 
-  const projects = useMemo(() => buildProjectSummaries(threads), [threads]);
+  const projects = useMemo(
+    () =>
+      buildProjectSummaries(threads).map((project) => {
+        const live = gitBranchStateByCwd[project.cwd];
+        if (!live) return project;
+        return {
+          ...project,
+          branches: live.branches.length ? live.branches : project.branches,
+          threads: project.threads.map((thread) =>
+            thread.cwd === project.cwd
+              ? {
+                  ...thread,
+                  gitInfo: {
+                    ...thread.gitInfo,
+                    branch: live.branch,
+                  },
+                }
+              : thread,
+          ),
+          latestThread:
+            project.latestThread && project.latestThread.cwd === project.cwd
+              ? {
+                  ...project.latestThread,
+                  gitInfo: {
+                    ...project.latestThread.gitInfo,
+                    branch: live.branch,
+                  },
+                }
+              : project.latestThread,
+        };
+      }),
+    [gitBranchStateByCwd, threads],
+  );
 
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase();
@@ -333,20 +377,62 @@ function Agents() {
     [selectedThreadId, visibleThreads],
   );
 
+  useEffect(() => {
+    const uniqueCwds = Array.from(new Set(threads.map((thread) => thread.cwd).filter(Boolean) as string[]));
+    if (!uniqueCwds.length) return;
+    let cancelled = false;
+    void Promise.all(
+      uniqueCwds.map(async (cwd) => {
+        try {
+          const state = await getGitBranchState(cwd);
+          return [cwd, state] as const;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      setGitBranchStateByCwd((current) => {
+        const next = { ...current };
+        for (const item of results) {
+          if (!item) continue;
+          next[item[0]] = { branch: item[1].branch, branches: item[1].branches };
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [threads]);
+
   const conversationItems = useMemo(() => {
     const turns = threadDetail?.turns ?? selectedThread?.turns ?? [];
     return turns.flatMap((turn) => turn.items ?? []);
   }, [selectedThread?.turns, threadDetail?.turns]);
 
+  const materializedConversationItems = useMemo(
+    () => materializeCodexChatItems(threadDetail ?? selectedThread, false),
+    [selectedThread, threadDetail],
+  );
+
   const visibleConversationItems = useMemo(
-    () => conversationItems.filter((item) => showTechnicalEvents || isChatVisibleItem(item)),
-    [conversationItems, showTechnicalEvents],
+    () =>
+      showTechnicalEvents
+        ? conversationItems
+        : materializedConversationItems,
+    [conversationItems, materializedConversationItems, showTechnicalEvents],
   );
 
   const hiddenTechnicalEventCount = useMemo(
     () => conversationItems.filter((item) => !isChatVisibleItem(item)).length,
     [conversationItems],
   );
+
+  const collapsedChatEventCount = useMemo(() => {
+    const rawChatCount = conversationItems.filter((item) => isChatVisibleItem(item)).length;
+    return Math.max(0, rawChatCount - materializedConversationItems.length);
+  }, [conversationItems, materializedConversationItems]);
 
   const conversationScrollKey = useMemo(
     () =>
@@ -426,13 +512,20 @@ function Agents() {
         "medium";
 
       setThreads((current) => {
-        const localOnly = current.filter((thread) => !nextThreads.some((nextThread) => nextThread.id === thread.id));
-        return [...localOnly, ...nextThreads];
+        const merged = new Map<string, CodexThread>();
+        for (const thread of current) {
+          merged.set(thread.id, thread);
+        }
+        for (const nextThread of nextThreads) {
+          const existing = merged.get(nextThread.id);
+          merged.set(nextThread.id, mergeCodexThreadSnapshots(nextThread, existing));
+        }
+        return Array.from(merged.values()).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
       });
       setModels(nextModels);
-      setConfig(configRead.config ?? null);
       setAuthStatus(authRead);
       setSelectedModel((current) => current || defaultModel);
+      setSelectedServiceTier((current) => current || configRead.config?.service_tier || "default");
       setSelectedEffort((current) => current || defaultEffort);
       setSelectedApprovalPolicy((current) => current || configRead.config?.approval_policy || "on-request");
       setSelectedSandboxMode((current) => current || configRead.config?.sandbox_mode || "workspace-write");
@@ -464,9 +557,12 @@ function Agents() {
         const nextThread = detail.thread ?? null;
         setThreadDetail(nextThread);
         if (nextThread) {
-          setThreads((current) =>
-            current.map((thread) => (thread.id === nextThread.id ? { ...thread, ...nextThread } : thread)),
-          );
+          setThreads((current) => {
+            const existing = current.find((thread) => thread.id === nextThread.id);
+            const mergedThread = mergeCodexThreadSnapshots(nextThread, existing);
+            const rest = current.filter((thread) => thread.id !== nextThread.id);
+            return [mergedThread, ...rest].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+          });
         }
         return nextThread;
       } catch (err) {
@@ -574,8 +670,10 @@ function Agents() {
       cwd: selectedProjectPath,
     })
       .then((nextConfig) => {
-        setConfig(nextConfig.config ?? null);
         setSelectedModel((current) => current || nextConfig.config?.model || "");
+        if (nextConfig.config?.service_tier) {
+          setSelectedServiceTier(nextConfig.config.service_tier);
+        }
         if (nextConfig.config?.approval_policy) {
           setSelectedApprovalPolicy(nextConfig.config.approval_policy);
         }
@@ -598,6 +696,7 @@ function Agents() {
         line?: string;
         message?: string;
         params?: {
+          reason?: string;
           threadId?: string;
           turnId?: string;
           conversationId?: string;
@@ -618,12 +717,75 @@ function Agents() {
         return;
       }
 
+      if (methodName === "workbench:changed") {
+        const syncParams =
+          payload?.params && typeof payload.params === "object" && "params" in payload.params
+            ? (payload.params.params as { threadId?: string; reason?: string })
+            : payload?.params;
+        const changedThreadId = syncParams?.threadId;
+        const reason = syncParams?.reason;
+        if (reason === "thread/archive" && changedThreadId && changedThreadId === currentThreadId) {
+          setThreadDetail(null);
+          setSelectedThreadId("");
+        }
+        window.setTimeout(() => {
+          void loadWorkbench();
+        }, reason === "thread/archive" ? 80 : 220);
+        return;
+      }
+
       if (methodName === "warning" || methodName === "configWarning") {
         setLiveWarning(payload?.params?.message || payload?.message || formatJson(payload));
       }
 
       const eventThreadId = payload?.params?.threadId || payload?.params?.conversationId;
       const belongsToCurrentThread = !eventThreadId || eventThreadId === currentThreadId;
+      const livePendingApproval = pendingApprovalFromServerRequest({
+        id: typeof (payload as { id?: unknown })?.id === "string" ? (payload as { id: string }).id : undefined,
+        method: payload?.method,
+        params: payload?.params as Record<string, unknown> | undefined,
+      });
+
+      if (livePendingApproval && eventThreadId) {
+        setThreads((current) =>
+          current.map((thread) =>
+            thread.id === eventThreadId
+              ? {
+                  ...thread,
+                  status: {
+                    type: "active",
+                    activeFlags: ["waitingOnApproval"],
+                  },
+                  pendingApproval: livePendingApproval,
+                  raw: {
+                    ...(thread.raw && typeof thread.raw === "object" ? (thread.raw as Record<string, unknown>) : {}),
+                    pendingApproval: livePendingApproval,
+                    status: {
+                      type: "active",
+                      activeFlags: ["waitingOnApproval"],
+                    },
+                  },
+                }
+              : thread,
+          ),
+        );
+        if (eventThreadId === currentThreadId) {
+          setThreadDetail((current) =>
+            current
+              ? {
+                  ...current,
+                  pendingApproval: livePendingApproval,
+                  status: {
+                    type: "active",
+                    activeFlags: ["waitingOnApproval"],
+                  },
+                }
+              : current,
+          );
+          setSendStatus("等待确认...");
+        }
+        return;
+      }
 
       if (
         methodName === "thread-stream-state-changed" &&
@@ -637,9 +799,12 @@ function Agents() {
           currentThreadId,
         );
         setThreadDetail(liveThread);
-        setThreads((current) =>
-          current.map((thread) => (thread.id === liveThread.id ? { ...thread, ...liveThread } : thread)),
-        );
+        setThreads((current) => {
+          const existing = current.find((thread) => thread.id === liveThread.id);
+          const mergedThread = mergeCodexThreadSnapshots(liveThread, existing);
+          const rest = current.filter((thread) => thread.id !== liveThread.id);
+          return [mergedThread, ...rest].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+        });
         if (liveThread.turns?.some((turn) => turn.status === "inProgress")) {
           setSendStatus("Codex 正在回复...");
         } else {
@@ -676,12 +841,15 @@ function Agents() {
     void listen<unknown>("codex-desktop-ipc-event", (event) => handleEvent(event.payload)).then((cleanup) => {
       unlisteners.push(cleanup);
     });
+    void listen<unknown>("codex-workbench-sync-event", (event) => handleEvent(event.payload)).then((cleanup) => {
+      unlisteners.push(cleanup);
+    });
 
     return () => {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [refreshThreadUntilSettled, selectedThread?.id]);
+  }, [loadWorkbench, refreshThreadUntilSettled, selectedThread?.id]);
 
   const runProbe = useCallback(async () => {
     setError("");
@@ -707,6 +875,10 @@ function Agents() {
   const currentPath = selectedThread?.cwd || selectedProject?.cwd || "unknown";
   const currentThreadStatus = normalizeThreadStatus(threadDetail ?? selectedThread);
   const activeTurnId = latestInProgressTurnId(threadDetail ?? selectedThread);
+  const pendingApproval = useMemo(
+    () => extractPendingApproval(threadDetail ?? selectedThread),
+    [selectedThread, threadDetail],
+  );
 
   const createThread = useCallback(async () => {
     const cwd = currentPath && currentPath !== "unknown" ? currentPath : null;
@@ -717,7 +889,7 @@ function Agents() {
       const response = await callPersistentRpc<ThreadStartResult>("thread/start", {
         cwd,
         model: selectedModel || null,
-        serviceTier: config?.service_tier || null,
+        serviceTier: selectedServiceTier || null,
         approvalPolicy: selectedApprovalPolicy || null,
         sandbox: selectedSandboxMode || null,
       });
@@ -744,7 +916,7 @@ function Agents() {
     }
   }, [
     callPersistentRpc,
-    config?.service_tier,
+    selectedServiceTier,
     currentPath,
     loadThreadDetail,
     loadWorkbench,
@@ -774,7 +946,10 @@ function Agents() {
     if (!selectedThread?.id) return;
     setIsMutatingThread(true);
     try {
-      await callPersistentRpc("thread/archive", { threadId: selectedThread.id });
+      await callPersistentRpc("thread/archive", {
+        threadId: selectedThread.id,
+        conversationId: selectedThread.id,
+      });
       setThreadDetail(null);
       setSelectedThreadId("");
       await loadWorkbench();
@@ -808,6 +983,7 @@ function Agents() {
       await callPersistentRpc("config/batchWrite", {
         edits: [
           { keyPath: "model", value: selectedModel || null, mergeStrategy: "upsert" },
+          { keyPath: "service_tier", value: selectedServiceTier || null, mergeStrategy: "upsert" },
           { keyPath: "approval_policy", value: selectedApprovalPolicy, mergeStrategy: "upsert" },
           { keyPath: "sandbox_mode", value: selectedSandboxMode, mergeStrategy: "upsert" },
         ],
@@ -821,7 +997,64 @@ function Agents() {
     } finally {
       setIsMutatingThread(false);
     }
-  }, [callPersistentRpc, loadWorkbench, selectedApprovalPolicy, selectedModel, selectedSandboxMode, showSendError]);
+  }, [callPersistentRpc, loadWorkbench, selectedApprovalPolicy, selectedModel, selectedSandboxMode, selectedServiceTier, showSendError]);
+
+  const applyRealtimeCodexConfig = useCallback(
+    async (next: { model?: string; serviceTier?: string }) => {
+      setIsMutatingThread(true);
+      setSendStatus("正在同步 Codex 配置...");
+      try {
+        await callPersistentRpc("config/batchWrite", {
+          edits: [
+            next.model !== undefined
+              ? { keyPath: "model", value: next.model || null, mergeStrategy: "upsert" }
+              : null,
+            next.serviceTier !== undefined
+              ? { keyPath: "service_tier", value: next.serviceTier || null, mergeStrategy: "upsert" }
+              : null,
+          ].filter(Boolean),
+          reloadUserConfig: true,
+        });
+        await loadWorkbench();
+        setSendStatus("Codex 配置已同步");
+      } catch (err) {
+        showSendError(err);
+        setSendStatus("");
+      } finally {
+        setIsMutatingThread(false);
+      }
+    },
+    [callPersistentRpc, loadWorkbench, showSendError],
+  );
+
+  const switchProjectBranch = useCallback(
+    async (branch: string) => {
+      if (!selectedProject?.cwd || !branch || branch === currentBranch) return;
+      setIsMutatingThread(true);
+      setSendStatus(`正在切换到 ${branch}...`);
+      try {
+        const nextState = await switchGitBranch(selectedProject.cwd, branch);
+        setGitBranchStateByCwd((current) => ({
+          ...current,
+          [selectedProject.cwd]: {
+            branch: nextState.branch,
+            branches: nextState.branches,
+          },
+        }));
+        await loadWorkbench();
+        if (selectedThread?.id) {
+          await loadThreadDetail(selectedThread.id, { silent: true });
+        }
+        setSendStatus(`已切换到 ${branch}`);
+      } catch (err) {
+        showSendError(err);
+        setSendStatus("");
+      } finally {
+        setIsMutatingThread(false);
+      }
+    },
+    [currentBranch, loadThreadDetail, loadWorkbench, selectedProject?.cwd, selectedThread?.id, showSendError],
+  );
 
   const sendTurn = useCallback(async () => {
     const text = draftMessage.trim();
@@ -861,6 +1094,7 @@ function Agents() {
             },
           },
           1,
+          selectedThread.id,
         );
         setDraftMessage("");
         setSendStatus("已提交到 Codex Desktop，等待回复...");
@@ -882,7 +1116,7 @@ function Agents() {
         model: selectedModel || null,
         approvalPolicy: selectedApprovalPolicy || null,
         sandbox: selectedSandboxMode || null,
-        serviceTier: config?.service_tier || null,
+              serviceTier: selectedServiceTier || null,
       });
       }
 
@@ -896,7 +1130,7 @@ function Agents() {
         sandboxPolicy: sandboxPolicyFromMode(selectedSandboxMode, cwd),
         effort: selectedEffort || null,
         summary: selectedSummary || null,
-        serviceTier: config?.service_tier || null,
+        serviceTier: selectedServiceTier || null,
       };
       await callPersistentRpc<TurnStartResult>("turn/start", params);
       setDraftMessage("");
@@ -911,7 +1145,7 @@ function Agents() {
   }, [
     callDesktopIpc,
     callPersistentRpc,
-    config?.service_tier,
+    selectedServiceTier,
     currentPath,
     draftMessage,
     isSendingTurn,
@@ -926,7 +1160,123 @@ function Agents() {
     showTechnicalEvents,
   ]);
 
+  const respondToApproval = useCallback(async (approved: boolean) => {
+    if (!selectedThread?.id || !pendingApproval || isMutatingThread) return;
+
+    setSendError("");
+    setLiveWarning("");
+    setSendStatus(approved ? "正在确认并继续..." : "正在拒绝待确认动作...");
+    setIsMutatingThread(true);
+
+    try {
+      const previousAssistantSignature = threadAssistantSignature(threadDetailRef.current ?? selectedThreadRef.current);
+      const cwd = currentPath && currentPath !== "unknown" ? currentPath : null;
+
+      if (pendingApproval.requestId) {
+        await callRpc("codex_app_server_respond_pending_approval", {
+          requestId: pendingApproval.requestId,
+          approved,
+        });
+        setSendStatus(approved ? "已确认，等待 Codex 继续..." : "已拒绝，等待状态同步...");
+        void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
+        return;
+      }
+
+      const approvalInput = [
+        approved
+          ? {
+              type: pendingApproval.kind,
+              approval_id: pendingApproval.approvalId,
+              approved: true,
+            }
+          : {
+              type: pendingApproval.kind,
+              approval_id: pendingApproval.approvalId,
+              denied: true,
+            },
+      ];
+
+      try {
+        await callDesktopIpc<{ result?: TurnStartResult }>(
+          "thread-follower-start-turn",
+          {
+            conversationId: selectedThread.id,
+            turnStartParams: {
+              input: approvalInput,
+              cwd,
+              model: selectedModel || null,
+              effort: selectedEffort || null,
+              summary: selectedSummary || null,
+              approvalPolicy: selectedApprovalPolicy || null,
+              sandboxPolicy: sandboxPolicyFromMode(selectedSandboxMode, cwd),
+              collaborationMode: null,
+            },
+          },
+          1,
+          selectedThread.id,
+        );
+        setSendStatus(approved ? "已确认，等待 Codex 继续..." : "已拒绝，等待状态同步...");
+        void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
+        return;
+      } catch (ipcErr) {
+        if (showTechnicalEvents) {
+          setLiveWarning(`Codex Desktop IPC 确认不可用，已回退 stdio：${String(ipcErr)}`);
+        }
+      }
+
+      const loaded = await callPersistentRpc<ThreadLoadedListResult>("thread/loaded/list", {});
+      if (!loaded.data?.includes(selectedThread.id)) {
+        await callPersistentRpc<ThreadResumeResult>("thread/resume", {
+          threadId: selectedThread.id,
+          cwd,
+          model: selectedModel || null,
+          approvalPolicy: selectedApprovalPolicy || null,
+          sandbox: selectedSandboxMode || null,
+          serviceTier: selectedServiceTier || null,
+        });
+      }
+
+      await callPersistentRpc<TurnStartResult>("turn/start", {
+        threadId: selectedThread.id,
+        input: approvalInput,
+        cwd,
+        model: selectedModel || null,
+        approvalPolicy: selectedApprovalPolicy || null,
+        sandboxPolicy: sandboxPolicyFromMode(selectedSandboxMode, cwd),
+        effort: selectedEffort || null,
+        summary: selectedSummary || null,
+        serviceTier: selectedServiceTier || null,
+      });
+      setSendStatus(approved ? "已确认，等待 Codex 继续..." : "已拒绝，等待状态同步...");
+      void refreshThreadUntilSettled(selectedThread.id, previousAssistantSignature);
+    } catch (err) {
+      showSendError(err);
+      setSendStatus("");
+    } finally {
+      setIsMutatingThread(false);
+    }
+  }, [
+    callDesktopIpc,
+    callPersistentRpc,
+    callRpc,
+    selectedServiceTier,
+    currentPath,
+    isMutatingThread,
+    pendingApproval,
+    refreshThreadUntilSettled,
+    selectedApprovalPolicy,
+    selectedEffort,
+    selectedModel,
+    selectedSandboxMode,
+    selectedSummary,
+    selectedThread?.id,
+    showSendError,
+    showTechnicalEvents,
+  ]);
+
   const resultTone = result?.ok ? "#7ee787" : result ? "#f2cc60" : "#8b949e";
+  const approvalAcceptLabel = pendingApproval?.kind === "permissions-approval" ? "授权并继续" : "确认并继续";
+  const approvalRejectLabel = pendingApproval?.kind === "permissions-approval" ? "不授权" : "拒绝";
   const modelEfforts = asStringArray(
     models.find((model) => model.id === selectedModel)?.supportedReasoningEfforts ||
       models.find((model) => model.model === selectedModel)?.supportedReasoningEfforts,
@@ -1219,8 +1569,8 @@ function Agents() {
                 : isLoadingThread
                 ? "读取中"
                 : showTechnicalEvents
-                  ? `${visibleConversationItems.length} 项`
-                  : `${visibleConversationItems.length} 条 · 隐藏 ${hiddenTechnicalEventCount}`
+                  ? `${visibleConversationItems.length} 条聊天消息`
+                  : `${visibleConversationItems.length} 条 · 折叠 ${collapsedChatEventCount} · 隐藏 ${hiddenTechnicalEventCount}`
             }
           />
 
@@ -1308,6 +1658,74 @@ function Agents() {
               WebkitUserSelect: "text",
             }}
           >
+            {pendingApproval && (
+              <div
+                style={{
+                  alignSelf: "stretch",
+                  border: "1px solid rgba(250, 204, 21, 0.5)",
+                  background: "rgba(250, 204, 21, 0.08)",
+                  borderRadius: 12,
+                  padding: "12px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ color: "#d29922", fontSize: 11, fontWeight: 800, letterSpacing: 0.4 }}>
+                    待确认操作
+                  </div>
+                  <div style={{ color: "var(--color-text-main)", fontSize: 14, fontWeight: 700 }}>
+                    {pendingApproval.title}
+                  </div>
+                  {pendingApproval.summary && (
+                    <div
+                      style={{
+                        color: "var(--color-text-muted)",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {pendingApproval.summary}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={isMutatingThread}
+                    onClick={() => void respondToApproval(false)}
+                    style={{
+                      minHeight: 36,
+                      borderRadius: 10,
+                      borderColor: "rgba(239,68,68,0.5)",
+                      color: "#ef4444",
+                    }}
+                  >
+                    {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
+                    {approvalRejectLabel}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={isMutatingThread}
+                    onClick={() => void respondToApproval(true)}
+                    style={{
+                      minHeight: 36,
+                      borderRadius: 10,
+                      borderColor: "rgba(34,197,94,0.55)",
+                      color: "#22c55e",
+                    }}
+                  >
+                    {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {approvalAcceptLabel}
+                  </button>
+                </div>
+              </div>
+            )}
             <div
               style={{
                 position: "sticky",
@@ -1526,7 +1944,7 @@ function Agents() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "minmax(160px, 1fr) minmax(100px, 0.8fr) minmax(150px, 1fr) 88px 86px 120px 132px auto auto",
+                  gridTemplateColumns: "minmax(160px, 1fr) minmax(100px, 0.8fr) minmax(150px, 1fr) 104px 96px 86px 120px 132px auto auto",
                   gap: 8,
                   alignItems: "center",
                 }}
@@ -1542,9 +1960,19 @@ function Agents() {
                 </div>
                 <div style={toolbarMetricStyle}>
                   <GitBranch size={14} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {currentBranch}
-                  </span>
+                  <select
+                    className="modern-input custom-select"
+                    value={currentBranch}
+                    onChange={(event) => void switchProjectBranch(event.target.value)}
+                    disabled={!selectedProject?.branches.length || isMutatingThread}
+                    style={{ fontSize: 12, border: "none", background: "transparent", padding: 0, minWidth: 0 }}
+                  >
+                    {(selectedProject?.branches.length ? selectedProject.branches : [currentBranch]).map((branch) => (
+                      <option key={branch} value={branch}>
+                        {branch}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div style={toolbarMetricStyle}>
                   {authStatus?.requiresOpenaiAuth ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
@@ -1561,6 +1989,7 @@ function Agents() {
                       setSelectedModel(nextModel);
                       const defaultEffort = models.find((model) => model.id === nextModel)?.defaultReasoningEffort;
                       if (defaultEffort) setSelectedEffort(defaultEffort);
+                      void applyRealtimeCodexConfig({ model: nextModel });
                     }}
                     style={{ fontSize: 12 }}
                   >
@@ -1572,6 +2001,24 @@ function Agents() {
                         </option>
                       );
                     })}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                  <select
+                    className="modern-input custom-select"
+                    value={selectedServiceTier}
+                    onChange={(event) => {
+                      const nextTier = event.target.value;
+                      setSelectedServiceTier(nextTier);
+                      void applyRealtimeCodexConfig({ serviceTier: nextTier });
+                    }}
+                    style={{ fontSize: 12 }}
+                  >
+                    {SERVICE_TIER_OPTIONS.map((tier) => (
+                      <option key={tier} value={tier}>
+                        {tier}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
@@ -1635,11 +2082,11 @@ function Agents() {
                   className="btn-secondary"
                   onClick={() => void applyProjectConfig()}
                   disabled={isMutatingThread}
-                  title="写回 Codex 配置"
+                  title="写回确认与沙箱配置"
                   style={{ minHeight: 35, borderRadius: 8, whiteSpace: "nowrap", fontSize: 12 }}
                 >
                   {isMutatingThread ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                  应用
+                  确认/沙箱
                 </button>
                 <label
                   style={{

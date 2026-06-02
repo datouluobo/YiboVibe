@@ -6,6 +6,7 @@ import {
   type AiWorkbenchConversation,
   type AiWorkbenchMessage,
   type AiWorkbenchModel,
+  type AiWorkbenchPendingApproval,
   type AiWorkbenchProject,
   type AiWorkbenchProvider,
   type AiWorkbenchStatus,
@@ -62,8 +63,11 @@ export interface CodexThread {
   } | null;
   status?: {
     type?: string;
+    activeFlags?: string[];
     [key: string]: unknown;
   };
+  pendingApproval?: CodexPendingApproval | null;
+  raw?: unknown;
   turns?: CodexTurn[];
 }
 
@@ -113,6 +117,14 @@ export interface CodexThreadItem {
   arguments?: unknown;
   result?: unknown;
   [key: string]: unknown;
+}
+
+export interface CodexPendingApproval extends AiWorkbenchPendingApproval {}
+
+export interface CodexServerRequestEvent {
+  id?: string;
+  method?: string;
+  params?: Record<string, unknown>;
 }
 
 export interface ModelListResult {
@@ -207,7 +219,7 @@ export interface ProjectSummary {
 export type CodexConversationStatus = AiWorkbenchStatus;
 
 export const CODEX_ENDPOINT = "stdio://";
-export const CODEX_CLIENT_VERSION = "0.9.7-r29";
+export const CODEX_CLIENT_VERSION = "0.9.7-r62";
 export const CODEX_PROVIDER: AiWorkbenchProvider = {
   id: "codex",
   name: "Codex",
@@ -257,7 +269,7 @@ export const DEFAULT_PARAMS_BY_METHOD: Record<string, string> = {
   "thread/read": "{\n  \"threadId\": \"\",\n  \"includeTurns\": true\n}",
   "thread/loaded/list": "{}",
   "thread/name/set": "{\n  \"threadId\": \"\",\n  \"name\": \"\"\n}",
-  "thread/archive": "{\n  \"threadId\": \"\"\n}",
+  "thread/archive": "{\n  \"threadId\": \"\",\n  \"conversationId\": \"\"\n}",
   "turn/interrupt": "{\n  \"threadId\": \"\",\n  \"turnId\": \"\"\n}",
   "model/list": "{\n  \"includeHidden\": false\n}",
   "config/read": "{\n  \"includeLayers\": true\n}",
@@ -326,15 +338,34 @@ export async function requestCodexAppServer<T>(rpcMethod: string, params: unknow
   return getRpcResult<T>(response);
 }
 
-export async function requestCodexDesktopIpc<T>(ipcMethod: string, params: unknown, version = 0) {
+export async function requestCodexDesktopIpc<T>(
+  ipcMethod: string,
+  params: unknown,
+  version = 0,
+  routeThreadId?: string | null,
+) {
   const response = await invoke<unknown>("codex_desktop_ipc_request", {
     request: {
       method: ipcMethod,
       params,
       version,
+      route_thread_id: routeThreadId?.trim() ? routeThreadId.trim() : null,
     },
   });
   return getIpcResult<T>(response);
+}
+
+export async function switchGitBranch(cwd: string, branch: string) {
+  return invoke<{ cwd: string; branch: string; branches: string[] }>("switch_git_branch", {
+    cwd,
+    branch,
+  });
+}
+
+export async function getGitBranchState(cwd: string) {
+  return invoke<{ cwd: string; branch: string; branches: string[] }>("get_git_branch_state", {
+    cwd,
+  });
 }
 
 export function projectNameFromPath(path: string) {
@@ -373,6 +404,53 @@ export function formatRelativeAge(value?: number | string) {
 
 export function summarizeThread(thread: CodexThread) {
   return thread.name || thread.preview || thread.id;
+}
+
+function numericTimestamp(value?: number | string | null) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+export function mergeCodexThreadSnapshots(primary?: CodexThread | null, secondary?: CodexThread | null): CodexThread {
+  const left = primary ?? ({} as CodexThread);
+  const right = secondary ?? ({} as CodexThread);
+  const leftUpdated = numericTimestamp(left.updatedAt);
+  const rightUpdated = numericTimestamp(right.updatedAt);
+  const preferLeft = leftUpdated >= rightUpdated;
+  const newer = preferLeft ? left : right;
+  const older = preferLeft ? right : left;
+  const newerTurns = newer.turns ?? [];
+  const olderTurns = older.turns ?? [];
+  const mergedPendingApproval =
+    newer.pendingApproval !== undefined
+      ? newer.pendingApproval
+      : normalizeThreadStatus(newer) === "waitingApproval"
+        ? (older.pendingApproval ?? null)
+        : null;
+
+  return {
+    ...older,
+    ...newer,
+    id: newer.id || older.id,
+    turns: newerTurns.length ? newerTurns : olderTurns,
+    preview: newer.preview ?? older.preview,
+    name: newer.name ?? older.name,
+    cwd: newer.cwd ?? older.cwd,
+    path: newer.path ?? older.path,
+    source: newer.source ?? older.source,
+    cliVersion: newer.cliVersion ?? older.cliVersion,
+    gitInfo: newer.gitInfo ?? older.gitInfo,
+    status: newer.status ?? older.status,
+    pendingApproval: mergedPendingApproval,
+    createdAt: newer.createdAt ?? older.createdAt,
+    updatedAt: newer.updatedAt ?? older.updatedAt,
+  };
 }
 
 export function buildProjectSummaries(threads: CodexThread[]): ProjectSummary[] {
@@ -427,6 +505,7 @@ export function toWorkbenchConversation(thread: CodexThread): AiWorkbenchConvers
     cliVersion: thread.cliVersion,
     status: normalizeThreadStatus(thread),
     gitInfo: thread.gitInfo,
+    pendingApproval: extractPendingApproval(thread),
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     raw: thread,
@@ -436,7 +515,10 @@ export function toWorkbenchConversation(thread: CodexThread): AiWorkbenchConvers
 export function normalizeThreadStatus(thread?: CodexThread | null): CodexConversationStatus {
   if (!thread) return "notLoaded";
   const rawStatus = thread.status?.type;
+  const activeFlags = Array.isArray(thread.status?.activeFlags) ? thread.status?.activeFlags : [];
   if (hasInProgressTurn(thread)) return "running";
+  if (thread.pendingApproval?.requestId) return "waitingApproval";
+  if (activeFlags.includes("waitingOnApproval")) return "waitingApproval";
   if (rawStatus === "notLoaded") return "notLoaded";
   if (rawStatus === "loading") return "loading";
   if (rawStatus === "loaded") return "idle";
@@ -464,6 +546,183 @@ export function collectText(value: unknown): string {
     return String((value as { text?: unknown }).text ?? "");
   }
   return "";
+}
+
+function approvalIdFromItem(item: CodexThreadItem) {
+  const direct = item.approval_id ?? item.approvalId;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  const content = item.content;
+  if (content && typeof content === "object") {
+    const nested = (content as { approval_id?: unknown; approvalId?: unknown }).approval_id ??
+      (content as { approval_id?: unknown; approvalId?: unknown }).approvalId;
+    if (typeof nested === "string" && nested.trim()) {
+      return nested.trim();
+    }
+  }
+  return "";
+}
+
+function approvalDecisionFromItem(item: CodexThreadItem) {
+  if (item.approved === true) return "approved";
+  if (item.denied === true) return "denied";
+  const status = typeof item.status === "string" ? item.status.toLowerCase() : "";
+  if (status.includes("approved")) return "approved";
+  if (status.includes("denied") || status.includes("rejected")) return "denied";
+  return "";
+}
+
+function approvalKindFromItem(item: CodexThreadItem): CodexPendingApproval["kind"] | null {
+  const type = (item.type || "").toLowerCase();
+  if (type.includes("patch")) return "patch-approval";
+  if (type.includes("exec")) return "exec-approval";
+  if (item.command) return "exec-approval";
+  if (item.changes) return "patch-approval";
+  return null;
+}
+
+function approvalSummaryFromItem(item: CodexThreadItem, kind: CodexPendingApproval["kind"]) {
+  if (kind === "exec-approval") {
+    const command = typeof item.command === "string" ? item.command.trim() : "";
+    if (command) {
+      return command;
+    }
+  }
+  if (kind === "patch-approval") {
+    const changes = item.changes;
+    if (Array.isArray(changes) && changes.length) {
+      return `涉及 ${changes.length} 个变更项`;
+    }
+  }
+  const text = [
+    typeof item.text === "string" ? item.text : "",
+    collectText(item.summary),
+    collectText(item.content),
+  ]
+    .map((value) => value.trim())
+    .find(Boolean);
+  return text ? text.slice(0, 200) : null;
+}
+
+export function extractPendingApproval(thread?: CodexThread | null): CodexPendingApproval | null {
+  if (!thread || normalizeThreadStatus(thread) !== "waitingApproval") {
+    return null;
+  }
+
+  if (thread.pendingApproval?.requestId) {
+    return thread.pendingApproval;
+  }
+
+  const items = (thread.turns ?? []).flatMap((turn) => turn.items ?? []);
+  const resolved = new Set<string>();
+  for (const item of items) {
+    const approvalId = approvalIdFromItem(item);
+    if (!approvalId) continue;
+    const decision = approvalDecisionFromItem(item);
+    if (decision) {
+      resolved.add(approvalId);
+    }
+  }
+
+  for (const item of [...items].reverse()) {
+    const approvalId = approvalIdFromItem(item);
+    if (!approvalId || resolved.has(approvalId)) {
+      continue;
+    }
+    const kind = approvalKindFromItem(item);
+    if (!kind) {
+      continue;
+    }
+    return {
+      requestId: approvalId,
+      approvalId,
+      kind,
+      title: kind === "patch-approval" ? "补丁变更待确认" : "命令执行待确认",
+      summary: approvalSummaryFromItem(item, kind),
+    };
+  }
+
+  return null;
+}
+
+export function pendingApprovalFromServerRequest(event?: CodexServerRequestEvent | null): CodexPendingApproval | null {
+  const method = event?.method;
+  const requestId = typeof event?.id === "string" ? event.id.trim() : "";
+  const params = event?.params ?? {};
+  if (!method || !requestId) return null;
+
+  if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
+    const approvalId = typeof params.approvalId === "string" && params.approvalId.trim()
+      ? params.approvalId.trim()
+      : typeof params.callId === "string"
+        ? params.callId
+        : requestId;
+    const command = Array.isArray(params.command)
+      ? params.command.filter((value): value is string => typeof value === "string").join(" ")
+      : typeof params.command === "string"
+        ? params.command
+        : "";
+    const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+    return {
+      requestId,
+      approvalId,
+      kind: "exec-approval",
+      title: "命令执行待确认",
+      summary: command || reason || null,
+    };
+  }
+
+  if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
+    const approvalId = typeof params.approvalId === "string" && params.approvalId.trim()
+      ? params.approvalId.trim()
+      : typeof params.callId === "string"
+        ? params.callId
+        : requestId;
+    const fileChanges = params.fileChanges && typeof params.fileChanges === "object"
+      ? Object.keys(params.fileChanges as Record<string, unknown>)
+      : [];
+    const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+    return {
+      requestId,
+      approvalId,
+      kind: "patch-approval",
+      title: "补丁变更待确认",
+      summary: reason || (fileChanges.length ? `涉及 ${fileChanges.length} 个文件变更` : null),
+    };
+  }
+
+  if (method === "item/permissions/requestApproval") {
+    const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+    const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+    const permissions = params.permissions && typeof params.permissions === "object"
+      ? params.permissions as Record<string, unknown>
+      : null;
+    const summaryParts: string[] = [];
+    if (reason) summaryParts.push(reason);
+    const fileSystem = permissions?.fileSystem && typeof permissions.fileSystem === "object"
+      ? permissions.fileSystem as Record<string, unknown>
+      : null;
+    const network = permissions?.network && typeof permissions.network === "object"
+      ? permissions.network as Record<string, unknown>
+      : null;
+    const fsEntries = Array.isArray(fileSystem?.entries) ? fileSystem?.entries.length : 0;
+    if (fsEntries) {
+      summaryParts.push(`文件系统权限 ${fsEntries} 项`);
+    }
+    if (network && network.enabled === true) {
+      summaryParts.push("网络访问");
+    }
+    return {
+      requestId,
+      approvalId: typeof params.itemId === "string" && params.itemId.trim() ? params.itemId.trim() : requestId,
+      kind: "permissions-approval",
+      title: "额外权限待确认",
+      summary: summaryParts.join(" · ") || (threadId ? `线程 ${threadId}` : null),
+    };
+  }
+
+  return null;
 }
 
 export function toDisplayText(value: unknown): string {
@@ -521,6 +780,42 @@ export function describeItem(item: CodexThreadItem) {
   return { role: "system", title: type, text: formatJson(item) };
 }
 
+export function materializeCodexChatItems(
+  thread?: CodexThread | null,
+  includeTechnical = false,
+): CodexThreadItem[] {
+  const turns = thread?.turns ?? [];
+  if (includeTechnical) {
+    return turns.flatMap((turn) => turn.items ?? []);
+  }
+
+  const materialized: CodexThreadItem[] = [];
+  for (const turn of turns) {
+    const items = turn.items ?? [];
+    let lastAssistantMessage: CodexThreadItem | null = null;
+
+    for (const item of items) {
+      const type = item.type || "";
+      if (type === "userMessage") {
+        materialized.push(item);
+        continue;
+      }
+      if (type === "agentMessage") {
+        const described = describeItem(item);
+        if (described.text.trim()) {
+          lastAssistantMessage = item;
+        }
+      }
+    }
+
+    if (lastAssistantMessage) {
+      materialized.push(lastAssistantMessage);
+    }
+  }
+
+  return materialized;
+}
+
 export function toWorkbenchMessage(
   item: CodexThreadItem,
   index: number,
@@ -541,7 +836,9 @@ export function toWorkbenchMessage(
 }
 
 export function toWorkbenchMessages(thread?: CodexThread | null, includeTechnical = false): AiWorkbenchMessage[] {
-  const items = (thread?.turns ?? []).flatMap((turn) => turn.items ?? []);
+  const items = includeTechnical
+    ? materializeCodexChatItems(thread, true)
+    : materializeCodexChatItems(thread, false);
   return items
     .filter((item) => includeTechnical || isChatVisibleItem(item))
     .map((item, index) => toWorkbenchMessage(item, index, thread?.id));
@@ -614,7 +911,10 @@ export function createCodexWorkbenchAdapter(): AiWorkbenchAdapter {
     },
 
     async archiveConversation(id) {
-      await requestCodexAppServer("thread/archive", { threadId: id });
+      await requestCodexAppServer("thread/archive", {
+        threadId: id,
+        conversationId: id,
+      });
     },
 
     async sendMessage(conversationId, text, options) {
@@ -665,6 +965,9 @@ export function createCodexWorkbenchAdapter(): AiWorkbenchAdapter {
           : null,
         config.sandboxMode !== undefined
           ? { keyPath: "sandbox_mode", value: config.sandboxMode ?? null, mergeStrategy: "upsert" }
+          : null,
+        config.serviceTier !== undefined
+          ? { keyPath: "service_tier", value: config.serviceTier ?? null, mergeStrategy: "upsert" }
           : null,
       ].filter(Boolean);
 

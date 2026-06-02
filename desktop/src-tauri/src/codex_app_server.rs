@@ -46,6 +46,7 @@ pub struct CodexDesktopIpcRequest {
     #[serde(default)]
     pub params: Value,
     pub version: Option<u32>,
+    pub route_thread_id: Option<String>,
 }
 
 struct CodexAppServerSession {
@@ -57,6 +58,9 @@ struct CodexAppServerSession {
 
 lazy_static::lazy_static! {
     static ref PERSISTENT_SESSION: Mutex<Option<Arc<CodexAppServerSession>>> = Mutex::new(None);
+    static ref PENDING_APPROVALS: Mutex<HashMap<String, Value>> = Mutex::new(HashMap::new());
+    static ref DESKTOP_IPC_THREAD_ROUTE_HINTS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+    static ref DESKTOP_IPC_LAST_SOURCE_CLIENT_ID: Mutex<Option<String>> = Mutex::new(None);
 }
 
 fn trimmed_non_empty(value: &str, field: &str) -> Result<String, String> {
@@ -86,7 +90,71 @@ pub async fn disconnect_persistent_session() -> Result<(), String> {
             let _ = child.kill().await;
         }
     }
+    PENDING_APPROVALS.lock().await.clear();
     Ok(())
+}
+
+pub async fn pending_approval_for_thread(thread_id: &str) -> Option<Value> {
+    PENDING_APPROVALS.lock().await.get(thread_id).cloned()
+}
+
+pub async fn respond_to_server_request(
+    app: AppHandle,
+    request_id: String,
+    result: Value,
+) -> Result<(), String> {
+    let request_id = trimmed_non_empty(&request_id, "Server request id")?;
+    let session = ensure_persistent_session(app).await?;
+    session.respond(&request_id, result).await?;
+    let mut pending = PENDING_APPROVALS.lock().await;
+    pending.retain(|_, approval| {
+        approval.get("requestId").and_then(Value::as_str) != Some(request_id.as_str())
+    });
+    Ok(())
+}
+
+pub async fn respond_to_pending_approval(
+    app: AppHandle,
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let request_id = trimmed_non_empty(&request_id, "Server request id")?;
+    let pending = {
+        let approvals = PENDING_APPROVALS.lock().await;
+        approvals
+            .values()
+            .find(|approval| {
+                approval.get("requestId").and_then(Value::as_str) == Some(request_id.as_str())
+            })
+            .cloned()
+    }
+    .ok_or_else(|| format!("Pending approval not found for request {request_id}"))?;
+
+    let method = pending
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let result = match method {
+        "item/permissions/requestApproval" => {
+            let permissions = if approved {
+                pending
+                    .get("requestedPermissions")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+            serde_json::json!({
+                "permissions": permissions,
+                "scope": "turn",
+            })
+        }
+        _ => serde_json::json!({
+            "decision": if approved { "approved" } else { "denied" }
+        }),
+    };
+
+    respond_to_server_request(app, request_id, result).await
 }
 
 pub async fn desktop_ipc_request(
@@ -94,7 +162,51 @@ pub async fn desktop_ipc_request(
     request: CodexDesktopIpcRequest,
 ) -> Result<Value, String> {
     let method = trimmed_non_empty(&request.method, "IPC method")?;
-    desktop_ipc_request_platform(app, method, request.params, request.version.unwrap_or(0)).await
+    desktop_ipc_request_platform(
+        app,
+        method,
+        request.params,
+        request.version.unwrap_or(0),
+        request.route_thread_id,
+    )
+    .await
+}
+
+pub async fn desktop_ipc_collect_conversation_states(
+    app: AppHandle,
+    settle_for: Duration,
+) -> Result<Vec<Value>, String> {
+    desktop_ipc_collect_conversation_states_platform(app, settle_for).await
+}
+
+async fn remember_desktop_ipc_route_from_message(message: &Value) {
+    let source_client_id = message
+        .get("sourceClientId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let Some(source_client_id) = source_client_id else {
+        return;
+    };
+
+    *DESKTOP_IPC_LAST_SOURCE_CLIENT_ID.lock().await = Some(source_client_id.clone());
+
+    let thread_id = message
+        .get("params")
+        .and_then(|value| value.get("change"))
+        .and_then(|value| value.get("conversationState"))
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if let Some(thread_id) = thread_id {
+        DESKTOP_IPC_THREAD_ROUTE_HINTS
+            .lock()
+            .await
+            .insert(thread_id, source_client_id);
+    }
 }
 
 async fn ensure_persistent_session(app: AppHandle) -> Result<Arc<CodexAppServerSession>, String> {
@@ -225,6 +337,12 @@ fn spawn_stdout_reader(
                 }
             }
 
+            if let Some((thread_id, approval)) = normalize_pending_approval_request(&parsed) {
+                PENDING_APPROVALS.lock().await.insert(thread_id, approval);
+            } else {
+                clear_resolved_pending_approval(&parsed).await;
+            }
+
             let _ = app.emit("codex-app-server-event", parsed);
         }
 
@@ -304,6 +422,14 @@ impl CodexAppServerSession {
         self.write_frame(&body).await
     }
 
+    async fn respond(&self, request_id: &str, result: Value) -> Result<(), String> {
+        let body = serde_json::json!({
+            "id": request_id,
+            "result": result,
+        });
+        self.write_frame(&body).await
+    }
+
     async fn write_frame(&self, body: &Value) -> Result<(), String> {
         let frame = format!("{body}\n");
         let mut stdin = self.stdin.lock().await;
@@ -311,6 +437,204 @@ impl CodexAppServerSession {
             .await
             .map_err(|_| "Timed out writing request to Codex app-server stdio".to_string())?
             .map_err(|err| format!("Failed to write request to Codex app-server stdio: {err}"))
+    }
+}
+
+fn normalize_pending_approval_request(message: &Value) -> Option<(String, Value)> {
+    let method = message.get("method").and_then(Value::as_str)?;
+    let request_id = message.get("id").and_then(Value::as_str)?.trim();
+    if request_id.is_empty() {
+        return None;
+    }
+    let params = message.get("params")?;
+
+    match method {
+        "item/commandExecution/requestApproval" | "execCommandApproval" => {
+            let conversation_id = params
+                .get("conversationId")
+                .or_else(|| params.get("threadId"))
+                .and_then(Value::as_str)?
+                .trim()
+                .to_string();
+            let approval_id = params
+                .get("approvalId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    params
+                        .get("callId")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| request_id.to_string());
+            let summary = params
+                .get("command")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    params
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                });
+            Some((
+                conversation_id.clone(),
+                serde_json::json!({
+                    "requestId": request_id,
+                    "approvalId": approval_id,
+                    "kind": "exec-approval",
+                    "title": "命令执行待确认",
+                    "summary": summary,
+                    "threadId": conversation_id,
+                    "method": method,
+                }),
+            ))
+        }
+        "item/fileChange/requestApproval" | "applyPatchApproval" => {
+            let conversation_id = params
+                .get("conversationId")
+                .or_else(|| params.get("threadId"))
+                .and_then(Value::as_str)?
+                .trim()
+                .to_string();
+            let approval_id = params
+                .get("approvalId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    params
+                        .get("callId")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| request_id.to_string());
+            let summary = params
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    params
+                        .get("fileChanges")
+                        .and_then(Value::as_object)
+                        .map(|changes| format!("涉及 {} 个文件变更", changes.len()))
+                });
+            Some((
+                conversation_id.clone(),
+                serde_json::json!({
+                    "requestId": request_id,
+                    "approvalId": approval_id,
+                    "kind": "patch-approval",
+                    "title": "补丁变更待确认",
+                    "summary": summary,
+                    "threadId": conversation_id,
+                    "method": method,
+                }),
+            ))
+        }
+        "item/permissions/requestApproval" => {
+            let conversation_id = params
+                .get("threadId")
+                .and_then(Value::as_str)?
+                .trim()
+                .to_string();
+            let approval_id = params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| request_id.to_string());
+            let reason = params
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            let requested_permissions = params
+                .get("permissions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let mut summary_parts = Vec::new();
+            if let Some(reason) = reason.clone() {
+                summary_parts.push(reason);
+            }
+            if let Some(file_system) = requested_permissions.get("fileSystem") {
+                if let Some(entries) = file_system.get("entries").and_then(Value::as_array) {
+                    if !entries.is_empty() {
+                        summary_parts.push(format!("文件系统权限 {} 项", entries.len()));
+                    }
+                }
+            }
+            if requested_permissions
+                .get("network")
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                summary_parts.push("网络访问".to_string());
+            }
+            Some((
+                conversation_id.clone(),
+                serde_json::json!({
+                    "requestId": request_id,
+                    "approvalId": approval_id,
+                    "kind": "permissions-approval",
+                    "title": "额外权限待确认",
+                    "summary": if summary_parts.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(summary_parts.join(" · ")) },
+                    "threadId": conversation_id,
+                    "method": method,
+                    "requestedPermissions": requested_permissions,
+                }),
+            ))
+        }
+        _ => None,
+    }
+}
+
+async fn clear_resolved_pending_approval(message: &Value) {
+    let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+    let thread_id = message
+        .get("params")
+        .and_then(|params| {
+            params
+                .get("threadId")
+                .or_else(|| params.get("conversationId"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    let should_clear = match method {
+        "turn/completed" | "turn/failed" | "turn/cancelled" => true,
+        "thread/status/changed" => message
+            .get("params")
+            .and_then(|params| params.get("status"))
+            .and_then(|status| status.get("activeFlags"))
+            .and_then(Value::as_array)
+            .map(|flags| {
+                !flags
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|flag| flag == "waitingOnApproval")
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    if should_clear {
+        if let Some(thread_id) = thread_id {
+            PENDING_APPROVALS.lock().await.remove(&thread_id);
+        }
     }
 }
 
@@ -643,6 +967,7 @@ async fn desktop_ipc_request_platform(
     method: String,
     params: Value,
     version: u32,
+    route_thread_id: Option<String>,
 ) -> Result<Value, String> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
@@ -691,11 +1016,30 @@ async fn desktop_ipc_request_platform(
         .ok_or("Codex Desktop IPC initialize did not return a clientId")?
         .to_string();
 
+    let route_thread_id = route_thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let hinted_client_id = if let Some(thread_id) = route_thread_id.as_deref() {
+        DESKTOP_IPC_THREAD_ROUTE_HINTS
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+    } else {
+        None
+    };
+    let fallback_client_id = DESKTOP_IPC_LAST_SOURCE_CLIENT_ID.lock().await.clone();
+    let effective_client_id = hinted_client_id
+        .or(fallback_client_id)
+        .unwrap_or_else(|| client_id.clone());
+
     let request_id = uuid::Uuid::new_v4().to_string();
     let body = serde_json::json!({
         "type": "request",
         "requestId": request_id,
-        "sourceClientId": client_id,
+        "sourceClientId": effective_client_id,
         "version": version,
         "method": method,
         "params": params,
@@ -709,6 +1053,139 @@ async fn desktop_ipc_request_platform(
         Duration::from_secs(12),
     )
     .await
+}
+
+#[cfg(windows)]
+async fn desktop_ipc_collect_conversation_states_platform(
+    app: AppHandle,
+    settle_for: Duration,
+) -> Result<Vec<Value>, String> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const CODEX_IPC_PIPE: &str = r"\\.\pipe\codex-ipc";
+    const INITIALIZING_CLIENT: &str = "initializing-client";
+
+    let mut client = ClientOptions::new()
+        .open(CODEX_IPC_PIPE)
+        .map_err(|err| format!("Failed to open Codex Desktop IPC pipe {CODEX_IPC_PIPE}: {err}"))?;
+
+    let initialize_id = uuid::Uuid::new_v4().to_string();
+    let initialize = serde_json::json!({
+        "type": "request",
+        "requestId": initialize_id,
+        "sourceClientId": INITIALIZING_CLIENT,
+        "method": "initialize",
+        "params": {
+            "clientType": "yibovibe-desktop"
+        }
+    });
+    write_ipc_frame(&mut client, &initialize).await?;
+
+    let initialize_response = read_ipc_response(
+        &mut client,
+        &app,
+        initialize_id.as_str(),
+        Duration::from_secs(5),
+    )
+    .await?;
+
+    if initialize_response
+        .get("resultType")
+        .and_then(Value::as_str)
+        != Some("success")
+    {
+        return Err(format!(
+            "Codex Desktop IPC initialize failed: {}",
+            format_json_compact(&initialize_response)
+        ));
+    }
+
+    let client_id = initialize_response
+        .get("result")
+        .and_then(|value| value.get("clientId"))
+        .and_then(Value::as_str)
+        .ok_or("Codex Desktop IPC initialize did not return a clientId")?
+        .to_string();
+
+    // Trigger a regular thread listing request even if it may return no-client-found;
+    // the desktop bridge still emits thread-stream-state-changed broadcasts that carry
+    // the live conversation snapshots we need for the workbench.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let body = serde_json::json!({
+        "type": "request",
+        "requestId": request_id,
+        "sourceClientId": client_id,
+        "version": 0,
+        "method": "thread/list",
+        "params": {
+            "limit": 50,
+            "archived": false,
+        },
+    });
+    write_ipc_frame(&mut client, &body).await?;
+
+    let started = Instant::now();
+    let mut snapshots: HashMap<String, Value> = HashMap::new();
+    let mut saw_response = false;
+
+    while started.elapsed() < settle_for || !saw_response {
+        let remaining = settle_for
+            .checked_sub(started.elapsed())
+            .unwrap_or_else(|| Duration::from_millis(200));
+        let timeout_for = if saw_response {
+            remaining
+        } else {
+            remaining.max(Duration::from_millis(200))
+        };
+
+        let next = timeout(timeout_for, read_ipc_frame(&mut client)).await;
+        let Ok(Ok(message)) = next else {
+            break;
+        };
+
+        let message_type = message.get("type").and_then(Value::as_str).unwrap_or("");
+        if message_type == "response"
+            && message.get("requestId").and_then(Value::as_str) == Some(request_id.as_str())
+        {
+            saw_response = true;
+            continue;
+        }
+
+        if message_type == "client-discovery-request" {
+            if let Some(discovery_id) = message.get("requestId").and_then(Value::as_str) {
+                let response = serde_json::json!({
+                    "type": "client-discovery-response",
+                    "requestId": discovery_id,
+                    "response": {
+                        "canHandle": false
+                    }
+                });
+                write_ipc_frame(&mut client, &response).await?;
+            }
+            continue;
+        }
+
+        if message_type == "broadcast"
+            && message.get("method").and_then(Value::as_str) == Some("thread-stream-state-changed")
+        {
+            remember_desktop_ipc_route_from_message(&message).await;
+            if let Some(conversation_state) = message
+                .get("params")
+                .and_then(|value| value.get("change"))
+                .and_then(|value| value.get("conversationState"))
+                .cloned()
+            {
+                if let Some(id) = conversation_state.get("id").and_then(Value::as_str) {
+                    snapshots.insert(id.to_string(), conversation_state);
+                }
+            }
+            continue;
+        }
+
+        let _ = app.emit("codex-desktop-ipc-event", message);
+    }
+
+    Ok(snapshots.into_values().collect())
 }
 
 #[cfg(windows)]
@@ -769,6 +1246,13 @@ async fn read_ipc_response(
                 continue;
             }
 
+            if message_type == "broadcast"
+                && message.get("method").and_then(Value::as_str)
+                    == Some("thread-stream-state-changed")
+            {
+                remember_desktop_ipc_route_from_message(&message).await;
+            }
+
             let _ = app.emit("codex-desktop-ipc-event", message);
         }
     })
@@ -821,6 +1305,15 @@ async fn desktop_ipc_request_platform(
     _method: String,
     _params: Value,
     _version: u32,
+    _route_thread_id: Option<String>,
 ) -> Result<Value, String> {
+    Err("Codex Desktop IPC is only available on Windows".to_string())
+}
+
+#[cfg(not(windows))]
+async fn desktop_ipc_collect_conversation_states_platform(
+    _app: AppHandle,
+    _settle_for: Duration,
+) -> Result<Vec<Value>, String> {
     Err("Codex Desktop IPC is only available on Windows".to_string())
 }

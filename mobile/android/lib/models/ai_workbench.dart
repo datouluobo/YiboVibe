@@ -26,12 +26,15 @@ class AiWorkbenchSnapshot {
   factory AiWorkbenchSnapshot.fromJson(Map<String, dynamic> json) {
     return AiWorkbenchSnapshot(
       schemaVersion: json['schemaVersion'] as int? ?? 1,
-      generatedAt: DateTime.tryParse(json['generatedAt'] as String? ?? '') ??
+      generatedAt:
+          DateTime.tryParse(json['generatedAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
       providers: _listOf(json['providers'], AiWorkbenchProvider.fromJson),
       projects: _listOf(json['projects'], AiWorkbenchProject.fromJson),
-      conversations:
-          _listOf(json['conversations'], AiWorkbenchConversation.fromJson),
+      conversations: _listOf(
+        json['conversations'],
+        AiWorkbenchConversation.fromJson,
+      ),
       activeConversationId: json['activeConversationId'] as String?,
       messagesByConversationId: _mapOfList(
         json['messagesByConversationId'],
@@ -120,6 +123,7 @@ class AiWorkbenchConversation {
     this.source,
     this.cliVersion,
     this.gitInfo,
+    this.pendingApproval,
     this.createdAt,
     this.updatedAt,
   });
@@ -134,6 +138,7 @@ class AiWorkbenchConversation {
   final String? source;
   final String? cliVersion;
   final AiWorkbenchGitInfo? gitInfo;
+  final AiWorkbenchPendingApproval? pendingApproval;
   final int? createdAt;
   final int? updatedAt;
 
@@ -146,13 +151,44 @@ class AiWorkbenchConversation {
       status: json['status'] as String? ?? 'notLoaded',
       preview: json['preview'] as String?,
       cwd: json['cwd'] as String?,
-      source: json['source'] as String?,
+      source: _displayString(json['source']),
       cliVersion: json['cliVersion'] as String?,
       gitInfo: json['gitInfo'] is Map<String, dynamic>
           ? AiWorkbenchGitInfo.fromJson(json['gitInfo'] as Map<String, dynamic>)
           : null,
+      pendingApproval: json['pendingApproval'] is Map<String, dynamic>
+          ? AiWorkbenchPendingApproval.fromJson(
+              json['pendingApproval'] as Map<String, dynamic>,
+            )
+          : null,
       createdAt: json['createdAt'] as int?,
       updatedAt: json['updatedAt'] as int?,
+    );
+  }
+}
+
+class AiWorkbenchPendingApproval {
+  const AiWorkbenchPendingApproval({
+    required this.requestId,
+    required this.approvalId,
+    required this.kind,
+    required this.title,
+    this.summary,
+  });
+
+  final String requestId;
+  final String approvalId;
+  final String kind;
+  final String title;
+  final String? summary;
+
+  factory AiWorkbenchPendingApproval.fromJson(Map<String, dynamic> json) {
+    return AiWorkbenchPendingApproval(
+      requestId: json['requestId'] as String? ?? '',
+      approvalId: json['approvalId'] as String? ?? '',
+      kind: json['kind'] as String? ?? 'exec-approval',
+      title: json['title'] as String? ?? '待确认操作',
+      summary: _displayString(json['summary']),
     );
   }
 }
@@ -165,6 +201,9 @@ class AiWorkbenchMessage {
     required this.title,
     required this.text,
     this.conversationId,
+    this.previewText,
+    this.isTruncated,
+    this.fullTextCharCount,
     this.status,
     this.createdAt,
     this.rawType,
@@ -176,6 +215,9 @@ class AiWorkbenchMessage {
   final String role;
   final String title;
   final String text;
+  final String? previewText;
+  final bool? isTruncated;
+  final int? fullTextCharCount;
   final String? status;
   final String? createdAt;
   final String? rawType;
@@ -188,6 +230,9 @@ class AiWorkbenchMessage {
       role: json['role'] as String? ?? 'system',
       title: json['title'] as String? ?? '',
       text: json['text'] as String? ?? '',
+      previewText: _displayString(json['previewText']),
+      isTruncated: json['isTruncated'] as bool?,
+      fullTextCharCount: json['fullTextCharCount'] as int?,
       status: json['status'] as String?,
       createdAt: json['createdAt'] as String?,
       rawType: json['rawType'] as String?,
@@ -225,8 +270,7 @@ class AiWorkbenchModel {
       hidden: json['hidden'] as bool?,
       isDefault: json['isDefault'] as bool?,
       defaultReasoningEffort: json['defaultReasoningEffort'] as String?,
-      supportedReasoningEfforts:
-          _stringList(json['supportedReasoningEfforts']),
+      supportedReasoningEfforts: _stringList(json['supportedReasoningEfforts']),
     );
   }
 }
@@ -299,10 +343,7 @@ class AiWorkbenchError {
   }
 }
 
-List<T> _listOf<T>(
-  Object? value,
-  T Function(Map<String, dynamic>) mapper,
-) {
+List<T> _listOf<T>(Object? value, T Function(Map<String, dynamic>) mapper) {
   if (value is! List) return const [];
   return value
       .whereType<Map<String, dynamic>>()
@@ -334,4 +375,12 @@ Map<String, List<T>> _mapOfList<T>(
 List<String> _stringList(Object? value) {
   if (value is! List) return const [];
   return value.whereType<String>().toList(growable: false);
+}
+
+String? _displayString(Object? value) {
+  if (value == null) return null;
+  if (value is String) {
+    return value.trim().isEmpty ? null : value;
+  }
+  return value.toString();
 }

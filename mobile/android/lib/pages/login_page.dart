@@ -1,7 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../theme/app_theme.dart';
+
+// DEV ONLY: 发布前移除这组默认登录信息。
+const _devServerUrl = 'https://lisibo.top:98';
+const _devUsername = 'admin';
+const _devPassword = 'ila5youNAS';
+const _devDeviceName = 'Android Phone';
 
 /// 登录页 — 输入服务端地址、账号密码、设备名
 class LoginPage extends StatefulWidget {
@@ -12,12 +19,25 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _serverUrlController = TextEditingController();
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _deviceNameController = TextEditingController(text: 'Android Phone');
+  final _serverUrlController = TextEditingController(text: _devServerUrl);
+  final _usernameController = TextEditingController(text: _devUsername);
+  final _passwordController = TextEditingController(text: _devPassword);
+  final _deviceNameController = TextEditingController(text: _devDeviceName);
   final _formKey = GlobalKey<FormState>();
   bool _obscurePassword = true;
+  bool _autoLoginTried = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (kDebugMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _autoLoginTried) return;
+        _autoLoginTried = true;
+        _login();
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -88,12 +108,16 @@ class _LoginPageState extends State<LoginPage> {
                       TextFormField(
                         controller: _serverUrlController,
                         style: const TextStyle(
-                            color: AppTheme.textPrimary, fontSize: 14),
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
                         decoration: const InputDecoration(
                           labelText: '服务端地址',
                           hintText: 'http://your-server:8080',
-                          prefixIcon:
-                              Icon(Icons.dns, color: AppTheme.textSecondary),
+                          prefixIcon: Icon(
+                            Icons.dns,
+                            color: AppTheme.textSecondary,
+                          ),
                         ),
                         keyboardType: TextInputType.url,
                         validator: (v) =>
@@ -105,12 +129,16 @@ class _LoginPageState extends State<LoginPage> {
                       TextFormField(
                         controller: _usernameController,
                         style: const TextStyle(
-                            color: AppTheme.textPrimary, fontSize: 14),
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
                         decoration: const InputDecoration(
                           labelText: '用户名',
                           hintText: '输入账号',
-                          prefixIcon:
-                              Icon(Icons.person, color: AppTheme.textSecondary),
+                          prefixIcon: Icon(
+                            Icons.person,
+                            color: AppTheme.textSecondary,
+                          ),
                         ),
                         validator: (v) =>
                             (v == null || v.trim().isEmpty) ? '请输入用户名' : null,
@@ -122,12 +150,16 @@ class _LoginPageState extends State<LoginPage> {
                         controller: _passwordController,
                         obscureText: _obscurePassword,
                         style: const TextStyle(
-                            color: AppTheme.textPrimary, fontSize: 14),
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
                         decoration: InputDecoration(
                           labelText: '密码',
                           hintText: '输入密码',
-                          prefixIcon:
-                              const Icon(Icons.lock, color: AppTheme.textSecondary),
+                          prefixIcon: const Icon(
+                            Icons.lock,
+                            color: AppTheme.textSecondary,
+                          ),
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword
@@ -136,7 +168,8 @@ class _LoginPageState extends State<LoginPage> {
                               color: AppTheme.textSecondary,
                             ),
                             onPressed: () => setState(
-                                () => _obscurePassword = !_obscurePassword),
+                              () => _obscurePassword = !_obscurePassword,
+                            ),
                           ),
                         ),
                         validator: (v) =>
@@ -148,12 +181,16 @@ class _LoginPageState extends State<LoginPage> {
                       TextFormField(
                         controller: _deviceNameController,
                         style: const TextStyle(
-                            color: AppTheme.textPrimary, fontSize: 14),
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
                         decoration: const InputDecoration(
                           labelText: '设备名',
                           hintText: '此手机的名称',
-                          prefixIcon: Icon(Icons.phone_android,
-                              color: AppTheme.textSecondary),
+                          prefixIcon: Icon(
+                            Icons.phone_android,
+                            color: AppTheme.textSecondary,
+                          ),
                         ),
                         validator: (v) =>
                             (v == null || v.trim().isEmpty) ? '请输入设备名' : null,
@@ -169,12 +206,16 @@ class _LoginPageState extends State<LoginPage> {
                             color: AppTheme.statusRed.withAlpha(15),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                                color: AppTheme.statusRed.withAlpha(40)),
+                              color: AppTheme.statusRed.withAlpha(40),
+                            ),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.error_outline,
-                                  size: 16, color: AppTheme.statusRed),
+                              const Icon(
+                                Icons.error_outline,
+                                size: 16,
+                                color: AppTheme.statusRed,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -203,10 +244,13 @@ class _LoginPageState extends State<LoginPage> {
                                     color: AppTheme.textPrimary,
                                   ),
                                 )
-                              : const Text('连接',
+                              : const Text(
+                                  '连接',
                                   style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600)),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ),
                     ],

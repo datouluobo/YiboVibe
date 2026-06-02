@@ -2,8 +2,9 @@ use log::{info, warn};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
@@ -17,6 +18,219 @@ mod terminal_screen;
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
     static ref HINT_WINDOW_CFG: std::sync::Mutex<(i32, i32, i32, i32, i32)> = std::sync::Mutex::new((0, -1, -1, 0, 20));
+    static ref CODEX_IPC_STATE_CACHE: std::sync::Mutex<HashMap<String, serde_json::Value>> = std::sync::Mutex::new(HashMap::new());
+    static ref LAST_CODEX_WORKBENCH_SNAPSHOT: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+    static ref RECENTLY_ARCHIVED_CODEX_THREADS: std::sync::Mutex<HashMap<String, u128>> = std::sync::Mutex::new(HashMap::new());
+}
+
+#[derive(Clone)]
+struct CodexWorkbenchSnapshotBuild {
+    snapshot: serde_json::Value,
+    thread_count: usize,
+    project_count: usize,
+    elapsed_ms: i64,
+    snapshot_bytes: usize,
+    listed_count: usize,
+    ipc_count: usize,
+    cached_count: usize,
+    merged_count: usize,
+    used_unfiltered_threads_fallback: bool,
+}
+
+const RECENTLY_ARCHIVED_THREAD_TTL_MS: u128 = 15_000;
+
+fn git_command_output(cwd: &str, args: &[&str]) -> Result<String, String> {
+    let trimmed = cwd.trim();
+    if trimmed.is_empty() {
+        return Err("cwd is required".to_string());
+    }
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(trimmed)
+        .output()
+        .map_err(|err| format!("git {:?} failed: {}", args, err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("git {:?} failed: {}", args, detail));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_branch_snapshot(cwd: &str) -> Option<(String, Vec<String>)> {
+    let current = git_command_output(cwd, &["branch", "--show-current"]).ok()?;
+    if current.trim().is_empty() {
+        return None;
+    }
+    let all = git_command_output(
+        cwd,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .unwrap_or_default();
+    let mut branches = all
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !branches.iter().any(|value| value == &current) {
+        branches.insert(0, current.clone());
+    }
+    Some((current, branches))
+}
+
+fn merge_git_info_branch(
+    git_info: Option<&serde_json::Value>,
+    live_branch: Option<&str>,
+) -> serde_json::Value {
+    let mut merged = git_info
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(branch) = live_branch.filter(|value| !value.trim().is_empty()) {
+        merged.insert(
+            "branch".to_string(),
+            serde_json::Value::String(branch.to_string()),
+        );
+    }
+    if merged.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Object(merged)
+    }
+}
+
+fn unix_time_ms_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn remember_recently_archived_codex_thread(thread_id: &str) {
+    let trimmed = thread_id.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let expires_at = unix_time_ms_now() + RECENTLY_ARCHIVED_THREAD_TTL_MS;
+    let mut archived = RECENTLY_ARCHIVED_CODEX_THREADS.lock().unwrap();
+    archived.retain(|_, until| *until > unix_time_ms_now());
+    archived.insert(trimmed.to_string(), expires_at);
+}
+
+fn is_recently_archived_codex_thread(thread_id: &str) -> bool {
+    let trimmed = thread_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let now = unix_time_ms_now();
+    let mut archived = RECENTLY_ARCHIVED_CODEX_THREADS.lock().unwrap();
+    archived.retain(|_, until| *until > now);
+    archived
+        .get(trimmed)
+        .map(|until| *until > now)
+        .unwrap_or(false)
+}
+
+fn prune_archived_thread_from_snapshot(
+    snapshot: &serde_json::Value,
+    archived_thread_id: &str,
+) -> serde_json::Value {
+    let Some(root) = snapshot.as_object() else {
+        return snapshot.clone();
+    };
+    let mut next = root.clone();
+
+    let filtered_conversations = root
+        .get("conversations")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("id").and_then(serde_json::Value::as_str) != Some(archived_thread_id)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let conversation_ids = filtered_conversations
+        .iter()
+        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    let filtered_projects = root
+        .get("projects")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let Some(project) = item.as_object() else {
+                        return Some(item.clone());
+                    };
+                    let existing_ids = project
+                        .get("conversationIds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .filter(|value| *value != archived_thread_id)
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if existing_ids.is_empty() {
+                        return None;
+                    }
+                    let mut next_project = project.clone();
+                    next_project.insert(
+                        "conversationIds".to_string(),
+                        serde_json::json!(existing_ids),
+                    );
+                    Some(serde_json::Value::Object(next_project))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let filtered_messages = root
+        .get("messagesByConversationId")
+        .and_then(serde_json::Value::as_object)
+        .map(|map| {
+            let mut next_map = map.clone();
+            next_map.remove(archived_thread_id);
+            serde_json::Value::Object(next_map)
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let next_active = root
+        .get("activeConversationId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| *value != archived_thread_id)
+        .map(ToString::to_string)
+        .or_else(|| conversation_ids.first().cloned());
+
+    next.insert(
+        "conversations".to_string(),
+        serde_json::Value::Array(filtered_conversations),
+    );
+    next.insert(
+        "projects".to_string(),
+        serde_json::Value::Array(filtered_projects),
+    );
+    next.insert("messagesByConversationId".to_string(), filtered_messages);
+    next.insert(
+        "activeConversationId".to_string(),
+        next_active
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    serde_json::Value::Object(next)
 }
 
 fn refresh_hint_window_cfg() {
@@ -3152,7 +3366,104 @@ async fn codex_app_server_request(
     app: tauri::AppHandle,
     request: codex_app_server::CodexAppServerRpcRequest,
 ) -> Result<serde_json::Value, String> {
-    codex_app_server::persistent_request(app, request).await
+    let method = request.method.clone();
+    let thread_id = request
+        .params
+        .get("threadId")
+        .or_else(|| request.params.get("conversationId"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let response = codex_app_server::persistent_request(app.clone(), request).await?;
+
+    if method == "thread/archive" {
+        let app_handle = app.clone();
+        let archived_thread_id = thread_id.clone();
+        if let Some(thread_id) = archived_thread_id.as_deref() {
+            remember_recently_archived_codex_thread(thread_id);
+            let mut cached = LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap();
+            if let Some(snapshot) = cached.as_ref() {
+                *cached = Some(prune_archived_thread_from_snapshot(snapshot, thread_id));
+            }
+        }
+        tauri::async_runtime::spawn(async move {
+            broadcast_workbench_change(
+                &app_handle,
+                "thread/archive",
+                archived_thread_id.as_deref(),
+            )
+            .await;
+            sync_codex_workbench_snapshot_to_server_handle(&app_handle).await;
+        });
+    }
+
+    Ok(response)
+}
+
+#[tauri::command]
+async fn switch_git_branch(
+    app: tauri::AppHandle,
+    cwd: String,
+    branch: String,
+) -> Result<serde_json::Value, String> {
+    let trimmed_cwd = cwd.trim();
+    let trimmed_branch = branch.trim();
+    if trimmed_cwd.is_empty() || trimmed_branch.is_empty() {
+        return Err("cwd and branch are required".to_string());
+    }
+
+    git_command_output(trimmed_cwd, &["checkout", trimmed_branch])?;
+    let (current_branch, branches) = git_branch_snapshot(trimmed_cwd)
+        .ok_or_else(|| "failed to read git branch state after checkout".to_string())?;
+
+    {
+        let mut cached = LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap();
+        *cached = None;
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        broadcast_workbench_change(&app_handle, "git/checkout", None).await;
+        sync_codex_workbench_snapshot_to_server_handle(&app_handle).await;
+    });
+
+    Ok(serde_json::json!({
+        "cwd": trimmed_cwd,
+        "branch": current_branch,
+        "branches": branches,
+    }))
+}
+
+#[tauri::command]
+async fn get_git_branch_state(cwd: String) -> Result<serde_json::Value, String> {
+    let trimmed_cwd = cwd.trim();
+    if trimmed_cwd.is_empty() {
+        return Err("cwd is required".to_string());
+    }
+    let (current_branch, branches) = git_branch_snapshot(trimmed_cwd)
+        .ok_or_else(|| "failed to read git branch state".to_string())?;
+    Ok(serde_json::json!({
+        "cwd": trimmed_cwd,
+        "branch": current_branch,
+        "branches": branches,
+    }))
+}
+
+#[tauri::command]
+async fn codex_app_server_reply_server_request(
+    app: tauri::AppHandle,
+    request_id: String,
+    result: serde_json::Value,
+) -> Result<(), String> {
+    codex_app_server::respond_to_server_request(app, request_id, result).await
+}
+
+#[tauri::command]
+async fn codex_app_server_respond_pending_approval(
+    app: tauri::AppHandle,
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    codex_app_server::respond_to_pending_approval(app, request_id, approved).await
 }
 
 #[tauri::command]
@@ -3500,6 +3811,1358 @@ async fn sync_all_sessions_to_server_handle(app: &tauri::AppHandle) {
     }
 }
 
+fn codex_project_name_from_path(path: &str) -> String {
+    let clean = path.trim_end_matches(['\\', '/']);
+    clean
+        .rsplit(['\\', '/'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(clean)
+        .to_string()
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn json_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+    value.get(key).and_then(serde_json::Value::as_i64)
+}
+
+fn codex_collect_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.to_string(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(codex_collect_text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(serde_json::Value::as_str) {
+                return text.to_string();
+            }
+            map.values()
+                .map(codex_collect_text)
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
+fn codex_thread_status(thread: &serde_json::Value) -> &'static str {
+    if thread
+        .get("pendingApproval")
+        .map(|value| !value.is_null())
+        .unwrap_or(false)
+    {
+        return "waitingApproval";
+    }
+    let has_in_progress = thread
+        .get("turns")
+        .and_then(serde_json::Value::as_array)
+        .map(|turns| {
+            turns.iter().any(|turn| {
+                turn.get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|status| status == "inProgress")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if has_in_progress {
+        return "running";
+    }
+
+    let waiting_on_approval = thread
+        .get("status")
+        .and_then(|status| status.get("activeFlags"))
+        .and_then(serde_json::Value::as_array)
+        .map(|flags| {
+            flags
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|flag| flag == "waitingOnApproval")
+        })
+        .unwrap_or(false);
+    if waiting_on_approval {
+        return "waitingApproval";
+    }
+
+    match thread
+        .get("status")
+        .and_then(|status| status.get("type"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("notLoaded") => "notLoaded",
+        Some("error") | Some("failed") => "failed",
+        Some("offline") => "offline",
+        _ => "idle",
+    }
+}
+
+fn codex_item_to_workbench_message(
+    item: &serde_json::Value,
+    index: usize,
+    conversation_id: &str,
+) -> Option<serde_json::Value> {
+    const CODEX_MOBILE_PREVIEW_CHAR_LIMIT: usize = 1600;
+    const CODEX_MOBILE_FULL_TEXT_CHAR_LIMIT: usize = 12000;
+    let item_type = item
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let (role, title) = match item_type {
+        "userMessage" => ("user", "用户"),
+        "agentMessage" => ("assistant", "Codex"),
+        _ => return None,
+    };
+
+    let direct_text = item
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let fallback_text = codex_collect_text(item.get("content").unwrap_or(item));
+    let text = if !direct_text.is_empty() {
+        direct_text
+    } else {
+        fallback_text
+    };
+    let trimmed_text = text.trim();
+    if trimmed_text.is_empty() {
+        return None;
+    }
+    let full_char_count = trimmed_text.chars().count();
+    let mut preview_text = serde_json::Value::Null;
+    if full_char_count > CODEX_MOBILE_PREVIEW_CHAR_LIMIT {
+        let mut compact_preview = trimmed_text
+            .chars()
+            .take(CODEX_MOBILE_PREVIEW_CHAR_LIMIT)
+            .collect::<String>();
+        compact_preview.push_str("\n\n[展开查看更多]");
+        preview_text = serde_json::Value::String(compact_preview);
+    }
+    let is_truncated = full_char_count > CODEX_MOBILE_FULL_TEXT_CHAR_LIMIT;
+    let mut mobile_text = trimmed_text.to_string();
+    if is_truncated {
+        mobile_text = trimmed_text
+            .chars()
+            .take(CODEX_MOBILE_FULL_TEXT_CHAR_LIMIT)
+            .collect::<String>();
+        mobile_text.push_str("\n\n[移动端已保留前 12000 字，剩余内容请在桌面端查看]");
+    }
+
+    Some(serde_json::json!({
+        "id": format!("{conversation_id}:{item_type}:{index}"),
+        "providerId": "codex",
+        "conversationId": conversation_id,
+        "role": role,
+        "title": title,
+        "text": mobile_text,
+        "previewText": preview_text,
+        "isTruncated": is_truncated,
+        "fullTextCharCount": full_char_count,
+        "status": item.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "rawType": item_type,
+    }))
+}
+
+fn codex_materialized_workbench_messages(
+    thread: &serde_json::Value,
+    conversation_id: &str,
+) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+    let Some(turns) = thread.get("turns").and_then(serde_json::Value::as_array) else {
+        return messages;
+    };
+
+    for turn in turns {
+        let Some(items) = turn.get("items").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let mut last_assistant_message: Option<serde_json::Value> = None;
+
+        for (index, item) in items.iter().enumerate() {
+            let item_type = item
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            match item_type {
+                "userMessage" => {
+                    if let Some(message) =
+                        codex_item_to_workbench_message(item, index, conversation_id)
+                    {
+                        messages.push(message);
+                    }
+                }
+                "agentMessage" => {
+                    if let Some(message) =
+                        codex_item_to_workbench_message(item, index, conversation_id)
+                    {
+                        last_assistant_message = Some(message);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(message) = last_assistant_message {
+            messages.push(message);
+        }
+    }
+
+    messages
+}
+
+fn codex_preview_from_thread_like(thread: &serde_json::Value) -> Option<String> {
+    let conversation_id = json_string(thread, "id").unwrap_or("preview".to_string());
+    let messages = codex_materialized_workbench_messages(thread, &conversation_id);
+    for message in messages.iter().rev() {
+        let text = message
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if text.is_empty() {
+            continue;
+        }
+        let preview = text.replace('\n', " ");
+        return Some(preview.chars().take(140).collect());
+    }
+    None
+}
+
+fn codex_pending_approval_from_thread(thread: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(pending) = thread
+        .get("pendingApproval")
+        .cloned()
+        .filter(|value| !value.is_null())
+    {
+        return Some(pending);
+    }
+    let status_type = codex_thread_status(thread);
+    if status_type != "waitingApproval" {
+        return None;
+    }
+
+    let items = thread
+        .get("turns")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flat_map(|turns| turns.iter())
+        .flat_map(|turn| {
+            turn.get("items")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flat_map(|items| items.iter())
+        })
+        .collect::<Vec<_>>();
+
+    let mut resolved = std::collections::HashSet::new();
+    for item in &items {
+        let approval_id = item
+            .get("approval_id")
+            .or_else(|| item.get("approvalId"))
+            .or_else(|| {
+                item.get("content")
+                    .and_then(|value| value.get("approval_id"))
+            })
+            .or_else(|| {
+                item.get("content")
+                    .and_then(|value| value.get("approvalId"))
+            })
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if approval_id.is_empty() {
+            continue;
+        }
+        let status = item
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let approved = item
+            .get("approved")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let denied = item
+            .get("denied")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if approved
+            || denied
+            || status.contains("approved")
+            || status.contains("denied")
+            || status.contains("rejected")
+        {
+            resolved.insert(approval_id);
+        }
+    }
+
+    for item in items.into_iter().rev() {
+        let approval_id = item
+            .get("approval_id")
+            .or_else(|| item.get("approvalId"))
+            .or_else(|| {
+                item.get("content")
+                    .and_then(|value| value.get("approval_id"))
+            })
+            .or_else(|| {
+                item.get("content")
+                    .and_then(|value| value.get("approvalId"))
+            })
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if approval_id.is_empty() || resolved.contains(&approval_id) {
+            continue;
+        }
+
+        let item_type = item
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let kind = if item_type.contains("patch") || item.get("changes").is_some() {
+            "patch-approval"
+        } else if item_type.contains("exec")
+            || item
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        {
+            "exec-approval"
+        } else {
+            continue;
+        };
+        let title = if kind == "patch-approval" {
+            "补丁变更待确认"
+        } else {
+            "命令执行待确认"
+        };
+        let summary = if kind == "exec-approval" {
+            item.get("command")
+                .and_then(serde_json::Value::as_str)
+                .map(|value| value.trim().to_string())
+        } else if let Some(changes) = item.get("changes").and_then(serde_json::Value::as_array) {
+            Some(format!("涉及 {} 个变更项", changes.len()))
+        } else {
+            None
+        }
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let direct_text = item
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !direct_text.is_empty() {
+                Some(direct_text)
+            } else {
+                let summary_text = codex_collect_text(item.get("summary").unwrap_or(item));
+                let content_text = codex_collect_text(item.get("content").unwrap_or(item));
+                let collected = if !summary_text.trim().is_empty() {
+                    summary_text
+                } else {
+                    content_text
+                };
+                if collected.trim().is_empty() {
+                    None
+                } else {
+                    Some(collected.trim().to_string())
+                }
+            }
+        })
+        .map(|value| value.chars().take(200).collect::<String>());
+
+        return Some(serde_json::json!({
+            "requestId": approval_id,
+            "approvalId": approval_id,
+            "kind": kind,
+            "title": title,
+            "summary": summary,
+        }));
+    }
+
+    None
+}
+
+fn codex_conversation_state_to_thread(state: &serde_json::Value) -> serde_json::Value {
+    let runtime_type = state
+        .get("threadRuntimeStatus")
+        .and_then(|value| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("idle");
+    let status_type = match runtime_type {
+        "running" | "inProgress" | "active" => "running",
+        "waitingApproval" => "waitingApproval",
+        "failed" | "error" => "error",
+        "offline" => "offline",
+        _ => "loaded",
+    };
+
+    let mut thread = serde_json::json!({
+        "id": state.get("id").cloned().unwrap_or(serde_json::Value::Null),
+        "name": state.get("title").cloned().unwrap_or(serde_json::Value::Null),
+        "cwd": state.get("cwd").cloned().unwrap_or(serde_json::Value::Null),
+        "path": state.get("cwd").cloned().unwrap_or(serde_json::Value::Null),
+        "cliVersion": serde_json::Value::Null,
+        "source": state.get("source").cloned().unwrap_or(serde_json::Value::Null),
+        "createdAt": state.get("createdAt").cloned().unwrap_or(serde_json::Value::Null),
+        "updatedAt": state.get("updatedAt").cloned().unwrap_or(serde_json::Value::Null),
+        "gitInfo": state.get("gitInfo").cloned().unwrap_or(serde_json::Value::Null),
+        "pendingApproval": state.get("pendingApproval").cloned().unwrap_or(serde_json::Value::Null),
+        "status": {
+            "type": status_type,
+            "activeFlags": state
+                .get("threadRuntimeStatus")
+                .and_then(|value| value.get("activeFlags"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::Array(vec![]))
+        },
+        "turns": state.get("turns").cloned().unwrap_or_else(|| serde_json::Value::Array(vec![])),
+    });
+
+    let pending_approval = codex_pending_approval_from_thread(&thread);
+    if let Some(preview) = codex_preview_from_thread_like(&thread) {
+        if let Some(map) = thread.as_object_mut() {
+            map.insert("preview".to_string(), serde_json::Value::String(preview));
+        }
+    }
+    if let Some(map) = thread.as_object_mut() {
+        map.insert(
+            "pendingApproval".to_string(),
+            pending_approval.unwrap_or(serde_json::Value::Null),
+        );
+    }
+
+    thread
+}
+
+fn codex_source_label(thread: &serde_json::Value) -> Option<String> {
+    match thread.get("source") {
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
+            Some(value.to_string())
+        }
+        Some(serde_json::Value::Object(map)) => {
+            if let Some(other) = map
+                .get("subAgent")
+                .and_then(|value| value.get("other"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                return Some(format!("subAgent:{other}"));
+            }
+            Some("custom".to_string())
+        }
+        Some(serde_json::Value::Null) | None => None,
+        Some(other) => {
+            let serialized = other.to_string();
+            if serialized.trim().is_empty() {
+                None
+            } else {
+                Some(serialized)
+            }
+        }
+    }
+}
+
+fn codex_is_primary_thread(thread: &serde_json::Value) -> bool {
+    match thread.get("source") {
+        Some(serde_json::Value::String(value)) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty()
+                && matches!(
+                    normalized.as_str(),
+                    "vscode" | "cli" | "exec" | "appserver" | "app-server"
+                )
+        }
+        Some(serde_json::Value::Object(map)) => {
+            !map.contains_key("subAgent")
+                && !map.contains_key("subAgentReview")
+                && !map.contains_key("subAgentCompact")
+                && !map.contains_key("subAgentThreadSpawn")
+                && !map.contains_key("subAgentOther")
+        }
+        Some(serde_json::Value::Null) | None => true,
+        Some(_) => true,
+    }
+}
+
+fn codex_project_path_for_thread(thread: &serde_json::Value) -> Option<String> {
+    let cwd = json_string(thread, "cwd").or_else(|| json_string(thread, "path"))?;
+    let normalized = cwd.replace('/', "\\").to_ascii_lowercase();
+    if normalized.contains("\\documents\\codex\\") {
+        return None;
+    }
+    Some(cwd)
+}
+
+fn merge_codex_threads(
+    primary: Vec<serde_json::Value>,
+    secondary: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let mut merged = HashMap::<String, serde_json::Value>::new();
+    for thread in secondary {
+        if let Some(id) = thread.get("id").and_then(serde_json::Value::as_str) {
+            merged.insert(id.to_string(), thread);
+        }
+    }
+    for thread in primary {
+        if let Some(id) = thread.get("id").and_then(serde_json::Value::as_str) {
+            merged.insert(id.to_string(), thread);
+        }
+    }
+    merged.into_values().collect()
+}
+
+fn codex_rpc_result(value: &serde_json::Value) -> &serde_json::Value {
+    value.get("result").unwrap_or(value)
+}
+
+fn codex_sandbox_policy_from_mode(mode: Option<&str>, cwd: Option<&str>) -> serde_json::Value {
+    match mode.unwrap_or("workspace-write") {
+        "read-only" => serde_json::json!({
+            "type": "readOnly",
+            "networkAccess": true
+        }),
+        "danger-full-access" => serde_json::json!({
+            "type": "dangerFullAccess"
+        }),
+        _ => serde_json::json!({
+            "type": "workspaceWrite",
+            "writableRoots": cwd.map(|value| vec![value]).unwrap_or_default(),
+            "networkAccess": true,
+            "excludeTmpdirEnvVar": false,
+            "excludeSlashTmp": false
+        }),
+    }
+}
+
+async fn codex_request_prefer_desktop_ipc(
+    app: tauri::AppHandle,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    // History-oriented methods are consistently available from app-server and can
+    // be much slower when we first detour through Desktop IPC. Keep the live-state
+    // IPC collector as a supplement, but make list/read requests fast and direct.
+    if matches!(method, "thread/list" | "thread/read") {
+        let response = codex_app_server::persistent_request(
+            app,
+            codex_app_server::CodexAppServerRpcRequest {
+                method: method.to_string(),
+                params,
+            },
+        )
+        .await?;
+        return Ok(codex_rpc_result(&response).clone());
+    }
+
+    match codex_app_server::desktop_ipc_request(
+        app.clone(),
+        codex_app_server::CodexDesktopIpcRequest {
+            method: method.to_string(),
+            params: params.clone(),
+            version: Some(0),
+            route_thread_id: params
+                .get("threadId")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string),
+        },
+    )
+    .await
+    {
+        Ok(ipc_value) => {
+            if let Some(result) = ipc_value.get("result") {
+                return Ok(result.clone());
+            }
+            warn!(
+                "Codex Desktop IPC {} returned success envelope without result, fallback to app-server: {}",
+                method, ipc_value
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Codex Desktop IPC {} failed, fallback to app-server: {}",
+                method, err
+            );
+        }
+    }
+
+    let response = codex_app_server::persistent_request(
+        app,
+        codex_app_server::CodexAppServerRpcRequest {
+            method: method.to_string(),
+            params,
+        },
+    )
+    .await?;
+    Ok(codex_rpc_result(&response).clone())
+}
+
+async fn build_codex_workbench_snapshot(
+    app: tauri::AppHandle,
+) -> Result<CodexWorkbenchSnapshotBuild, String> {
+    let started_at = Instant::now();
+    let list_result = codex_request_prefer_desktop_ipc(
+        app.clone(),
+        "thread/list",
+        serde_json::json!({
+            "limit": 200,
+            "archived": false
+        }),
+    )
+    .await?;
+
+    let listed_threads = list_result
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let listed_count = listed_threads.len();
+    let ipc_threads = match codex_app_server::desktop_ipc_collect_conversation_states(
+        app.clone(),
+        Duration::from_millis(1200),
+    )
+    .await
+    {
+        Ok(states) => {
+            if !states.is_empty() {
+                let normalized = states
+                    .iter()
+                    .map(codex_conversation_state_to_thread)
+                    .collect::<Vec<_>>();
+                let mut cache = CODEX_IPC_STATE_CACHE.lock().unwrap();
+                for thread in &normalized {
+                    if let Some(id) = thread.get("id").and_then(serde_json::Value::as_str) {
+                        cache.insert(id.to_string(), thread.clone());
+                    }
+                }
+                normalized
+            } else {
+                Vec::new()
+            }
+        }
+        Err(err) => {
+            warn!(
+                "Codex Desktop IPC conversation-state collection failed: {}",
+                err
+            );
+            Vec::new()
+        }
+    };
+    let ipc_count = ipc_threads.len();
+    let cached_threads = {
+        let cache = CODEX_IPC_STATE_CACHE.lock().unwrap();
+        cache.values().cloned().collect::<Vec<_>>()
+    };
+    let cached_count = cached_threads.len();
+    let listed_threads = merge_codex_threads(
+        listed_threads,
+        merge_codex_threads(ipc_threads, cached_threads),
+    );
+    let listed_threads = listed_threads
+        .into_iter()
+        .filter(|thread| {
+            thread
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(|thread_id| !is_recently_archived_codex_thread(thread_id))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    let merged_count = listed_threads.len();
+
+    let primary_threads = listed_threads
+        .iter()
+        .filter(|thread| codex_is_primary_thread(thread))
+        .cloned()
+        .collect::<Vec<_>>();
+    let used_unfiltered_threads_fallback = primary_threads.is_empty() && !listed_threads.is_empty();
+    let mut detailed_threads = if used_unfiltered_threads_fallback {
+        warn!(
+            "Codex snapshot primary-thread filter produced zero results; falling back to unfiltered thread list (listed={}, ipc={}, cached={}, merged={})",
+            listed_count, ipc_count, cached_count, merged_count
+        );
+        listed_threads
+    } else {
+        primary_threads
+    }
+    .into_iter()
+        .collect::<Vec<_>>();
+
+    detailed_threads.sort_by(|left, right| {
+        let left_updated = json_i64(left, "updatedAt").unwrap_or(0);
+        let right_updated = json_i64(right, "updatedAt").unwrap_or(0);
+        right_updated.cmp(&left_updated)
+    });
+
+    let mut project_threads: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for thread in &detailed_threads {
+        if let Some(project_path) = codex_project_path_for_thread(thread) {
+            project_threads
+                .entry(project_path)
+                .or_default()
+                .push(thread.clone());
+        }
+    }
+
+    let mut projects = Vec::new();
+    for (cwd, threads) in &project_threads {
+        let live_git = git_branch_snapshot(cwd);
+        let live_branch = live_git.as_ref().map(|value| value.0.clone());
+        let mut branches = live_git
+            .as_ref()
+            .map(|value| value.1.clone())
+            .unwrap_or_default();
+        for thread in threads {
+            if let Some(branch) = thread
+                .get("gitInfo")
+                .and_then(|info| info.get("branch"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+            {
+                if !branches.contains(&branch) {
+                    branches.push(branch);
+                }
+            }
+        }
+        if let Some(branch) = live_branch.as_ref() {
+            branches.retain(|value| value != branch);
+            branches.insert(0, branch.clone());
+        }
+
+        let latest_thread = threads
+            .iter()
+            .max_by_key(|thread| json_i64(thread, "updatedAt").unwrap_or(0));
+        let conversation_ids = threads
+            .iter()
+            .filter_map(|thread| json_string(thread, "id"))
+            .collect::<Vec<_>>();
+        let updated_at = latest_thread.and_then(|thread| json_i64(thread, "updatedAt"));
+        let origin_url = latest_thread
+            .and_then(|thread| thread.get("gitInfo"))
+            .and_then(|info| info.get("originUrl"))
+            .and_then(serde_json::Value::as_str);
+
+        projects.push(serde_json::json!({
+            "id": format!("codex:{cwd}"),
+            "providerId": "codex",
+            "name": codex_project_name_from_path(cwd),
+            "path": cwd,
+            "conversationIds": conversation_ids,
+            "branches": branches,
+            "originUrl": origin_url,
+            "updatedAt": updated_at,
+        }));
+    }
+
+    projects.sort_by(|left, right| {
+        let left_updated = left
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let right_updated = right
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        right_updated.cmp(&left_updated)
+    });
+
+    let mut conversations = Vec::new();
+    let mut messages_by_conversation_id = serde_json::Map::new();
+    for thread in &detailed_threads {
+        let thread_id = json_string(thread, "id").unwrap_or_default();
+        if thread_id.is_empty() {
+            continue;
+        }
+        if is_recently_archived_codex_thread(&thread_id) {
+            continue;
+        }
+
+        let read_thread = match codex_request_prefer_desktop_ipc(
+            app.clone(),
+            "thread/read",
+            serde_json::json!({
+                "threadId": thread_id,
+                "includeTurns": true,
+            }),
+        )
+        .await
+        {
+            Ok(result) => result
+                .get("thread")
+                .cloned()
+                .unwrap_or_else(|| thread.clone()),
+            Err(err) => {
+                warn!("Codex thread/read failed for {}: {}", thread_id, err);
+                thread.clone()
+            }
+        };
+        if is_recently_archived_codex_thread(&thread_id) {
+            continue;
+        }
+
+        let project_path = codex_project_path_for_thread(&read_thread)
+            .or_else(|| codex_project_path_for_thread(thread));
+        let live_branch = project_path
+            .as_deref()
+            .and_then(git_branch_snapshot)
+            .map(|value| value.0);
+        let title = json_string(&read_thread, "name")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                json_string(&read_thread, "preview").filter(|value| !value.trim().is_empty())
+            })
+            .or_else(|| json_string(thread, "preview").filter(|value| !value.trim().is_empty()))
+            .unwrap_or_else(|| thread_id.clone());
+        let preview = read_thread
+            .get("preview")
+            .cloned()
+            .filter(|value| !value.is_null())
+            .or_else(|| codex_preview_from_thread_like(&read_thread).map(serde_json::Value::String))
+            .unwrap_or_else(|| {
+                thread
+                    .get("preview")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            });
+        let pending_approval = codex_app_server::pending_approval_for_thread(&thread_id)
+            .await
+            .or_else(|| codex_pending_approval_from_thread(thread))
+            .or_else(|| codex_pending_approval_from_thread(&read_thread))
+            .unwrap_or(serde_json::Value::Null);
+        let merged_status = codex_thread_status(thread);
+        let read_status = codex_thread_status(&read_thread);
+        let conversation_status = if pending_approval.is_null() {
+            if merged_status == "waitingApproval" || read_status == "waitingApproval" {
+                "waitingApproval"
+            } else if merged_status == "running" && read_status == "idle" {
+                "running"
+            } else {
+                read_status
+            }
+        } else {
+            "waitingApproval"
+        };
+
+        conversations.push(serde_json::json!({
+            "id": thread_id,
+            "providerId": "codex",
+            "projectId": project_path.as_ref().map(|path| format!("codex:{path}")),
+            "title": title,
+            "preview": preview,
+            "cwd": read_thread.get("cwd").cloned().unwrap_or_else(|| {
+                thread.get("cwd").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+            "source": codex_source_label(&read_thread).or_else(|| codex_source_label(thread)),
+            "cliVersion": read_thread.get("cliVersion").cloned().unwrap_or_else(|| {
+                thread.get("cliVersion").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+            "pendingApproval": pending_approval,
+            "status": conversation_status,
+            "gitInfo": merge_git_info_branch(
+                read_thread.get("gitInfo").or_else(|| thread.get("gitInfo")),
+                live_branch.as_deref(),
+            ),
+            "createdAt": read_thread.get("createdAt").cloned().unwrap_or_else(|| {
+                thread.get("createdAt").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+            "updatedAt": read_thread.get("updatedAt").cloned().unwrap_or_else(|| {
+                thread.get("updatedAt").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+        }));
+
+        let mut messages = codex_materialized_workbench_messages(&read_thread, &thread_id);
+        if messages.len() > 24 {
+            let keep_from = messages.len().saturating_sub(24);
+            messages = messages.split_off(keep_from);
+        }
+        messages_by_conversation_id.insert(thread_id, serde_json::Value::Array(messages));
+    }
+
+    let config_result = codex_app_server::persistent_request(
+        app.clone(),
+        codex_app_server::CodexAppServerRpcRequest {
+            method: "config/read".to_string(),
+            params: serde_json::json!({
+                "includeLayers": true,
+            }),
+        },
+    )
+    .await
+    .ok()
+    .map(|value| codex_rpc_result(&value).clone());
+
+    let model_result = codex_app_server::persistent_request(
+        app.clone(),
+        codex_app_server::CodexAppServerRpcRequest {
+            method: "model/list".to_string(),
+            params: serde_json::json!({
+                "includeHidden": false,
+            }),
+        },
+    )
+    .await
+    .ok()
+    .map(|value| codex_rpc_result(&value).clone());
+
+    let model_list = model_result
+        .as_ref()
+        .and_then(|value| value.get("data"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_object)
+                .map(|item| {
+                    serde_json::json!({
+                        "id": item.get("id").cloned().or_else(|| item.get("model").cloned()).unwrap_or(serde_json::Value::String(String::new())),
+                        "providerId": "codex",
+                        "label": item
+                            .get("displayName")
+                            .cloned()
+                            .or_else(|| item.get("model").cloned())
+                            .or_else(|| item.get("id").cloned())
+                            .unwrap_or(serde_json::Value::String("Unknown model".to_string())),
+                        "description": item.get("description").cloned().unwrap_or(serde_json::Value::Null),
+                        "hidden": item.get("hidden").cloned().unwrap_or(serde_json::Value::Null),
+                        "isDefault": item.get("isDefault").cloned().unwrap_or(serde_json::Value::Null),
+                        "defaultReasoningEffort": item.get("defaultReasoningEffort").cloned().unwrap_or(serde_json::Value::Null),
+                        "supportedReasoningEfforts": item.get("supportedReasoningEfforts").cloned().unwrap_or(serde_json::Value::Array(Vec::new())),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let generated_at = ::time::OffsetDateTime::now_utc()
+        .format(&::time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+
+    let active_conversation_id = conversations
+        .iter()
+        .find(|conversation| {
+            conversation
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(|status| status == "running")
+                .unwrap_or(false)
+        })
+        .and_then(|conversation| conversation.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            conversations
+                .first()
+                .and_then(|conversation| conversation.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        });
+
+    let snapshot = serde_json::json!({
+        "schemaVersion": 1,
+        "generatedAt": generated_at,
+        "providers": [{
+            "id": "codex",
+            "name": "Codex",
+            "transport": "app-server",
+            "capabilities": [
+                "project-list",
+                "conversation-list",
+                "conversation-read",
+                "conversation-create",
+                "conversation-rename",
+                "conversation-archive",
+                "message-send",
+                "turn-cancel",
+                "model-list",
+                "config-read",
+                "config-write",
+                "event-stream"
+            ]
+        }],
+        "projects": projects,
+        "conversations": conversations,
+        "activeConversationId": active_conversation_id,
+        "messagesByConversationId": messages_by_conversation_id,
+        "modelsByProviderId": {
+            "codex": model_list
+        },
+        "configsByProviderId": {
+            "codex": {
+                "providerId": "codex",
+                "model": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("model"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "modelProvider": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("model_provider"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "approvalPolicy": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("approval_policy"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "sandboxMode": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("sandbox_mode"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "serviceTier": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("service_tier"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "cwd": config_result
+                    .as_ref()
+                    .and_then(|value| value.get("config"))
+                    .and_then(|value| value.get("cwd"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            }
+        },
+        "errors": [],
+    });
+
+    let snapshot_bytes = serde_json::to_vec(&snapshot)
+        .map(|value| value.len())
+        .unwrap_or(0);
+
+    Ok(CodexWorkbenchSnapshotBuild {
+        snapshot,
+        thread_count: detailed_threads.len(),
+        project_count: projects.len(),
+        elapsed_ms: started_at.elapsed().as_millis() as i64,
+        snapshot_bytes,
+        listed_count,
+        ipc_count,
+        cached_count,
+        merged_count,
+        used_unfiltered_threads_fallback,
+    })
+}
+
+async fn push_codex_workbench_snapshot_to_server_handle(
+    app: &tauri::AppHandle,
+    target_devices: Vec<u32>,
+) {
+    let state = app.state::<AppState>();
+    let ws_tx = state.ws_tx.lock().await.clone();
+    let tx = match ws_tx {
+        Some(tx) => tx,
+        None => {
+            if let Err(err) = reconnect_session_signal_channel(app).await {
+                warn!(
+                    "[WorkbenchSync] Skip Codex snapshot push because signal channel is disconnected and reconnect failed: {}",
+                    err
+                );
+                return;
+            }
+            let state = app.state::<AppState>();
+            let reconnected_tx = state.ws_tx.lock().await.clone();
+            match reconnected_tx {
+                Some(tx) => tx,
+                None => {
+                    warn!(
+                        "[WorkbenchSync] Skip Codex snapshot push because signal channel is still unavailable after reconnect."
+                    );
+                    return;
+                }
+            }
+        }
+    };
+
+    push_workbench_snapshot_status(
+        &tx,
+        &target_devices,
+        "build-start",
+        "desktop received snapshot request",
+        serde_json::json!({}),
+    )
+    .await;
+
+    let build = match build_codex_workbench_snapshot(app.clone()).await {
+        Ok(build) => {
+            if build.thread_count > 0 {
+                *LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap() = Some(build.snapshot.clone());
+            }
+            push_workbench_snapshot_status(
+                &tx,
+                &target_devices,
+                "build-ok",
+                "desktop built workbench snapshot",
+                serde_json::json!({
+                    "threadCount": build.thread_count,
+                    "projectCount": build.project_count,
+                    "elapsedMs": build.elapsed_ms,
+                    "snapshotBytes": build.snapshot_bytes,
+                    "listedCount": build.listed_count,
+                    "ipcCount": build.ipc_count,
+                    "cachedCount": build.cached_count,
+                    "mergedCount": build.merged_count,
+                    "usedUnfilteredFallback": build.used_unfiltered_threads_fallback,
+                }),
+            )
+            .await;
+            build
+        }
+        Err(err) => {
+            warn!("[WorkbenchSync] Failed to build Codex snapshot: {}", err);
+            push_workbench_snapshot_status(
+                &tx,
+                &target_devices,
+                "build-failed",
+                "desktop failed to build workbench snapshot",
+                serde_json::json!({
+                    "error": err,
+                }),
+            )
+            .await;
+            let cached_snapshot = LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap().clone();
+            match cached_snapshot {
+                Some(cached) => {
+                    warn!("[WorkbenchSync] Falling back to last successful Codex snapshot.");
+                    let cached_thread_count = cached["conversations"]
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter(|item| item["providerId"].as_str() == Some("codex"))
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    let cached_project_count = cached["projects"]
+                        .as_array()
+                        .map(|items| items.len())
+                        .unwrap_or(0);
+                    push_workbench_snapshot_status(
+                        &tx,
+                        &target_devices,
+                        "fallback-cache",
+                        "desktop fell back to last successful snapshot",
+                        serde_json::json!({
+                            "threadCount": cached_thread_count,
+                            "projectCount": cached_project_count,
+                        }),
+                    )
+                    .await;
+                    CodexWorkbenchSnapshotBuild {
+                        snapshot: cached,
+                        thread_count: cached_thread_count,
+                        project_count: cached_project_count,
+                        elapsed_ms: 0,
+                        snapshot_bytes: 0,
+                        listed_count: 0,
+                        ipc_count: 0,
+                        cached_count: 0,
+                        merged_count: 0,
+                        used_unfiltered_threads_fallback: false,
+                    }
+                }
+                None => return,
+            }
+        }
+    };
+
+    push_workbench_snapshot_status(
+        &tx,
+        &target_devices,
+        "snapshot-ready",
+        "desktop prepared workbench snapshot payload",
+        serde_json::json!({
+            "threadCount": build.thread_count,
+            "projectCount": build.project_count,
+            "elapsedMs": build.elapsed_ms,
+            "snapshotBytes": build.snapshot_bytes,
+            "listedCount": build.listed_count,
+            "ipcCount": build.ipc_count,
+            "cachedCount": build.cached_count,
+            "mergedCount": build.merged_count,
+            "usedUnfilteredFallback": build.used_unfiltered_threads_fallback,
+        }),
+    )
+    .await;
+
+    let snapshot_targets = target_devices.clone();
+    if let Err(err) = tx
+        .send(yibovibe_core::ws::WsMessage {
+            sender_uid: 0,
+            sender_device_id: 0,
+            target_devices,
+            r#type: "workbench:snapshot".to_string(),
+            payload: build.snapshot,
+        })
+        .await
+    {
+        warn!("[WorkbenchSync] Failed to push Codex snapshot: {}", err);
+        *state.is_connected.lock().await = false;
+        *state.ws_tx.lock().await = None;
+    } else {
+        push_workbench_snapshot_status(
+            &tx,
+            &snapshot_targets,
+            "snapshot-sent",
+            "desktop sent workbench snapshot",
+            serde_json::json!({
+                "threadCount": build.thread_count,
+                "projectCount": build.project_count,
+                "elapsedMs": build.elapsed_ms,
+                "snapshotBytes": build.snapshot_bytes,
+                "listedCount": build.listed_count,
+                "ipcCount": build.ipc_count,
+                "cachedCount": build.cached_count,
+                "mergedCount": build.merged_count,
+                "usedUnfilteredFallback": build.used_unfiltered_threads_fallback,
+            }),
+        )
+        .await;
+    }
+}
+
+async fn push_cached_codex_workbench_snapshot_to_server_handle(
+    app: &tauri::AppHandle,
+    target_devices: Vec<u32>,
+) -> bool {
+    let cached = LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap().clone();
+    let Some(snapshot) = cached else { return false };
+    let cached_thread_count = snapshot["conversations"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item["providerId"].as_str() == Some("codex"))
+                .count()
+        })
+        .unwrap_or(0);
+    if cached_thread_count == 0 {
+        return false;
+    }
+
+    let state = app.state::<AppState>();
+    let ws_tx = state.ws_tx.lock().await.clone();
+    let Some(tx) = ws_tx else { return false };
+
+    let cached_targets = target_devices.clone();
+    match tx
+        .send(yibovibe_core::ws::WsMessage {
+            sender_uid: 0,
+            sender_device_id: 0,
+            target_devices,
+            r#type: "workbench:snapshot".to_string(),
+            payload: snapshot,
+        })
+        .await
+    {
+        Ok(_) => {
+            push_workbench_snapshot_status(
+                &tx,
+                &cached_targets,
+                "cache-sent",
+                "desktop sent cached workbench snapshot",
+                serde_json::json!({
+                    "threadCount": cached_thread_count,
+                }),
+            )
+            .await;
+            true
+        }
+        Err(err) => {
+            warn!(
+                "[WorkbenchSync] Failed to push cached Codex snapshot: {}",
+                err
+            );
+            false
+        }
+    }
+}
+
+async fn push_workbench_snapshot_status(
+    tx: &tokio::sync::mpsc::Sender<yibovibe_core::ws::WsMessage>,
+    target_devices: &[u32],
+    stage: &str,
+    message: &str,
+    detail: serde_json::Value,
+) {
+    let payload = serde_json::json!({
+        "stage": stage,
+        "message": message,
+        "detail": detail,
+        "ts": ::time::OffsetDateTime::now_utc()
+            .format(&::time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+    });
+
+    if let Err(err) = tx
+        .send(yibovibe_core::ws::WsMessage {
+            sender_uid: 0,
+            sender_device_id: 0,
+            target_devices: target_devices.to_vec(),
+            r#type: "workbench:snapshot:status".to_string(),
+            payload,
+        })
+        .await
+    {
+        warn!(
+            "[WorkbenchSync] Failed to push snapshot status stage {}: {}",
+            stage, err
+        );
+    }
+}
+
+async fn broadcast_workbench_change(app: &tauri::AppHandle, reason: &str, thread_id: Option<&str>) {
+    let payload = serde_json::json!({
+        "type": "workbench:changed",
+        "params": {
+            "reason": reason,
+            "threadId": thread_id,
+            "ts": ::time::OffsetDateTime::now_utc()
+                .format(&::time::format_description::well_known::Rfc3339)
+                .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+        }
+    });
+
+    let _ = app.emit("codex-workbench-sync-event", payload.clone());
+
+    let state = app.state::<AppState>();
+    let ws_tx = state.ws_tx.lock().await.clone();
+    if let Some(tx) = ws_tx {
+        let _ = tx
+            .send(yibovibe_core::ws::WsMessage {
+                sender_uid: 0,
+                sender_device_id: 0,
+                target_devices: vec![],
+                r#type: "workbench:changed".to_string(),
+                payload,
+            })
+            .await;
+    }
+}
+
+async fn sync_codex_workbench_snapshot_to_server_handle(app: &tauri::AppHandle) {
+    push_codex_workbench_snapshot_to_server_handle(app, vec![]).await;
+}
+
 async fn reconnect_session_signal_channel(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.ws_tx.lock().await.is_some() {
@@ -3568,6 +5231,41 @@ fn spawn_session_sync_guard(app_handle: tauri::AppHandle) {
             } else if let Err(e) = reconnect_session_signal_channel(&app_handle).await {
                 warn!("[SignalSync] Reconnect skipped/failed: {}", e);
             }
+        }
+    });
+}
+
+fn spawn_workbench_sync_guard(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = time::interval(Duration::from_secs(15));
+        loop {
+            ticker.tick().await;
+
+            let has_runtime_auth = {
+                let state = app_handle.state::<AppState>();
+                state.runtime_access_token.lock().await.is_some()
+                    && state.runtime_server_url.lock().await.is_some()
+            };
+            if !has_runtime_auth {
+                continue;
+            }
+
+            let is_connected = {
+                let state = app_handle.state::<AppState>();
+                let connected = *state.is_connected.lock().await;
+                connected
+            };
+            if !is_connected {
+                if let Err(err) = reconnect_session_signal_channel(&app_handle).await {
+                    warn!(
+                        "[WorkbenchSync] Reconnect skipped/failed before periodic snapshot push: {}",
+                        err
+                    );
+                    continue;
+                }
+            }
+
+            sync_codex_workbench_snapshot_to_server_handle(&app_handle).await;
         }
     });
 }
@@ -3669,6 +5367,32 @@ fn spawn_ws_broker(
                         })
                         .await;
                 }
+                "workbench:snapshot:request" => {
+                    let target_devices = if msg.sender_device_id > 0 {
+                        vec![msg.sender_device_id]
+                    } else {
+                        vec![]
+                    };
+                    let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                        &app,
+                        target_devices.clone(),
+                    )
+                    .await;
+                    push_codex_workbench_snapshot_to_server_handle(&app, target_devices).await;
+                }
+                "workbench:changed" => {
+                    let payload = if msg.payload.get("type").and_then(serde_json::Value::as_str)
+                        == Some("workbench:changed")
+                    {
+                        msg.payload.clone()
+                    } else {
+                        serde_json::json!({
+                            "type": "workbench:changed",
+                            "params": msg.payload,
+                        })
+                    };
+                    let _ = app.emit("codex-workbench-sync-event", payload);
+                }
                 "session:stop" | "session:pause" => {
                     let session_id = msg.payload["session_id"].as_str().unwrap_or("");
                     let confirmed = msg.payload["confirmed"].as_bool().unwrap_or(false);
@@ -3755,6 +5479,813 @@ fn spawn_ws_broker(
                         let _ = mgr.prepare_remote_input(session_id).await;
                         if let Err(e) = mgr.write_session(session_id, text).await {
                             warn!("[WS Broker] Remote stdin to {} failed: {}", session_id, e);
+                        }
+                    }
+                }
+                "codex:turn:start" => {
+                    let conversation_id = msg.payload["conversation_id"]
+                        .as_str()
+                        .or_else(|| msg.payload["thread_id"].as_str())
+                        .unwrap_or("");
+                    let text = msg.payload["text"].as_str().unwrap_or("").trim();
+                    if !conversation_id.is_empty() && !text.is_empty() {
+                        let target_devices = if msg.sender_device_id > 0 {
+                            vec![msg.sender_device_id]
+                        } else {
+                            vec![]
+                        };
+                        let cwd = msg.payload["cwd"].as_str();
+                        let model = msg.payload["model"].as_str();
+                        let effort = msg.payload["effort"].as_str();
+                        let service_tier = msg.payload["service_tier"].as_str();
+                        let approval_policy = msg.payload["approval_policy"].as_str();
+                        let sandbox_mode = msg.payload["sandbox_mode"].as_str();
+                        let text_preview = text.chars().take(48).collect::<String>();
+                        let _ = push_workbench_snapshot_status(
+                            &sync_tx,
+                            &target_devices,
+                            "codexTurnStartStart",
+                            "desktop forwarding mobile codex send",
+                            serde_json::json!({
+                                "threadId": conversation_id,
+                                "cwd": cwd,
+                                "model": model,
+                                "effort": effort,
+                                "serviceTier": service_tier,
+                                "textPreview": text_preview,
+                            }),
+                        )
+                        .await;
+                        let params = serde_json::json!({
+                            "threadId": conversation_id,
+                            "input": [{
+                                "type": "text",
+                                "text": text,
+                                "text_elements": []
+                            }],
+                            "cwd": cwd,
+                            "model": model,
+                            "approvalPolicy": approval_policy,
+                            "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                            "effort": effort,
+                            "summary": serde_json::Value::Null
+                            ,
+                            "serviceTier": service_tier
+                        });
+
+                        let desktop_turn_start_params = serde_json::json!({
+                            "input": [{
+                                "type": "text",
+                                "text": text,
+                                "text_elements": []
+                            }],
+                            "cwd": cwd,
+                            "model": model,
+                            "effort": effort,
+                            "summary": serde_json::Value::Null,
+                            "approvalPolicy": approval_policy,
+                            "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                            "collaborationMode": serde_json::Value::Null,
+                            "serviceTier": service_tier
+                        });
+
+                        let desktop_ipc_send = codex_app_server::desktop_ipc_request(
+                            app.clone(),
+                            codex_app_server::CodexDesktopIpcRequest {
+                                method: "thread-follower-start-turn".to_string(),
+                                params: serde_json::json!({
+                                    "conversationId": conversation_id,
+                                    "turnStartParams": desktop_turn_start_params,
+                                }),
+                                version: Some(1),
+                                route_thread_id: Some(conversation_id.to_string()),
+                            },
+                        )
+                        .await;
+
+                        if let Ok(ipc_response) = desktop_ipc_send {
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexDesktopIpcTurnStartAccepted",
+                                "desktop codex desktop-ipc accepted remote send",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "handledByClientId": ipc_response
+                                        .get("handledByClientId")
+                                        .and_then(serde_json::Value::as_str),
+                                }),
+                            )
+                            .await;
+                            let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                &app,
+                                target_devices.clone(),
+                            )
+                            .await;
+                            push_codex_workbench_snapshot_to_server_handle(&app, target_devices)
+                                .await;
+                            continue;
+                        } else if let Err(err) = &desktop_ipc_send {
+                            warn!(
+                                "[WS Broker] Remote desktop IPC thread-follower-start-turn for {} failed, fallback to app-server: {}",
+                                conversation_id, err
+                            );
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexDesktopIpcTurnStartFailed",
+                                "desktop codex desktop-ipc remote send failed, fallback to app-server",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "error": err,
+                                }),
+                            )
+                            .await;
+                        }
+
+                        let loaded_result = codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "thread/loaded/list".to_string(),
+                                params: serde_json::json!({}),
+                            },
+                        )
+                        .await;
+
+                        let loaded_threads = loaded_result
+                            .ok()
+                            .and_then(|response| {
+                                codex_rpc_result(&response)
+                                    .get("data")
+                                    .and_then(serde_json::Value::as_array)
+                                    .cloned()
+                            })
+                            .unwrap_or_default();
+                        let is_loaded = loaded_threads.iter().any(|item| {
+                            item.as_str()
+                                .map(|value| value == conversation_id)
+                                .unwrap_or(false)
+                        });
+
+                        if !is_loaded {
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexThreadResumeStart",
+                                "desktop resuming codex thread before send",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "cwd": cwd,
+                                    "model": model,
+                                }),
+                            )
+                            .await;
+
+                            match codex_app_server::persistent_request(
+                                app.clone(),
+                                codex_app_server::CodexAppServerRpcRequest {
+                                    method: "thread/resume".to_string(),
+                                    params: serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "cwd": cwd,
+                                    "model": model,
+                                    "serviceTier": service_tier,
+                                        "approvalPolicy": approval_policy,
+                                        "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                                    }),
+                                },
+                            )
+                            .await
+                            {
+                                Ok(response) => {
+                                    let result = codex_rpc_result(&response).clone();
+                                    let _ = push_workbench_snapshot_status(
+                                        &sync_tx,
+                                        &target_devices,
+                                        "codexThreadResumeAccepted",
+                                        "desktop resumed codex thread",
+                                        serde_json::json!({
+                                            "threadId": result
+                                                .get("thread")
+                                                .and_then(|thread| thread.get("id"))
+                                                .and_then(serde_json::Value::as_str)
+                                                .unwrap_or(conversation_id),
+                                        }),
+                                    )
+                                    .await;
+                                }
+                                Err(err) => {
+                                    warn!(
+                                        "[WS Broker] Remote codex thread/resume for {} failed: {}",
+                                        conversation_id, err
+                                    );
+                                    let _ = push_workbench_snapshot_status(
+                                        &sync_tx,
+                                        &target_devices,
+                                        "codexThreadResumeFailed",
+                                        "mobile codex thread resume failed",
+                                        serde_json::json!({
+                                            "threadId": conversation_id,
+                                            "error": err,
+                                        }),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+
+                        match codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "turn/start".to_string(),
+                                params,
+                            },
+                        )
+                        .await
+                        {
+                            Ok(response) => {
+                                let result = codex_rpc_result(&response).clone();
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexTurnStartAccepted",
+                                    "desktop codex turn/start accepted",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "turnId": result
+                                            .get("turn")
+                                            .and_then(|turn| turn.get("turnId").or_else(|| turn.get("id")))
+                                            .and_then(serde_json::Value::as_str),
+                                    }),
+                                )
+                                .await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "[WS Broker] Remote codex turn/start for {} failed: {}",
+                                    conversation_id, err
+                                );
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexTurnStartFailed",
+                                    "mobile codex send failed",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "error": err,
+                                    }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                "codex:thread:archive" => {
+                    let conversation_id = msg.payload["conversation_id"]
+                        .as_str()
+                        .or_else(|| msg.payload["thread_id"].as_str())
+                        .unwrap_or("");
+                    if !conversation_id.is_empty() {
+                        let target_devices = if msg.sender_device_id > 0 {
+                            vec![msg.sender_device_id]
+                        } else {
+                            vec![]
+                        };
+                        let _ = push_workbench_snapshot_status(
+                            &sync_tx,
+                            &target_devices,
+                            "codexArchiveStart",
+                            "desktop forwarding mobile codex archive",
+                            serde_json::json!({
+                                "threadId": conversation_id,
+                            }),
+                        )
+                        .await;
+
+                        match codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "thread/archive".to_string(),
+                                params: serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "conversationId": conversation_id,
+                                }),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                remember_recently_archived_codex_thread(conversation_id);
+                                {
+                                    let mut cached = LAST_CODEX_WORKBENCH_SNAPSHOT.lock().unwrap();
+                                    if let Some(snapshot) = cached.as_ref() {
+                                        *cached = Some(prune_archived_thread_from_snapshot(
+                                            snapshot,
+                                            conversation_id,
+                                        ));
+                                    }
+                                }
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexArchiveAccepted",
+                                    "desktop accepted mobile codex archive",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                    }),
+                                )
+                                .await;
+                                broadcast_workbench_change(
+                                    &app,
+                                    "thread/archive",
+                                    Some(conversation_id),
+                                )
+                                .await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "[WS Broker] Remote codex archive {} failed: {}",
+                                    conversation_id, err
+                                );
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexArchiveFailed",
+                                    "desktop failed mobile codex archive",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "error": err,
+                                    }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                "codex:config:update" => {
+                    let target_devices = if msg.sender_device_id > 0 {
+                        vec![msg.sender_device_id]
+                    } else {
+                        vec![]
+                    };
+                    let model = msg.payload["model"].as_str();
+                    let service_tier = msg.payload["service_tier"].as_str();
+                    let approval_policy = msg.payload["approval_policy"].as_str();
+                    let sandbox_mode = msg.payload["sandbox_mode"].as_str();
+                    let edits = [
+                        model.map(|value| {
+                            serde_json::json!({
+                                "keyPath": "model",
+                                "value": value,
+                                "mergeStrategy": "upsert",
+                            })
+                        }),
+                        service_tier.map(|value| {
+                            serde_json::json!({
+                                "keyPath": "service_tier",
+                                "value": value,
+                                "mergeStrategy": "upsert",
+                            })
+                        }),
+                        approval_policy.map(|value| {
+                            serde_json::json!({
+                                "keyPath": "approval_policy",
+                                "value": value,
+                                "mergeStrategy": "upsert",
+                            })
+                        }),
+                        sandbox_mode.map(|value| {
+                            serde_json::json!({
+                                "keyPath": "sandbox_mode",
+                                "value": value,
+                                "mergeStrategy": "upsert",
+                            })
+                        }),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                    if !edits.is_empty() {
+                        match codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "config/batchWrite".to_string(),
+                                params: serde_json::json!({
+                                    "edits": edits,
+                                    "reloadUserConfig": true,
+                                }),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexConfigUpdated",
+                                    "desktop applied mobile codex config update",
+                                    serde_json::json!({
+                                        "model": model,
+                                        "serviceTier": service_tier,
+                                        "approvalPolicy": approval_policy,
+                                        "sandboxMode": sandbox_mode,
+                                    }),
+                                )
+                                .await;
+                                broadcast_workbench_change(&app, "config/update", None).await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexConfigUpdateFailed",
+                                    "desktop failed mobile codex config update",
+                                    serde_json::json!({ "error": err }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                "codex:project:branch:switch" => {
+                    let target_devices = if msg.sender_device_id > 0 {
+                        vec![msg.sender_device_id]
+                    } else {
+                        vec![]
+                    };
+                    let cwd = msg.payload["cwd"].as_str().unwrap_or("");
+                    let branch = msg.payload["branch"].as_str().unwrap_or("");
+                    if !cwd.is_empty() && !branch.is_empty() {
+                        match switch_git_branch(app.clone(), cwd.to_string(), branch.to_string())
+                            .await
+                        {
+                            Ok(result) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "gitBranchSwitchAccepted",
+                                    "desktop applied mobile branch switch",
+                                    result,
+                                )
+                                .await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "gitBranchSwitchFailed",
+                                    "desktop failed mobile branch switch",
+                                    serde_json::json!({
+                                        "cwd": cwd,
+                                        "branch": branch,
+                                        "error": err,
+                                    }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                "codex:approval:decision" => {
+                    let conversation_id = msg.payload["conversation_id"]
+                        .as_str()
+                        .or_else(|| msg.payload["thread_id"].as_str())
+                        .unwrap_or("");
+                    let request_id = msg.payload["request_id"].as_str().unwrap_or("");
+                    let approval_id = msg.payload["approval_id"].as_str().unwrap_or("");
+                    let kind = msg.payload["kind"].as_str().unwrap_or("exec-approval");
+                    let approved = msg.payload["approved"].as_bool().unwrap_or(false);
+                    if !conversation_id.is_empty()
+                        && (!approval_id.is_empty() || !request_id.is_empty())
+                    {
+                        let target_devices = if msg.sender_device_id > 0 {
+                            vec![msg.sender_device_id]
+                        } else {
+                            vec![]
+                        };
+                        let cwd = msg.payload["cwd"].as_str();
+                        let model = msg.payload["model"].as_str();
+                        let effort = msg.payload["effort"].as_str();
+                        let service_tier = msg.payload["service_tier"].as_str();
+                        let approval_policy = msg.payload["approval_policy"].as_str();
+                        let sandbox_mode = msg.payload["sandbox_mode"].as_str();
+
+                        if !request_id.is_empty() {
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexApprovalDecisionStart",
+                                "desktop forwarding mobile approval decision via server request response",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "requestId": request_id,
+                                    "approvalId": approval_id,
+                                    "kind": kind,
+                                    "approved": approved,
+                                }),
+                            )
+                            .await;
+
+                            match codex_app_server::respond_to_pending_approval(
+                                app.clone(),
+                                request_id.to_string(),
+                                approved,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    let _ = push_workbench_snapshot_status(
+                                        &sync_tx,
+                                        &target_devices,
+                                        "codexApprovalDecisionAccepted",
+                                        "desktop codex approval request response accepted",
+                                        serde_json::json!({
+                                            "threadId": conversation_id,
+                                            "requestId": request_id,
+                                            "approvalId": approval_id,
+                                        }),
+                                    )
+                                    .await;
+                                    let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                        &app,
+                                        target_devices.clone(),
+                                    )
+                                    .await;
+                                    push_codex_workbench_snapshot_to_server_handle(
+                                        &app,
+                                        target_devices,
+                                    )
+                                    .await;
+                                }
+                                Err(err) => {
+                                    let _ = push_workbench_snapshot_status(
+                                        &sync_tx,
+                                        &target_devices,
+                                        "codexApprovalDecisionFailed",
+                                        "mobile codex approval request response failed",
+                                        serde_json::json!({
+                                            "threadId": conversation_id,
+                                            "requestId": request_id,
+                                            "approvalId": approval_id,
+                                            "error": err,
+                                        }),
+                                    )
+                                    .await;
+                                }
+                            }
+                            continue;
+                        }
+
+                        let approval_input = if approved {
+                            serde_json::json!([{
+                                "type": kind,
+                                "approval_id": approval_id,
+                                "approved": true
+                            }])
+                        } else {
+                            serde_json::json!([{
+                                "type": kind,
+                                "approval_id": approval_id,
+                                "denied": true
+                            }])
+                        };
+
+                        let _ = push_workbench_snapshot_status(
+                            &sync_tx,
+                            &target_devices,
+                            "codexApprovalDecisionStart",
+                            "desktop forwarding mobile approval decision",
+                            serde_json::json!({
+                                "threadId": conversation_id,
+                                "approvalId": approval_id,
+                                "kind": kind,
+                                "approved": approved,
+                            }),
+                        )
+                        .await;
+
+                        let desktop_ipc_send = codex_app_server::desktop_ipc_request(
+                            app.clone(),
+                            codex_app_server::CodexDesktopIpcRequest {
+                                method: "thread-follower-start-turn".to_string(),
+                                params: serde_json::json!({
+                                    "conversationId": conversation_id,
+                                    "turnStartParams": {
+                                        "input": approval_input.clone(),
+                                        "cwd": cwd,
+                                        "model": model,
+                                        "effort": effort,
+                                        "summary": serde_json::Value::Null,
+                                        "approvalPolicy": approval_policy,
+                                        "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                                        "collaborationMode": serde_json::Value::Null,
+                                        "serviceTier": service_tier
+                                    },
+                                }),
+                                version: Some(1),
+                                route_thread_id: Some(conversation_id.to_string()),
+                            },
+                        )
+                        .await;
+
+                        if let Ok(ipc_response) = desktop_ipc_send {
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexApprovalDecisionAccepted",
+                                "desktop codex desktop-ipc accepted approval decision",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "approvalId": approval_id,
+                                    "handledByClientId": ipc_response
+                                        .get("handledByClientId")
+                                        .and_then(serde_json::Value::as_str),
+                                }),
+                            )
+                            .await;
+                            let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                &app,
+                                target_devices.clone(),
+                            )
+                            .await;
+                            push_codex_workbench_snapshot_to_server_handle(&app, target_devices)
+                                .await;
+                            continue;
+                        } else if let Err(err) = &desktop_ipc_send {
+                            let _ = push_workbench_snapshot_status(
+                                &sync_tx,
+                                &target_devices,
+                                "codexDesktopIpcApprovalDecisionFailed",
+                                "desktop codex desktop-ipc approval decision failed, fallback to app-server",
+                                serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "approvalId": approval_id,
+                                    "error": err,
+                                }),
+                            )
+                            .await;
+                        }
+
+                        let loaded_result = codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "thread/loaded/list".to_string(),
+                                params: serde_json::json!({}),
+                            },
+                        )
+                        .await;
+
+                        let loaded_threads = loaded_result
+                            .ok()
+                            .and_then(|response| {
+                                codex_rpc_result(&response)
+                                    .get("data")
+                                    .and_then(serde_json::Value::as_array)
+                                    .cloned()
+                            })
+                            .unwrap_or_default();
+                        let is_loaded = loaded_threads.iter().any(|item| {
+                            item.as_str()
+                                .map(|value| value == conversation_id)
+                                .unwrap_or(false)
+                        });
+
+                        if !is_loaded {
+                            match codex_app_server::persistent_request(
+                                app.clone(),
+                                codex_app_server::CodexAppServerRpcRequest {
+                                    method: "thread/resume".to_string(),
+                                    params: serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "cwd": cwd,
+                                        "model": model,
+                                        "approvalPolicy": approval_policy,
+                                        "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                                    }),
+                                },
+                            )
+                            .await
+                            {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    let _ = push_workbench_snapshot_status(
+                                        &sync_tx,
+                                        &target_devices,
+                                        "codexThreadResumeFailed",
+                                        "mobile codex thread resume failed before approval response",
+                                        serde_json::json!({
+                                            "threadId": conversation_id,
+                                            "approvalId": approval_id,
+                                            "error": err,
+                                        }),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+
+                        match codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "turn/start".to_string(),
+                                params: serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "input": approval_input,
+                                    "cwd": cwd,
+                                    "model": model,
+                                    "approvalPolicy": approval_policy,
+                                    "sandboxPolicy": codex_sandbox_policy_from_mode(sandbox_mode, cwd),
+                                    "effort": effort,
+                                    "summary": serde_json::Value::Null
+                                    ,
+                                    "serviceTier": service_tier
+                                }),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(response) => {
+                                let result = codex_rpc_result(&response).clone();
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexApprovalDecisionAccepted",
+                                    "desktop codex approval decision accepted",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "approvalId": approval_id,
+                                        "turnId": result
+                                            .get("turn")
+                                            .and_then(|turn| turn.get("turnId").or_else(|| turn.get("id")))
+                                            .and_then(serde_json::Value::as_str),
+                                    }),
+                                )
+                                .await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexApprovalDecisionFailed",
+                                    "mobile codex approval decision failed",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "approvalId": approval_id,
+                                        "error": err,
+                                    }),
+                                )
+                                .await;
+                            }
                         }
                     }
                 }
@@ -4155,6 +6686,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             agent_bridge::spawn_event_forwarder(app_handle, host_event_rx);
             spawn_session_sync_guard(app.handle().clone());
+            spawn_workbench_sync_guard(app.handle().clone());
             let host = host_ctrl_for_setup.clone();
             tauri::async_runtime::spawn(async move {
                 let ctrl = host.lock().await;
@@ -4496,6 +7028,10 @@ pub fn run() {
             crate::agent_bridge::get_host_diagnostics,
             codex_app_server_probe,
             codex_app_server_request,
+            get_git_branch_state,
+            switch_git_branch,
+            codex_app_server_reply_server_request,
+            codex_app_server_respond_pending_approval,
             codex_desktop_ipc_request,
             codex_app_server_disconnect,
             get_user_role,

@@ -48,6 +48,14 @@ export interface AiWorkbenchGitInfo {
   sha?: string | null;
 }
 
+export interface AiWorkbenchPendingApproval {
+  requestId: string;
+  approvalId: string;
+  kind: "exec-approval" | "patch-approval" | "permissions-approval";
+  title: string;
+  summary?: string | null;
+}
+
 export interface AiWorkbenchProject {
   id: string;
   name: string;
@@ -70,6 +78,7 @@ export interface AiWorkbenchConversation {
   cliVersion?: string | null;
   status: AiWorkbenchStatus;
   gitInfo?: AiWorkbenchGitInfo | null;
+  pendingApproval?: AiWorkbenchPendingApproval | null;
   createdAt?: number;
   updatedAt?: number;
   raw?: unknown;
@@ -82,6 +91,9 @@ export interface AiWorkbenchMessage {
   role: AiWorkbenchMessageRole;
   title: string;
   text: string;
+  previewText?: string | null;
+  isTruncated?: boolean;
+  fullTextCharCount?: number | null;
   status?: string;
   createdAt?: string;
   rawType?: string;

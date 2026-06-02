@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.9.7-r29"
+version = "0.9.7-r65"
 description = "YiboVibe Desktop Native"
 authors = ["YiboSoft"]
 edition = "2021"
@@ -45,6 +45,7 @@ bytes = "1.11.1"
 futures-util = "0.3"
 portable-pty = "0.9"
 vt100 = "0.15"
+time = { version = "0.3", features = ["formatting"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

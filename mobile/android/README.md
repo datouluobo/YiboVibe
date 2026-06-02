@@ -109,6 +109,39 @@ Output / 输出：
 
 - `build/app/outputs/flutter-apk/app-release.apk`
 
+## Debug Deploy Verification
+
+When iterating on the Android app, treat version verification as a required last step.
+
+移动端调试迭代时，版本核对必须作为固定收尾步骤，不再依赖“看起来像新包”。
+
+Required loop / 固定闭环：
+
+1. bump both visible version and build number
+   - update `lib/app_version.dart`
+   - update `pubspec.yaml`
+2. run validation
+   - `flutter analyze`
+   - `flutter test`
+   - `flutter build apk --debug`
+3. verify the built APK metadata
+   - use `aapt dump badging build/app/outputs/apk/debug/app-debug.apk`
+   - confirm `versionCode` matches the expected build number
+4. reinstall to the emulator or device
+   - `adb install -r build/app/outputs/apk/debug/app-debug.apk`
+   - `adb shell am force-stop com.yibovibe.yibovibe_mobile`
+   - `adb shell am start -n com.yibovibe.yibovibe_mobile/.MainActivity`
+5. verify inside the app UI
+   - the workbench top bar must show the expected `rN` version
+
+Important / 重要：
+
+- Do not rely on `adb shell dumpsys package ...` alone to decide whether the newest build is running.
+- `dumpsys` may lag behind or report confusing cached fields during repeated debug installs.
+- Prefer `build/app/outputs/apk/debug/app-debug.apk` as the install source for verification.
+- `build/app/outputs/flutter-apk/app-debug.apk` may lag behind during some debug build flows, so do not treat it as the only source of truth.
+- The built APK metadata plus the in-app visible version is the source of truth for the mobile debug loop.
+
 ## Notes
 
 - The current public mobile release line is `0.9.7`.

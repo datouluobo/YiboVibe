@@ -49,6 +49,7 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 4. 非必要不要扩展 AI 相关范围；当前 AI 能力只收敛在 `FlowProbe`。
 5. 删除文件或目录前，必须先向用户给出明确删除清单并获得确认；得到确认后，才可删除已确认路径。
 6. 用户习惯：每次修改某一端后，该端版本号按 `R+1` 递增；如有必要，需同步写入对应版本文件或展示位置。
+   对移动端而言，完成版本号递增后，默认还要执行一次标准静默重装流程，把最新包重新安装到模拟器；除非用户明确说这次不要重装。
 7. 每次结论中，需分别给出本次涉及端的版本号：`服务端`、`桌面端`、`移动端`；未修改的端也应明确说明是否未变更。
 
 ## 删除规则
@@ -63,3 +64,5 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 - `cargo check -p yibovibe-core`
 - `cargo check -p tauri-app`
 - `cd desktop && npm run build`
+- 移动端改动后：`cd mobile/android && flutter test test/ai_workbench_model_test.dart`
+- 移动端版本号更新后：`restart-mobile-silent.bat emulator-5554`
