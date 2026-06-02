@@ -18,12 +18,9 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       if (connected) {
         _setStatus('mobile sync channel connected');
         _signal.requestWorkbenchSnapshot();
-        _ensureSnapshotRetry();
         _ensureSnapshotTimeout();
       } else {
         _setStatus('mobile sync channel disconnected');
-        _snapshotRetryTimer?.cancel();
-        _snapshotRetryTimer = null;
         _snapshotTimeoutTimer?.cancel();
         _snapshotTimeoutTimer = null;
       }
@@ -36,7 +33,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   AuthProvider _auth;
   StreamSubscription<EventMessage>? _eventSub;
   StreamSubscription<bool>? _connSub;
-  Timer? _snapshotRetryTimer;
   Timer? _snapshotTimeoutTimer;
   static const _cachedCodexSnapshotKey =
       'ai_workbench_cached_codex_snapshot_v1';
@@ -80,7 +76,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _error = null;
     _setStatus('mobile requested fresh workbench snapshot');
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
   }
@@ -135,19 +130,8 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _error = null;
     _setStatus('mobile sent codex message');
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
-    Future<void>.delayed(const Duration(milliseconds: 900), () {
-      if (!_signal.isConnected) return;
-      _debugLog('follow-up snapshot request after 900ms');
-      _signal.requestWorkbenchSnapshot();
-    });
-    Future<void>.delayed(const Duration(milliseconds: 2200), () {
-      if (!_signal.isConnected) return;
-      _debugLog('follow-up snapshot request after 2200ms');
-      _signal.requestWorkbenchSnapshot();
-    });
     Future<void>.delayed(const Duration(seconds: 10), () {
       _expirePendingConversationIfStalled(conversationId);
     });
@@ -213,7 +197,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       'approval response dispatched | conversation=$conversationId request=$requestId approval=$approvalId approved=$approved kind=$kind',
     );
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
     return true;
@@ -248,14 +231,8 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _setStatus('mobile requested codex archive');
     _debugLog('archive dispatched | conversation=$conversationId');
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
-    Future<void>.delayed(const Duration(milliseconds: 900), () {
-      if (!_signal.isConnected) return;
-      _debugLog('follow-up snapshot request after archive 900ms');
-      _signal.requestWorkbenchSnapshot();
-    });
     return true;
   }
 
@@ -295,7 +272,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _error = null;
     _setStatus('mobile requested codex config update');
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
     return true;
@@ -328,7 +304,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _error = null;
     _setStatus('mobile requested git branch switch');
     _signal.requestWorkbenchSnapshot();
-    _ensureSnapshotRetry();
     _ensureSnapshotTimeout();
     notifyListeners();
     return true;
@@ -353,7 +328,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     if (_lastAuthKey == authKey && _signal.isConnected) {
       _setStatus('mobile re-requested workbench snapshot');
       _signal.requestWorkbenchSnapshot();
-      _ensureSnapshotRetry();
       _ensureSnapshotTimeout();
       return;
     }
@@ -362,23 +336,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _signal.configure(serverUrl: serverUrl, token: token);
     _setStatus('mobile opening sync channel');
     _signal.connect();
-  }
-
-  void _ensureSnapshotRetry() {
-    _snapshotRetryTimer?.cancel();
-    _snapshotRetryTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (!_signal.isConnected) {
-        timer.cancel();
-        return;
-      }
-      if (_snapshot != null) {
-        timer.cancel();
-        return;
-      }
-      _setStatus('mobile retrying workbench snapshot request');
-      _debugLog('periodic snapshot retry fired');
-      _signal.requestWorkbenchSnapshot();
-    });
   }
 
   void _ensureSnapshotTimeout() {
@@ -419,7 +376,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
         _setStatus('desktop signaled workbench changed');
       }
       _signal.requestWorkbenchSnapshot();
-      _ensureSnapshotRetry();
       _ensureSnapshotTimeout();
       notifyListeners();
       return;
@@ -483,8 +439,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       _setStatus(
         'mobile received workbench snapshot with ${parsed.conversations.length} conversations',
       );
-      _snapshotRetryTimer?.cancel();
-      _snapshotRetryTimer = null;
       _snapshotTimeoutTimer?.cancel();
       _snapshotTimeoutTimer = null;
       notifyListeners();
@@ -1132,7 +1086,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   void dispose() {
     _eventSub?.cancel();
     _connSub?.cancel();
-    _snapshotRetryTimer?.cancel();
     _snapshotTimeoutTimer?.cancel();
     _signal.disconnect();
     super.dispose();

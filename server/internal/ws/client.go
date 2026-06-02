@@ -73,6 +73,14 @@ func (c *Client) ReadPump() {
 		// Route session-signal messages through the Signal Hub path
 		if isSignalMessage(msg.Type) {
 			handleSignalMessage(c, &msg)
+		} else if isCodexFamilyType(msg.Type) {
+			// Validate codex:* / workbench:* messages before relay
+			if validateCodexMessage(&msg) {
+				c.Hub.Broadcast <- &msg
+			} else {
+				log.Printf("[WS] Dropped invalid codex family message type=%s from UID=%d Dev=%d",
+					msg.Type, c.UID, c.DeviceID)
+			}
 		} else {
 			c.Hub.Broadcast <- &msg
 		}

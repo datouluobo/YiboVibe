@@ -289,7 +289,9 @@ export function formatJson(value: unknown) {
 export function getResult<T>(response: CodexAppServerProbeResponse): T {
   const envelope = response.response_json as RpcEnvelope<T> | undefined | null;
   if (!response.ok || envelope?.error) {
-    throw new Error(envelope?.error?.message || response.error || "Codex App Server request failed");
+    const msg = envelope?.error?.message || response.error || "Codex App Server request failed";
+    const code = envelope?.error?.code;
+    throw new Error(code ? `[Codex ${code}] ${msg}` : msg);
   }
   return (envelope?.result ?? {}) as T;
 }
@@ -297,7 +299,9 @@ export function getResult<T>(response: CodexAppServerProbeResponse): T {
 export function getRpcResult<T>(value: unknown): T {
   const envelope = value as RpcEnvelope<T> | undefined | null;
   if (envelope?.error) {
-    throw new Error(envelope.error.message || formatJson(envelope.error));
+    const msg = envelope.error.message || formatJson(envelope.error);
+    const code = envelope.error.code;
+    throw new Error(code ? `[RPC ${code}] ${msg}` : msg);
   }
   return (envelope?.result ?? {}) as T;
 }
@@ -305,7 +309,8 @@ export function getRpcResult<T>(value: unknown): T {
 export function getIpcResult<T>(value: unknown): T {
   const envelope = value as DesktopIpcResponse<T> | undefined | null;
   if (envelope?.resultType === "error" || envelope?.error) {
-    throw new Error(envelope?.error || "Codex Desktop IPC request failed");
+    const msg = envelope?.error || "Codex Desktop IPC request failed";
+    throw new Error(`[IPC] ${msg}`);
   }
   return (envelope?.result ?? {}) as T;
 }
@@ -693,7 +698,9 @@ export function pendingApprovalFromServerRequest(event?: CodexServerRequestEvent
   }
 
   if (method === "item/permissions/requestApproval") {
-    const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+    const threadId = typeof (params.conversationId ?? params.threadId) === "string"
+      ? (params.conversationId as string | undefined ?? params.threadId as string | undefined)?.trim() ?? ""
+      : "";
     const reason = typeof params.reason === "string" ? params.reason.trim() : "";
     const permissions = params.permissions && typeof params.permissions === "object"
       ? params.permissions as Record<string, unknown>

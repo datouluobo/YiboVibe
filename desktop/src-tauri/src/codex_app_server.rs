@@ -1,3 +1,17 @@
+#[derive(Clone)]
+pub struct CodexWorkbenchSnapshotBuild {
+    pub snapshot: serde_json::Value,
+    pub thread_count: usize,
+    pub project_count: usize,
+    pub elapsed_ms: i64,
+    pub snapshot_bytes: usize,
+    pub listed_count: usize,
+    pub ipc_count: usize,
+    pub cached_count: usize,
+    pub merged_count: usize,
+    pub used_unfiltered_threads_fallback: bool,
+}
+
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -543,7 +557,8 @@ fn normalize_pending_approval_request(message: &Value) -> Option<(String, Value)
         }
         "item/permissions/requestApproval" => {
             let conversation_id = params
-                .get("threadId")
+                .get("conversationId")
+                .or_else(|| params.get("threadId"))
                 .and_then(Value::as_str)?
                 .trim()
                 .to_string();

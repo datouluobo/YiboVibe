@@ -18,20 +18,16 @@ import {
   Loader2,
   Pin,
   Plus,
-  Play,
   RefreshCw,
   Search,
   Send,
   Square,
-  WandSparkles,
 } from "lucide-react";
 import {
   APPROVAL_POLICIES,
   CODEX_ENDPOINT,
-  DEFAULT_PARAMS_BY_METHOD,
   REASONING_EFFORTS,
   REASONING_SUMMARIES,
-  SAMPLE_METHODS,
   SANDBOX_MODES,
   asStringArray,
   buildProjectSummaries,
@@ -59,7 +55,6 @@ import {
   threadFromDesktopState,
   wait,
   type AuthStatusResult,
-  type CodexAppServerProbeResponse,
   type CodexModel,
   type CodexThread,
   type ConfigReadResult,
@@ -74,6 +69,7 @@ import {
   type ThreadStartResult,
   type TurnStartResult,
 } from "../services/codexBridge";
+import { CodexProbePanel } from "../components/CodexProbePanel";
 import { normalizeWorkbenchError, workbenchErrorMessage } from "../services/aiWorkbench";
 
 const panelStyle: CSSProperties = {
@@ -210,14 +206,6 @@ function Agents() {
   const selectedThreadRef = useRef<CodexThread | undefined>(undefined);
   const threadDetailRef = useRef<CodexThread | null>(null);
   const refreshGenerationRef = useRef(0);
-  const [endpoint, setEndpoint] = useState(CODEX_ENDPOINT);
-  const bearerToken = "";
-  const [method, setMethod] = useState("thread/list");
-  const [paramsText, setParamsText] = useState(DEFAULT_PARAMS_BY_METHOD["thread/list"]);
-  const [result, setResult] = useState<CodexAppServerProbeResponse | null>(null);
-  const [error, setError] = useState("");
-  const [isRunning, setIsRunning] = useState(false);
-  const [showProbePanel, setShowProbePanel] = useState(false);
   const [showTechnicalEvents, setShowTechnicalEvents] = useState(false);
 
   const [threads, setThreads] = useState<CodexThread[]>([]);
@@ -267,19 +255,11 @@ function Agents() {
     }
   }, [showTechnicalEvents]);
 
-  const parsedParams = useMemo(() => {
-    try {
-      return { ok: true as const, value: JSON.parse(paramsText || "{}") };
-    } catch (err) {
-      return { ok: false as const, message: String(err) };
-    }
-  }, [paramsText]);
-
   const callRpc = useCallback(
     async <T,>(rpcMethod: string, params: unknown) => {
-      return probeCodexAppServer<T>(endpoint, rpcMethod, params, bearerToken);
+      return probeCodexAppServer<T>(CODEX_ENDPOINT, rpcMethod, params, "");
     },
-    [bearerToken, endpoint],
+    [],
   );
 
   const callPersistentRpc = useCallback(async <T,>(rpcMethod: string, params: unknown) => {
@@ -851,26 +831,6 @@ function Agents() {
     };
   }, [loadWorkbench, refreshThreadUntilSettled, selectedThread?.id]);
 
-  const runProbe = useCallback(async () => {
-    setError("");
-    setResult(null);
-
-    if (!parsedParams.ok) {
-      setError(`Params JSON is invalid: ${parsedParams.message}`);
-      return;
-    }
-
-    setIsRunning(true);
-    try {
-      const { response } = await probeCodexAppServer(endpoint, method, parsedParams.value, bearerToken);
-      setResult(response);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setIsRunning(false);
-    }
-  }, [bearerToken, endpoint, method, parsedParams]);
-
   const currentBranch = selectedThread?.gitInfo?.branch || selectedProject?.branches[0] || "unknown";
   const currentPath = selectedThread?.cwd || selectedProject?.cwd || "unknown";
   const currentThreadStatus = normalizeThreadStatus(threadDetail ?? selectedThread);
@@ -1274,7 +1234,6 @@ function Agents() {
     showTechnicalEvents,
   ]);
 
-  const resultTone = result?.ok ? "#7ee787" : result ? "#f2cc60" : "#8b949e";
   const approvalAcceptLabel = pendingApproval?.kind === "permissions-approval" ? "授权并继续" : "确认并继续";
   const approvalRejectLabel = pendingApproval?.kind === "permissions-approval" ? "不授权" : "拒绝";
   const modelEfforts = asStringArray(
@@ -1282,8 +1241,6 @@ function Agents() {
       models.find((model) => model.model === selectedModel)?.supportedReasoningEfforts,
     REASONING_EFFORTS,
   );
-  const probeLabel = result ? `${result.transport} ${result.status}` : "测试连接";
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
@@ -1294,20 +1251,7 @@ function Agents() {
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setShowProbePanel((value) => !value)}
-            style={{
-              borderRadius: 8,
-              minHeight: 34,
-              borderColor: result ? resultTone : undefined,
-              color: result ? resultTone : undefined,
-            }}
-          >
-            <WandSparkles size={15} />
-            {probeLabel}
-          </button>
+          <CodexProbePanel />
           <button
             type="button"
             className="btn-secondary"
@@ -1320,103 +1264,6 @@ function Agents() {
           </button>
         </div>
       </div>
-
-      {showProbePanel && (
-        <section
-          style={{
-            ...panelStyle,
-            display: "grid",
-            gridTemplateColumns: "minmax(220px, 300px) minmax(160px, 220px) minmax(0, 1fr) auto",
-            gap: 10,
-            padding: 12,
-            alignItems: "end",
-          }}
-        >
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-            Endpoint
-            <input
-              className="modern-input"
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              spellCheck={false}
-              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}
-            />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-            Method
-            <select
-              className="modern-input custom-select"
-              value={method}
-              onChange={(event) => {
-                const nextMethod = event.target.value;
-                setMethod(nextMethod);
-                setParamsText(DEFAULT_PARAMS_BY_METHOD[nextMethod] ?? "{}");
-              }}
-              style={{ fontSize: 12 }}
-            >
-              {SAMPLE_METHODS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-            Params
-            <input
-              className="modern-input"
-              value={paramsText.replace(/\s+/g, " ").trim()}
-              onChange={(event) => setParamsText(event.target.value)}
-              spellCheck={false}
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 12,
-                borderColor: parsedParams.ok ? undefined : "#ff7b72",
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={isRunning}
-            onClick={runProbe}
-            style={{ minHeight: 38, borderRadius: 8, opacity: isRunning ? 0.72 : 1, whiteSpace: "nowrap" }}
-          >
-            <Play size={15} />
-            {isRunning ? "Testing" : "测试连接"}
-          </button>
-          {(error || result) && (
-            <pre
-              style={{
-                gridColumn: "1 / -1",
-                maxHeight: 190,
-                overflow: "auto",
-                borderRadius: 8,
-                border: "1px solid #30363d",
-                background: "#0d1117",
-                color: error ? "#ffb4ad" : "#d6dde8",
-                padding: 12,
-                margin: 0,
-                fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {error ||
-                formatJson({
-                  ok: result?.ok,
-                  status: result?.status,
-                  elapsed_ms: result?.elapsed_ms,
-                  transport: result?.transport,
-                  error: result?.error,
-                  response_json: result?.response_json,
-                })}
-            </pre>
-          )}
-        </section>
-      )}
 
       {workbenchError && (
         <div

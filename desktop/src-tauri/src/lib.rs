@@ -18,25 +18,14 @@ mod terminal_screen;
 lazy_static::lazy_static! {
     static ref LAST_HINT_ANCHOR: std::sync::Mutex<(i32, i32)> = std::sync::Mutex::new((0, 0));
     static ref HINT_WINDOW_CFG: std::sync::Mutex<(i32, i32, i32, i32, i32)> = std::sync::Mutex::new((0, -1, -1, 0, 20));
+    // === Codex Workbench cached state ===
     static ref CODEX_IPC_STATE_CACHE: std::sync::Mutex<HashMap<String, serde_json::Value>> = std::sync::Mutex::new(HashMap::new());
     static ref LAST_CODEX_WORKBENCH_SNAPSHOT: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
     static ref RECENTLY_ARCHIVED_CODEX_THREADS: std::sync::Mutex<HashMap<String, u128>> = std::sync::Mutex::new(HashMap::new());
 }
 
-#[derive(Clone)]
-struct CodexWorkbenchSnapshotBuild {
-    snapshot: serde_json::Value,
-    thread_count: usize,
-    project_count: usize,
-    elapsed_ms: i64,
-    snapshot_bytes: usize,
-    listed_count: usize,
-    ipc_count: usize,
-    cached_count: usize,
-    merged_count: usize,
-    used_unfiltered_threads_fallback: bool,
-}
-
+// === Codex Workbench types (definitions) ===
+pub use codex_app_server::CodexWorkbenchSnapshotBuild;
 const RECENTLY_ARCHIVED_THREAD_TTL_MS: u128 = 15_000;
 
 fn git_command_output(cwd: &str, args: &[&str]) -> Result<String, String> {
@@ -3354,6 +3343,7 @@ async fn get_user_role(state: tauri::State<'_, AppState>) -> Result<String, Stri
     Ok(role)
 }
 
+// === Codex Workbench Tauri commands — thin wrappers; implementation in codex_app_server.rs ===
 #[tauri::command]
 async fn codex_app_server_probe(
     request: codex_app_server::CodexAppServerProbeRequest,
