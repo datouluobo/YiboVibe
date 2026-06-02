@@ -22,7 +22,7 @@ var (
 	newPass       = flag.String("new-pass", "", "New password for admin reset")
 )
 
-const serverVersion = "0.9.7"
+const serverVersion = "0.9.8"
 
 func main() {
 	flag.Parse()
