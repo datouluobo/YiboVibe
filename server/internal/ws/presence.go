@@ -11,7 +11,7 @@ import (
 
 const (
 	onlinePrefix = "device:online"
-	ttlDuration  = 60 * time.Second
+	ttlDuration  = 300 * time.Second // 5 minutes; refreshed on every WS message
 )
 
 // MarkDeviceOnline sets a redis key with a TTL to indicate device is active

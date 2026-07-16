@@ -5,6 +5,8 @@
     "nav": {
         "console": "Console",
         "tooltip_console": "Vibe Coding console - terminal and session hub",
+        "codex": "Codex",
+        "tooltip_codex": "Dedicated Codex workbench; future IDEs will be added as parallel entries",
         "flowdeck": "FlowDeck",
         "flowmind": "FlowMind",
         "flowsync": "FlowSync",

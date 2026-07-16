@@ -141,6 +141,12 @@ class SignalClient {
     if (msgType == 'session_list') {
       text = jsonEncode(payload['sessions'] ?? const []);
     } else if ({
+      'workbench:snapshot',
+      'workbench:snapshot:status',
+      'workbench:changed',
+    }.contains(msgType)) {
+      text = jsonEncode(payload);
+    } else if ({
       'session:screen_mode',
       'session:screen_snapshot',
       'session:screen_patch',
@@ -234,6 +240,10 @@ class SignalClient {
       case 'host:vitals':
         // 忽略心跳/告警
         return EventType.systemNotice;
+      case 'workbench:snapshot':
+      case 'workbench:snapshot:status':
+      case 'workbench:changed':
+        return EventType.resourceEvent;
       default:
         return EventType.terminalOutput;
     }
@@ -280,8 +290,12 @@ class SignalClient {
   }
 
   /// 发送文本到指定 session
-  void sendInput(String sessionId, String text) {
-    _send({'type': 'session:stdin', 'session_id': sessionId, 'text': text});
+  bool sendInput(String sessionId, String text) {
+    return _send({
+      'type': 'session:stdin',
+      'session_id': sessionId,
+      'text': text,
+    });
   }
 
   /// 控制 session 生命周期
@@ -290,43 +304,137 @@ class SignalClient {
   ///   session:stop (需 confirmed:true) — 停止
   ///   session:pause — 暂停
   ///   session:remove — 删除并注销
-  void sendControl(String sessionId, String action) {
+  bool sendControl(String sessionId, String action) {
     switch (action) {
       case 'start':
-        _send({'type': 'session:start', 'session_id': sessionId});
-        break;
+        return _send({'type': 'session:start', 'session_id': sessionId});
       case 'stop':
-        _send({
+        return _send({
           'type': 'session:stop',
           'session_id': sessionId,
           'confirmed': true,
         });
-        break;
       case 'pause':
-        _send({'type': 'session:pause', 'session_id': sessionId});
-        break;
+        return _send({'type': 'session:pause', 'session_id': sessionId});
       case 'resume':
-        _send({'type': 'session:resume', 'session_id': sessionId});
-        break;
+        return _send({'type': 'session:resume', 'session_id': sessionId});
       case 'close':
-        _send({'type': 'session:remove', 'session_id': sessionId});
-        break;
+        return _send({'type': 'session:remove', 'session_id': sessionId});
+      default:
+        return false;
     }
   }
 
   /// 直接向服务端发送 session:unregister — 用于清理幽灵session
   /// 不经过桌面端，服务端直接删除该session的内存记录并广播给其他设备
-  void sendUnregister(String sessionId) {
-    _send({'type': 'session:unregister', 'session_id': sessionId});
+  bool sendUnregister(String sessionId) {
+    return _send({'type': 'session:unregister', 'session_id': sessionId});
   }
 
   /// 请求 session 列表
-  void requestSessions() {
-    _send({'type': 'session:list'});
+  bool requestSessions() {
+    return _send({'type': 'session:list'});
   }
 
-  void requestScreenSnapshot(String sessionId, {int? lastSeq}) {
-    _send({
+  /// 请求桌面端立即回传一份工作台快照
+  bool requestWorkbenchSnapshot() {
+    return _send({'type': 'workbench:snapshot:request'});
+  }
+
+  /// 给桌面端 Codex 会话发送一条 turn/start 请求
+  bool sendCodexTurnStart({
+    required String conversationId,
+    required String text,
+    String? cwd,
+    String? model,
+    String? effort,
+    String? serviceTier,
+    String? approvalPolicy,
+    String? sandboxMode,
+  }) {
+    return _send({
+      'type': 'codex:turn:start',
+      'conversation_id': conversationId,
+      'text': text,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      if (model != null && model.isNotEmpty) 'model': model,
+      if (effort != null && effort.isNotEmpty) 'effort': effort,
+      if (serviceTier != null && serviceTier.isNotEmpty)
+        'service_tier': serviceTier,
+      if (approvalPolicy != null && approvalPolicy.isNotEmpty)
+        'approval_policy': approvalPolicy,
+      if (sandboxMode != null && sandboxMode.isNotEmpty)
+        'sandbox_mode': sandboxMode,
+    });
+  }
+
+  bool sendCodexApprovalDecision({
+    required String conversationId,
+    required String requestId,
+    required String approvalId,
+    required bool approved,
+    required String kind,
+    String? cwd,
+    String? model,
+    String? effort,
+    String? serviceTier,
+    String? approvalPolicy,
+    String? sandboxMode,
+  }) {
+    return _send({
+      'type': 'codex:approval:decision',
+      'conversation_id': conversationId,
+      'request_id': requestId,
+      'approval_id': approvalId,
+      'approved': approved,
+      'kind': kind,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      if (model != null && model.isNotEmpty) 'model': model,
+      if (effort != null && effort.isNotEmpty) 'effort': effort,
+      if (serviceTier != null && serviceTier.isNotEmpty)
+        'service_tier': serviceTier,
+      if (approvalPolicy != null && approvalPolicy.isNotEmpty)
+        'approval_policy': approvalPolicy,
+      if (sandboxMode != null && sandboxMode.isNotEmpty)
+        'sandbox_mode': sandboxMode,
+    });
+  }
+
+  bool sendCodexArchiveConversation({required String conversationId}) {
+    return _send({
+      'type': 'codex:thread:archive',
+      'conversation_id': conversationId,
+    });
+  }
+
+  bool sendCodexConfigUpdate({
+    String? model,
+    String? serviceTier,
+    String? approvalPolicy,
+    String? sandboxMode,
+  }) {
+    return _send({
+      'type': 'codex:config:update',
+      if (model != null && model.isNotEmpty) 'model': model,
+      if (serviceTier != null && serviceTier.isNotEmpty)
+        'service_tier': serviceTier,
+      if (approvalPolicy != null && approvalPolicy.isNotEmpty)
+        'approval_policy': approvalPolicy,
+      if (sandboxMode != null && sandboxMode.isNotEmpty)
+        'sandbox_mode': sandboxMode,
+    });
+  }
+
+  bool sendCodexBranchSwitch({required String cwd, required String branch}) {
+    return _send({
+      'type': 'codex:project:branch:switch',
+      'cwd': cwd,
+      'branch': branch,
+    });
+  }
+
+  bool requestScreenSnapshot(String sessionId, {int? lastSeq}) {
+    return _send({
       'type': 'session:screen_request_snapshot',
       'session_id': sessionId,
       // ignore: use_null_aware_elements
@@ -341,15 +449,17 @@ class SignalClient {
     return id;
   }
 
-  void _send(Map<String, dynamic> data) {
-    if (_channel != null) {
-      final type = data['type'];
-      final payload = Map<String, dynamic>.from(data);
-      payload.remove('type');
-      // 服务端 Message 结构只解析 type + payload
-      // session_id/text/action 等字段必须放在 payload 里，否则被 json.Unmarshal 丢弃
-      _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
+  bool _send(Map<String, dynamic> data) {
+    if (_channel == null) {
+      return false;
     }
+    final type = data['type'];
+    final payload = Map<String, dynamic>.from(data);
+    payload.remove('type');
+    // 服务端 Message 结构只解析 type + payload
+    // session_id/text/action 等字段必须放在 payload 里，否则被 json.Unmarshal 丢弃
+    _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
+    return true;
   }
 
   void _disconnect() {

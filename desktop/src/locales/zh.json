@@ -5,6 +5,8 @@
     "nav": {
         "console": "控制台",
         "tooltip_console": "Vibe Coding 控制台 - 终端与会话枢纽",
+        "codex": "Codex",
+        "tooltip_codex": "Codex 专用工作台；后续其它 IDE 将以并列入口独立接入",
         "flowdeck": "总览",
         "flowmind": "灵思",
         "flowsync": "烽火",

@@ -5067,7 +5067,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.9.7"
+version = "0.9.16"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -5093,6 +5093,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "time",
  "tokio",
  "uuid",
  "vt100",

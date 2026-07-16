@@ -91,6 +91,23 @@ class SessionProvider extends ChangeNotifier {
     }
 
     final authKey = '$serverUrl|$token';
+    _api.setBaseUrl(serverUrl, token);
+
+    if (_lastInitToken == authKey) {
+      if (!_signal.isConnected) {
+        _signal.configure(serverUrl: serverUrl, token: token);
+        _signal.connect();
+      }
+      if (_pollTimer == null) {
+        _startPolling();
+      }
+      unawaited(loadDevicesAndSessions());
+      if (_signal.isConnected) {
+        _signal.requestSessions();
+      }
+      return;
+    }
+
     if (_lastInitToken != authKey) {
       _stopPolling();
       _signal.disconnect();
@@ -104,7 +121,6 @@ class SessionProvider extends ChangeNotifier {
       _lastInitToken = authKey;
     }
 
-    _api.setBaseUrl(serverUrl, token);
     _signal.configure(serverUrl: serverUrl, token: token);
     _signal.connect();
     _startPolling();
@@ -490,6 +506,11 @@ class SessionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshNow() async {
+    await loadDevicesAndSessions();
+    _signal.requestSessions();
+  }
+
   /// 当前 session 的事件列表
   List<EventMessage> get activeSessionEvents {
     if (_activeSession == null) return _events;
@@ -499,6 +520,12 @@ class SessionProvider extends ChangeNotifier {
               e.sessionId.isEmpty || e.sessionId == _activeSession!.sessionId,
         )
         .toList();
+  }
+
+  List<EventMessage> eventsForSession(String sessionId) {
+    return _events
+        .where((event) => event.sessionId == sessionId)
+        .toList(growable: false);
   }
 
   bool get isInteractiveSession {
@@ -829,9 +856,10 @@ class SessionProvider extends ChangeNotifier {
       lastActiveAt: DateTime.now(),
     );
     _upsertSession(provisional);
-    _activeSession = _sessions
-        .where((session) => session.sessionId == sessionId)
-        .firstOrNull ??
+    _activeSession =
+        _sessions
+            .where((session) => session.sessionId == sessionId)
+            .firstOrNull ??
         provisional;
     _preferredSessionId = sessionId;
     _preferredSessionSetAt = DateTime.now();

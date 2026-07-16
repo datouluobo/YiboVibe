@@ -12,6 +12,7 @@ This page keeps the lightweight documentation index that previously lived in the
 - Public feature summary / 公开功能摘要: [features_summary.md](features_summary.md)
 - Console UI guidelines / 控制台 UI 规范: [ui-console-guidelines.md](ui-console-guidelines.md)
 - Brand mapping and rename notes / 品牌与命名迁移说明: [yibovibe-brand-mapping.md](yibovibe-brand-mapping.md)
+- Multi-IDE workbench expansion guide / 多 IDE 并列接入指南: [ide-workbench-expansion-guide.md](ide-workbench-expansion-guide.md)
 
 ## Deployment Docs
 

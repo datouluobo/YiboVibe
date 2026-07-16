@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
     LayoutDashboard, Flame, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield, Database,
-    ArrowRightLeft, Monitor, Sparkles
+    ArrowRightLeft, Monitor, Sparkles, Bot
 } from "lucide-react";
+import { IDE_WORKBENCH_NAV } from "../config/ideWorkbenches";
 
 interface NavItem {
     id: string;
@@ -20,6 +21,13 @@ interface NavItem {
 const BASE_NAV: NavItem[] = [
     // Group 1: Vibe Coding Console
     { id: "console", path: "/app/console", icon: Monitor, labelKey: "nav.console", tooltipKey: "nav.tooltip_console" },
+    ...IDE_WORKBENCH_NAV.map((item) => ({
+        id: item.id,
+        path: item.path,
+        icon: Bot,
+        labelKey: item.labelKey,
+        tooltipKey: item.tooltipKey,
+    })),
 
     // Group 2: Dashboard
     { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },
@@ -118,7 +126,7 @@ export default function Layout() {
                     {navItems.map((item, idx) => {
                         const isActive = location.pathname === item.path;
                         // groupDividers 基于 BASE_NAV 末尾索引
-                        const groupDividers = [2, 7]; // before these indices
+                        const groupDividers = [2, 9]; // before these indices
                         const showDivider = groupDividers.includes(idx);
                         return (
                             <div key={item.id}>

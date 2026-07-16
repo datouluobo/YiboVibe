@@ -48,6 +48,15 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 3. 评估项目规模时，区分源码和构建产物；`target/`、`node_modules/` 不代表业务复杂度。
 4. 非必要不要扩展 AI 相关范围；当前 AI 能力只收敛在 `FlowProbe`。
 5. 删除文件或目录前，必须先向用户给出明确删除清单并获得确认；得到确认后，才可删除已确认路径。
+6. **版本管理：各端独立版本号，互不绑定。** 每次修改某一端后，该端版本号按 `R+1` 递增，写入该端对应的版本文件：
+   - **桌面端** → `desktop/package.json` 的 `"version"` 字段
+   - **服务端** → `server/cmd/yibovibe/main.go` 的 `const serverVersion` 常量
+   - **移动端** → `mobile/android/lib/app_version.dart` 的 `mobileAppVersion` 常量 + `pubspec.yaml` 的 `version` 字段
+
+   未修改的端不做任何版本变更，允许各端版本号存在差异（例如桌面端 0.10.1 时服务端仍为 0.9.9）。
+
+   对移动端而言，完成版本号递增后，默认还要执行一次标准静默重装流程，把最新包重新安装到模拟器；除非用户明确说这次不要重装。
+7. 每次结论中，需分别给出本次涉及端的版本号：`服务端`、`桌面端`、`移动端`；未修改的端注明版本号保持不变。
 
 ## 删除规则
 
@@ -61,3 +70,5 @@ YiboVibe 当前是桌面优先的本地生产力工具：
 - `cargo check -p yibovibe-core`
 - `cargo check -p tauri-app`
 - `cd desktop && npm run build`
+- 移动端改动后：`cd mobile/android && flutter test test/ai_workbench_model_test.dart`
+- 移动端版本号更新后：`restart-mobile-silent.bat emulator-5554`
