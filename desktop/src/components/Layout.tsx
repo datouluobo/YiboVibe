@@ -6,6 +6,7 @@ import {
     LayoutDashboard, Flame, ShieldCheck, Settings, LogOut, BookOpen, Keyboard, Shield, Database,
     ArrowRightLeft, Monitor, Sparkles, Bot
 } from "lucide-react";
+import { IDE_WORKBENCH_NAV } from "../config/ideWorkbenches";
 
 interface NavItem {
     id: string;
@@ -20,7 +21,13 @@ interface NavItem {
 const BASE_NAV: NavItem[] = [
     // Group 1: Vibe Coding Console
     { id: "console", path: "/app/console", icon: Monitor, labelKey: "nav.console", tooltipKey: "nav.tooltip_console" },
-    { id: "agents", path: "/app/agents", icon: Bot, labelKey: "nav.agents", tooltipKey: "nav.tooltip_agents" },
+    ...IDE_WORKBENCH_NAV.map((item) => ({
+        id: item.id,
+        path: item.path,
+        icon: Bot,
+        labelKey: item.labelKey,
+        tooltipKey: item.tooltipKey,
+    })),
 
     // Group 2: Dashboard
     { id: "flowdeck", path: "/app/flowdeck", icon: LayoutDashboard, labelKey: "nav.flowdeck", tooltipKey: "nav.tooltip_flowdeck" },

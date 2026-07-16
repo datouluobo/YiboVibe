@@ -34,13 +34,13 @@
 
 1. 桌面端负责执行
 2. 服务端负责路由、鉴权、状态汇聚
-3. 移动端负责发令、观察、资源投喂与异常接管
+3. 移动端负责发令、观察、消息确认与异常接管
 
 ### 2.2 架构总图
 
 ```text
 Mobile Console
-  -> command / intent / resource select
+  -> command / intent / confirm / observe
 Server Hub
   -> auth / websocket / routing / state / encrypted asset index
 Desktop Headless Host
@@ -78,7 +78,7 @@ Upstream Tools
 
 - 会话创建/切换/关闭
 - 指令路由
-- 资源投喂路由
+- 确认与异常处理路由
 - 会话状态管理
 - 自愈动作编排
 

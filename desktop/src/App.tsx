@@ -4,6 +4,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import Login from "./pages/Login";
 import Layout from "./components/Layout";
+import {
+  CODEX_WORKBENCH_PATH,
+  LEGACY_AGENTS_PATH,
+} from "./config/ideWorkbenches";
 
 const FlowDeck = lazy(() => import("./pages/FlowDeck"));
 const FlowMind = lazy(() => import("./pages/FlowMind"));
@@ -17,7 +21,7 @@ const FlowKeys = lazy(() => import("./pages/FlowKeys"));
 const HintWindow = lazy(() => import("./pages/HintWindow"));
 const Admin = lazy(() => import("./pages/Admin"));
 const VibeConsole = lazy(() => import('./pages/VibeConsole'));
-const Agents = lazy(() => import('./pages/Agents'));
+const CodexPage = lazy(() => import('./pages/codex/CodexWorkbenchPage'));
 const Sessions = lazy(() => import('./pages/Sessions'));
 const Resources = lazy(() => import('./pages/Resources'));
 
@@ -132,7 +136,8 @@ function App() {
             <Route path="/app" element={<Layout />}>
               <Route index element={<Navigate to="/app/console" replace />} />
               <Route path="console" element={<Suspense fallback={<PageFallback />}><VibeConsole /></Suspense>} />
-              <Route path="agents" element={<Suspense fallback={<PageFallback />}><Agents /></Suspense>} />
+              <Route path={CODEX_WORKBENCH_PATH.replace("/app/", "")} element={<Suspense fallback={<PageFallback />}><CodexPage /></Suspense>} />
+              <Route path={LEGACY_AGENTS_PATH.replace("/app/", "")} element={<Navigate to={CODEX_WORKBENCH_PATH} replace />} />
               <Route path="sessions" element={<Suspense fallback={<PageFallback />}><Sessions /></Suspense>} />
               <Route path="resources" element={<Suspense fallback={<PageFallback />}><Resources /></Suspense>} />
               <Route path="flowdeck" element={<Suspense fallback={<PageFallback />}><FlowDeck /></Suspense>} />

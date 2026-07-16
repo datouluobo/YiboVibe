@@ -60,6 +60,9 @@ func (c *Client) ReadPump() {
 			break
 		}
 
+		// Refresh online presence on every received message, not just Pong
+		_ = MarkDeviceOnline(c.UID, c.DeviceID)
+
 		var msg Message
 		if err := json.Unmarshal(messageData, &msg); err != nil {
 			log.Printf("WS json unmarshal err: %v. Raw: %s\n", err, string(messageData))

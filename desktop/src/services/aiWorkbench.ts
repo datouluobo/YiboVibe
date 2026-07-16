@@ -91,6 +91,7 @@ export interface AiWorkbenchMessage {
   role: AiWorkbenchMessageRole;
   title: string;
   text: string;
+  imageUrls?: string[];
   previewText?: string | null;
   isTruncated?: boolean;
   fullTextCharCount?: number | null;

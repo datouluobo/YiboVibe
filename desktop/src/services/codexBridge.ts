@@ -219,7 +219,7 @@ export interface ProjectSummary {
 export type CodexConversationStatus = AiWorkbenchStatus;
 
 export const CODEX_ENDPOINT = "stdio://";
-export const CODEX_CLIENT_VERSION = "0.9.7-r62";
+export const CODEX_CLIENT_VERSION = "0.9.16";
 export const CODEX_PROVIDER: AiWorkbenchProvider = {
   id: "codex",
   name: "Codex",
@@ -379,6 +379,34 @@ export function projectNameFromPath(path: string) {
   return parts[parts.length - 1] || clean;
 }
 
+export function isPrimaryCodexThread(thread: CodexThread) {
+  const source = thread.source;
+  if (typeof source === "string") {
+    const normalized = source.trim().toLowerCase();
+    if (!normalized) return false;
+    return ["vscode", "cli", "exec", "appserver", "app-server"].includes(normalized);
+  }
+  if (source && typeof source === "object") {
+    const record = source as Record<string, unknown>;
+    return !("subAgent" in record)
+      && !("subAgentReview" in record)
+      && !("subAgentCompact" in record)
+      && !("subAgentThreadSpawn" in record)
+      && !("subAgentOther" in record);
+  }
+  return true;
+}
+
+export function codexProjectPathForThread(thread: CodexThread) {
+  const cwd = (thread.cwd || thread.path || "").trim();
+  if (!cwd) return "";
+  const normalized = cwd.replace(/\//g, "\\").toLowerCase();
+  if (normalized.includes("\\documents\\codex\\")) {
+    return "";
+  }
+  return cwd;
+}
+
 export function formatTime(value?: number | string) {
   if (!value) return "未知";
   const date =
@@ -460,8 +488,10 @@ export function mergeCodexThreadSnapshots(primary?: CodexThread | null, secondar
 
 export function buildProjectSummaries(threads: CodexThread[]): ProjectSummary[] {
   const groups = new Map<string, CodexThread[]>();
-  for (const thread of threads) {
-    const cwd = thread.cwd || "(unknown)";
+  const primaryThreads = threads.filter(isPrimaryCodexThread);
+  const visibleThreads = primaryThreads.length ? primaryThreads : threads;
+  for (const thread of visibleThreads) {
+    const cwd = codexProjectPathForThread(thread) || "(unknown)";
     groups.set(cwd, [...(groups.get(cwd) ?? []), thread]);
   }
 
@@ -474,7 +504,7 @@ export function buildProjectSummaries(threads: CodexThread[]): ProjectSummary[] 
       );
       return {
         cwd,
-        name: cwd === "(unknown)" ? "未知项目" : projectNameFromPath(cwd),
+        name: cwd === "(unknown)" ? "任务" : projectNameFromPath(cwd),
         threads: sorted,
         latestThread,
         branches,

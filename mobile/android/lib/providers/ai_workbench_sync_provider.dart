@@ -10,6 +10,8 @@ import '../services/signal_client.dart';
 import 'auth_provider.dart';
 
 class AiWorkbenchSyncProvider extends ChangeNotifier {
+  static const Duration _preferredSenderFreshness = Duration(seconds: 45);
+
   AiWorkbenchSyncProvider(this._auth) {
     unawaited(_restoreCachedSnapshot());
     _eventSub = _signal.events.listen(_onEvent);
@@ -17,12 +19,18 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       _isConnected = connected;
       if (connected) {
         _setStatus('mobile sync channel connected');
+        _startBackgroundRefresh();
         _signal.requestWorkbenchSnapshot();
         _ensureSnapshotTimeout();
       } else {
         _setStatus('mobile sync channel disconnected');
         _snapshotTimeoutTimer?.cancel();
         _snapshotTimeoutTimer = null;
+        _backgroundRefreshTimer?.cancel();
+        _backgroundRefreshTimer = null;
+        _preferredWorkbenchSenderDevice = null;
+        _announcedThreadCountBySender.clear();
+        _lastWorkbenchSignalAtBySender.clear();
       }
       notifyListeners();
     });
@@ -34,19 +42,23 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   StreamSubscription<EventMessage>? _eventSub;
   StreamSubscription<bool>? _connSub;
   Timer? _snapshotTimeoutTimer;
+  Timer? _backgroundRefreshTimer;
   static const _cachedCodexSnapshotKey =
       'ai_workbench_cached_codex_snapshot_v1';
 
   AiWorkbenchSnapshot? _snapshot;
-  AiWorkbenchSnapshot? _cachedSnapshotSeed;
   final Map<String, List<AiWorkbenchMessage>> _pendingMessagesByConversationId =
       <String, List<AiWorkbenchMessage>>{};
   final Set<String> _sendingConversationIds = <String>{};
+  final Map<String, int> _announcedThreadCountBySender = <String, int>{};
+  final Map<String, DateTime> _lastWorkbenchSignalAtBySender =
+      <String, DateTime>{};
   bool _isConnected = false;
   String? _error;
   String? _lastAuthKey;
   String? _lastStatus;
   DateTime? _lastStatusAt;
+  String? _preferredWorkbenchSenderDevice;
   final List<String> _statusTrail = <String>[];
   final List<String> _debugTrail = <String>[];
 
@@ -74,6 +86,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       return;
     }
     _error = null;
+    _resetPreferredSnapshotSender(keepSenderStats: true);
     _setStatus('mobile requested fresh workbench snapshot');
     _signal.requestWorkbenchSnapshot();
     _ensureSnapshotTimeout();
@@ -326,6 +339,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
 
     final authKey = '$serverUrl|$token';
     if (_lastAuthKey == authKey && _signal.isConnected) {
+      _resetPreferredSnapshotSender(keepSenderStats: true);
       _setStatus('mobile re-requested workbench snapshot');
       _signal.requestWorkbenchSnapshot();
       _ensureSnapshotTimeout();
@@ -334,6 +348,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
 
     _lastAuthKey = authKey;
     _signal.configure(serverUrl: serverUrl, token: token);
+    _resetPreferredSnapshotSender(keepSenderStats: false);
     _setStatus('mobile opening sync channel');
     _signal.connect();
   }
@@ -350,6 +365,19 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     });
   }
 
+  void _startBackgroundRefresh() {
+    _backgroundRefreshTimer?.cancel();
+    _backgroundRefreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!_signal.isConnected) {
+        return;
+      }
+      _resetPreferredSnapshotSender(keepSenderStats: true);
+      _signal.requestWorkbenchSnapshot();
+      _ensureSnapshotTimeout();
+      _debugLog('background requested fresh workbench snapshot');
+    });
+  }
+
   void _onEvent(EventMessage event) {
     if (event.text.isEmpty) {
       return;
@@ -357,6 +385,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
 
     if (event.wireType == 'workbench:changed') {
       _debugLog('received workbench changed event');
+      _preferSnapshotSender(event.senderDevice, force: true);
       try {
         final payload = jsonDecode(event.text) as Map<String, dynamic>;
         final params = payload['params'] is Map<String, dynamic>
@@ -383,7 +412,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
 
     if (event.wireType == 'workbench:snapshot:status') {
       _debugLog('received status event');
-      _applySnapshotStatus(event.text);
+      _applySnapshotStatus(event.text, senderDevice: event.senderDevice);
       return;
     }
 
@@ -394,8 +423,20 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     try {
       final payload = jsonDecode(event.text) as Map<String, dynamic>;
       final parsed = AiWorkbenchSnapshot.fromJson(payload);
+      final nextCodexCount = _codexConversationCount(parsed);
+      if (_shouldIgnoreSnapshotFromSender(event.senderDevice, nextCodexCount)) {
+        _debugLog(
+          'ignored snapshot from sender=${event.senderDevice} because it would downgrade current codex conversations',
+        );
+        return;
+      }
+      _rememberSnapshotSender(
+        event.senderDevice,
+        threadCount: nextCodexCount,
+        preferIfStronger: true,
+      );
       _debugLog(
-        'received snapshot payload | conversations=${parsed.conversations.length} messageMaps=${parsed.messagesByConversationId.length}',
+        'received snapshot payload | sender=${event.senderDevice} conversations=${parsed.conversations.length} messageMaps=${parsed.messagesByConversationId.length}',
       );
       final hasCodexProvider = parsed.providers.any(
         (item) => item.id == 'codex',
@@ -409,30 +450,9 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      final currentCodexCount = _codexConversationCount(_snapshot);
-      final nextCodexCount = _codexConversationCount(parsed);
-      final cachedCodexCount = _codexConversationCount(_cachedSnapshotSeed);
-      final fallbackCodexCount = currentCodexCount > 0
-          ? currentCodexCount
-          : cachedCodexCount;
-      if (fallbackCodexCount > 0 && nextCodexCount == 0) {
-        if (_snapshot == null && _cachedSnapshotSeed != null) {
-          _snapshot = _cachedSnapshotSeed;
-          _debugLog(
-            'seeded live snapshot from cached codex fallback | conversations=${_cachedSnapshotSeed!.conversations.length}',
-          );
-        }
-        _error = null;
-        _setStatus(
-          'mobile ignored empty codex snapshot and kept $fallbackCodexCount synced conversations',
-        );
-        notifyListeners();
-        return;
-      }
       _reconcilePendingMessages(parsed);
       _snapshot = parsed;
       if (nextCodexCount > 0) {
-        _cachedSnapshotSeed = parsed;
         unawaited(_persistCachedSnapshot(parsed));
       }
       _error = null;
@@ -784,13 +804,27 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     }
   }
 
-  void _applySnapshotStatus(String rawText) {
+  void _applySnapshotStatus(String rawText, {String? senderDevice}) {
     try {
       final payload = jsonDecode(rawText) as Map<String, dynamic>;
       final stage = payload['stage']?.toString();
       final message = payload['message']?.toString();
       final detail = payload['detail'];
-      _debugLog('status stage=$stage message=$message');
+      _debugLog('status sender=$senderDevice stage=$stage message=$message');
+      final threadCount = detail is Map
+          ? (detail['threadCount'] as num?)?.toInt()
+          : null;
+      if (stage == 'build-ok' ||
+          stage == 'snapshot-ready' ||
+          stage == 'snapshot-sent' ||
+          stage == 'cache-sent' ||
+          stage == 'fallback-cache') {
+        _rememberSnapshotSender(
+          senderDevice,
+          threadCount: threadCount,
+          preferIfStronger: true,
+        );
+      }
       if (stage == 'snapshot-sent') {
         _markPendingMessagesQueued();
       } else if (stage == 'codexTurnStartAccepted' ||
@@ -906,7 +940,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       if (codexCount <= 0) {
         return;
       }
-      _cachedSnapshotSeed = cached;
       _snapshot = cached;
       _setStatus(
         'mobile restored $codexCount cached codex conversations before live sync',
@@ -922,7 +955,6 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
 
   Future<void> _persistCachedSnapshot(AiWorkbenchSnapshot snapshot) async {
     try {
-      _cachedSnapshotSeed = snapshot;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         _cachedCodexSnapshotKey,
@@ -1007,6 +1039,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
                   'role': item.role,
                   'title': item.title,
                   'text': item.text,
+                  'imageUrls': item.imageUrls,
                   'previewText': item.previewText,
                   'isTruncated': item.isTruncated,
                   'fullTextCharCount': item.fullTextCharCount,
@@ -1082,11 +1115,103 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
         .length;
   }
 
+  void _rememberSnapshotSender(
+    String? senderDevice, {
+    int? threadCount,
+    bool preferIfStronger = false,
+  }) {
+    final normalized = senderDevice?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return;
+    }
+    _lastWorkbenchSignalAtBySender[normalized] = DateTime.now();
+    if (threadCount != null) {
+      _announcedThreadCountBySender[normalized] = threadCount;
+    }
+    final preferred = _preferredWorkbenchSenderDevice;
+    if (preferred == null || preferred.isEmpty) {
+      _preferredWorkbenchSenderDevice = normalized;
+      return;
+    }
+    if (!preferIfStronger || preferred == normalized) {
+      return;
+    }
+    if (_isPreferredSenderFresh()) {
+      return;
+    }
+    final preferredCount = _announcedThreadCountBySender[preferred] ?? -1;
+    final nextCount = _announcedThreadCountBySender[normalized] ?? -1;
+    if (nextCount > preferredCount) {
+      _preferredWorkbenchSenderDevice = normalized;
+      _debugLog(
+        'preferred snapshot sender switched to $normalized | threads=$nextCount previous=$preferredCount',
+      );
+    }
+  }
+
+  bool _shouldIgnoreSnapshotFromSender(
+    String? senderDevice,
+    int nextCodexCount,
+  ) {
+    final normalized = senderDevice?.trim();
+    final preferred = _preferredWorkbenchSenderDevice?.trim();
+    if (normalized == null ||
+        normalized.isEmpty ||
+        preferred == null ||
+        preferred.isEmpty ||
+        normalized == preferred ||
+        !_isPreferredSenderFresh()) {
+      return false;
+    }
+    final currentCount = _codexConversationCount(_snapshot);
+    if (currentCount <= 0 || nextCodexCount >= currentCount) {
+      return false;
+    }
+    final preferredCount =
+        _announcedThreadCountBySender[preferred] ?? currentCount;
+    final senderCount =
+        _announcedThreadCountBySender[normalized] ?? nextCodexCount;
+    return preferredCount >= senderCount;
+  }
+
+  bool _isPreferredSenderFresh() {
+    final preferred = _preferredWorkbenchSenderDevice?.trim();
+    if (preferred == null || preferred.isEmpty) {
+      return false;
+    }
+    final lastAt = _lastWorkbenchSignalAtBySender[preferred];
+    if (lastAt == null) {
+      return false;
+    }
+    return DateTime.now().difference(lastAt) <= _preferredSenderFreshness;
+  }
+
+  void _resetPreferredSnapshotSender({required bool keepSenderStats}) {
+    _preferredWorkbenchSenderDevice = null;
+    if (!keepSenderStats) {
+      _announcedThreadCountBySender.clear();
+      _lastWorkbenchSignalAtBySender.clear();
+    }
+  }
+
+  void _preferSnapshotSender(String? senderDevice, {bool force = false}) {
+    final normalized = senderDevice?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return;
+    }
+    _lastWorkbenchSignalAtBySender[normalized] = DateTime.now();
+    if (force || !_isPreferredSenderFresh()) {
+      _preferredWorkbenchSenderDevice = normalized;
+      _debugLog('preferred snapshot sender pinned to $normalized');
+    }
+  }
+
   @override
   void dispose() {
     _eventSub?.cancel();
     _connSub?.cancel();
     _snapshotTimeoutTimer?.cancel();
+    _backgroundRefreshTimer?.cancel();
     _signal.disconnect();
     super.dispose();
   }

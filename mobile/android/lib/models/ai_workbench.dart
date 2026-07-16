@@ -200,6 +200,7 @@ class AiWorkbenchMessage {
     required this.role,
     required this.title,
     required this.text,
+    this.imageUrls = const [],
     this.conversationId,
     this.previewText,
     this.isTruncated,
@@ -215,6 +216,7 @@ class AiWorkbenchMessage {
   final String role;
   final String title;
   final String text;
+  final List<String> imageUrls;
   final String? previewText;
   final bool? isTruncated;
   final int? fullTextCharCount;
@@ -230,6 +232,7 @@ class AiWorkbenchMessage {
       role: json['role'] as String? ?? 'system',
       title: json['title'] as String? ?? '',
       text: json['text'] as String? ?? '',
+      imageUrls: _stringList(json['imageUrls']),
       previewText: _displayString(json['previewText']),
       isTruncated: json['isTruncated'] as bool?,
       fullTextCharCount: json['fullTextCharCount'] as int?,

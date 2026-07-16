@@ -67,6 +67,8 @@ struct CodexAppServerSession {
     stdin: Mutex<tokio::process::ChildStdin>,
     child: Mutex<Option<tokio::process::Child>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
+    initialized: Mutex<bool>,
+    initialize_lock: Mutex<()>,
     codex_exe: String,
 }
 
@@ -91,10 +93,20 @@ pub async fn persistent_request(
     request: CodexAppServerRpcRequest,
 ) -> Result<Value, String> {
     let method = trimmed_non_empty(&request.method, "JSON-RPC method")?;
-    let session = ensure_persistent_session(app).await?;
-    session
-        .request(&method, request.params, Duration::from_secs(45))
+    let params = request.params;
+    let session = ensure_persistent_session(app.clone()).await?;
+    match session
+        .request(&method, params.clone(), Duration::from_secs(45))
         .await
+    {
+        Ok(response) => Ok(response),
+        Err(err) if is_retryable_transport_error(&err) => {
+            let _ = disconnect_persistent_session().await;
+            let session = ensure_persistent_session(app).await?;
+            session.request(&method, params, Duration::from_secs(45)).await
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub async fn disconnect_persistent_session() -> Result<(), String> {
@@ -225,6 +237,7 @@ async fn remember_desktop_ipc_route_from_message(message: &Value) {
 
 async fn ensure_persistent_session(app: AppHandle) -> Result<Arc<CodexAppServerSession>, String> {
     if let Some(session) = PERSISTENT_SESSION.lock().await.clone() {
+        session.ensure_initialized().await?;
         return Ok(session);
     }
 
@@ -237,7 +250,7 @@ async fn ensure_persistent_session(app: AppHandle) -> Result<Arc<CodexAppServerS
         *current = Some(session.clone());
     }
 
-    if let Err(err) = initialize_persistent_session(&session).await {
+    if let Err(err) = session.ensure_initialized().await {
         let _ = disconnect_persistent_session().await;
         return Err(err);
     }
@@ -274,6 +287,8 @@ async fn start_persistent_session(app: AppHandle) -> Result<Arc<CodexAppServerSe
         stdin: Mutex::new(stdin),
         child: Mutex::new(Some(child)),
         pending: Mutex::new(HashMap::new()),
+        initialized: Mutex::new(false),
+        initialize_lock: Mutex::new(()),
         codex_exe,
     });
 
@@ -300,6 +315,14 @@ async fn initialize_persistent_session(session: &Arc<CodexAppServerSession>) -> 
         )
         .await?;
     session.notify("initialized").await
+}
+
+fn is_retryable_transport_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("failed to write request to codex app-server stdio")
+        || normalized.contains("timed out writing request to codex app-server stdio")
+        || normalized.contains("response channel closed")
+        || normalized.contains("broken pipe")
 }
 
 fn spawn_stdout_reader(
@@ -360,6 +383,8 @@ fn spawn_stdout_reader(
             let _ = app.emit("codex-app-server-event", parsed);
         }
 
+        session.fail_pending_requests().await;
+
         let _ = app.emit(
             "codex-app-server-event",
             serde_json::json!({
@@ -399,6 +424,21 @@ fn spawn_stderr_reader(app: AppHandle, stderr: tokio::process::ChildStderr) {
 }
 
 impl CodexAppServerSession {
+    async fn ensure_initialized(self: &Arc<Self>) -> Result<(), String> {
+        if *self.initialized.lock().await {
+            return Ok(());
+        }
+
+        let _guard = self.initialize_lock.lock().await;
+        if *self.initialized.lock().await {
+            return Ok(());
+        }
+
+        initialize_persistent_session(self).await?;
+        *self.initialized.lock().await = true;
+        Ok(())
+    }
+
     async fn request(
         &self,
         method: &str,
@@ -451,6 +491,10 @@ impl CodexAppServerSession {
             .await
             .map_err(|_| "Timed out writing request to Codex app-server stdio".to_string())?
             .map_err(|err| format!("Failed to write request to Codex app-server stdio: {err}"))
+    }
+
+    async fn fail_pending_requests(&self) {
+        self.pending.lock().await.clear();
     }
 }
 

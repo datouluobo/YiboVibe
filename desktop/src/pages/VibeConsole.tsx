@@ -312,7 +312,6 @@ export default function VibeConsole() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const previousIds = new Set(sessions.map((item) => item.session_id));
       const list = (await invoke<SessionInfo[]>("list_sessions")).filter(
         (item) => !closingSessionIdsRef.current.has(item.session_id)
       );
@@ -327,14 +326,8 @@ export default function VibeConsole() {
       }
 
       setSessions(list);
-      const added = list.filter((item) => !previousIds.has(item.session_id));
-      if (initialSessionLoadDoneRef.current && added.length > 0) {
-        const newest = [...added].sort((a, b) => a.started_at - b.started_at)[added.length - 1];
-        if (newest) {
-          activeSessionRef.current = newest.session_id;
-          setSessionId(newest.session_id);
-        }
-      }
+      // Don't auto-switch to newest session on refresh — respect user's current selection
+      // Only fallback if the user's active session was removed
       const active = activeSessionRef.current;
       if (!active || !list.some((item) => item.session_id === active)) {
         const fallback = chooseFallbackSession(list);
@@ -685,7 +678,7 @@ export default function VibeConsole() {
     const timer = window.setInterval(() => {
       void refreshSessions();
       void refreshAdminStatus();
-    }, 1500);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [refreshAdminStatus, refreshSessions]);
 

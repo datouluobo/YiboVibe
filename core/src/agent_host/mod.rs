@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub mod heartbeat;
 pub mod session;
 pub mod recovery;
+pub mod runtime;
+pub mod factory;
 
 /// Agent host state
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -10,6 +10,10 @@ The mobile app is not a standalone execution host.
 
 移动端不是独立执行宿主。
 
+It is a lightweight handoff surface for moments away from the desk: the desktop keeps running the real work, while the phone temporarily takes over message flow, quick commands, and confirmation handling.
+
+它更像是离桌期间的轻量接管面板：真正的执行过程始终由桌面端持续承担，手机只临时接手消息收发、快捷发令和确认处理。
+
 It is designed to:
 
 - sign in to a YiboVibe Server

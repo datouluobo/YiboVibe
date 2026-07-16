@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -9,10 +10,25 @@ import '../providers/ai_workbench_sync_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/session_provider.dart';
 import '../theme/app_theme.dart';
+// Components extracted during refactoring — to be used in build()
+// import 'workbench_session_panel.dart';
+// import 'workbench_tool_selector.dart';
+// import 'workbench_config_panel.dart';
 
 enum _WorkbenchTab { sessions, tools, mine }
 
 const List<String> _serviceTierOptions = <String>['default', 'priority'];
+const List<String> _approvalPolicyOptions = <String>[
+  'on-request',
+  'untrusted',
+  'on-failure',
+  'never',
+];
+const List<String> _sandboxModeOptions = <String>[
+  'workspace-write',
+  'read-only',
+  'danger-full-access',
+];
 const List<String> _fallbackReasoningEfforts = <String>[
   'minimal',
   'low',
@@ -31,7 +47,7 @@ class AiWorkbenchPage extends StatefulWidget {
 }
 
 class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
-  _WorkbenchTab _tab = _WorkbenchTab.sessions;
+  _WorkbenchTab _tab = _WorkbenchTab.tools;
   String _selectedToolId = '';
   String _selectedProjectId = '';
   String _selectedSessionId = '';
@@ -135,47 +151,77 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
       _selectedToolId,
       effectiveModel,
     );
+    final selectedToolSessionCount = _sessionsForTool(_selectedToolId).length;
+    final pageTitle = switch (_tab) {
+      _WorkbenchTab.sessions => selectedSession?.title ?? 'Codex',
+      _WorkbenchTab.tools => selectedTool?.name ?? 'Codex',
+      _WorkbenchTab.mine => '我的',
+    };
+    final pageSubtitle = switch (_tab) {
+      _WorkbenchTab.sessions => [
+        if (selectedProject?.name.isNotEmpty == true) selectedProject!.name,
+        if (selectedTool?.name.isNotEmpty == true) selectedTool!.name,
+        if (selectedSession != null) _mobileStatus(selectedSession.status),
+      ].join('  ·  '),
+      _WorkbenchTab.tools =>
+        selectedTool == null
+            ? '未连接设备'
+            : '${selectedTool.name} · $selectedToolSessionCount 个会话',
+      _WorkbenchTab.mine => mobileAppVersion,
+    };
 
     return Scaffold(
       backgroundColor: AppTheme.bgPrimary,
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Expanded(child: Text('移动工作台')),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppTheme.bgTertiary,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: AppTheme.borderColor),
-              ),
-              child: const Text(
-                mobileAppVersion,
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+      appBar: _tab == _WorkbenchTab.sessions
+          ? null
+          : AppBar(
+              toolbarHeight: 78,
+              titleSpacing: 20,
+              title: _tab == _WorkbenchTab.tools
+                  ? Text(
+                      pageTitle,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    )
+                  : Text(
+                      pageSubtitle.isNotEmpty
+                          ? '$pageTitle · $pageSubtitle'
+                          : pageTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: _RoundIconButton(
+                    tooltip: '刷新',
+                    icon: Icons.refresh_rounded,
+                    onTap: () async {
+                      context.read<AiWorkbenchSyncProvider>().refreshSnapshot();
+                      await context.read<SessionProvider>().refreshNow();
+                    },
+                  ),
                 ),
-              ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 14),
+                  child: _RoundIconButton(
+                    tooltip: '更多',
+                    icon: Icons.more_vert,
+                    onTap: () {
+                      setState(() => _tab = _WorkbenchTab.mine);
+                    },
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            onPressed: () async {
-              context.read<AiWorkbenchSyncProvider>().refreshSnapshot();
-              await context.read<SessionProvider>().refreshNow();
-            },
-            icon: const Icon(Icons.refresh, size: 19),
-          ),
-          IconButton(
-            tooltip: '更多',
-            onPressed: () {},
-            icon: const Icon(Icons.more_horiz, size: 20),
-          ),
-        ],
-      ),
       body: IndexedStack(
         index: _tab.index,
         children: [
@@ -204,6 +250,10 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
                     branch: branch,
                   );
             },
+            onRefresh: () async {
+              context.read<AiWorkbenchSyncProvider>().refreshSnapshot();
+              await context.read<SessionProvider>().refreshNow();
+            },
             onSelectProject: _selectProject,
             onSelectSession: _selectSession,
             onSelectedModelChanged: (model) =>
@@ -212,39 +262,45 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
                 _setServiceTierForTool(_selectedToolId, tier),
             onSelectedEffortChanged: (effort) =>
                 _setEffortForTool(_selectedToolId, effort),
+            onBackToTools: () {
+              setState(() => _tab = _WorkbenchTab.tools);
+            },
           ),
           _ToolLayer(
             snapshot: snapshot,
             selectedToolId: _selectedToolId,
+            selectedProjectId: _selectedProjectId,
+            selectedSessionId: _selectedSessionId,
             onSelectTool: _selectTool,
+            onSelectProject: (projectId) {
+              _selectProject(projectId);
+              setState(() => _tab = _WorkbenchTab.sessions);
+            },
+            onSelectSession: (sessionId) {
+              _selectSession(sessionId);
+              setState(() => _tab = _WorkbenchTab.sessions);
+            },
+            onOpenSessions: () {
+              setState(() => _tab = _WorkbenchTab.sessions);
+            },
           ),
           const _MineLayer(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab.index,
-        height: 64,
-        onDestinationSelected: (index) {
-          setState(() => _tab = _WorkbenchTab.values[index]);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.forum_outlined),
-            selectedIcon: Icon(Icons.forum),
-            label: '会话',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.dashboard_customize_outlined),
-            selectedIcon: Icon(Icons.dashboard_customize),
-            label: '工具',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
-      ),
+      bottomNavigationBar: _tab == _WorkbenchTab.sessions
+          ? null
+          : SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                child: _WorkbenchNavBar(
+                  tab: _tab,
+                  onSelected: (tab) {
+                    setState(() => _tab = tab);
+                  },
+                ),
+              ),
+            ),
     );
   }
 
@@ -385,6 +441,7 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
       return true;
     }
     if (_selectedProjectId.isNotEmpty &&
+        selectedSession.projectId != null &&
         selectedSession.projectId != _selectedProjectId) {
       return true;
     }
@@ -419,12 +476,24 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
     final activeProjectId = activeSession?.providerId == selectedToolId
         ? activeSession?.projectId
         : null;
+    final selectedSession = toolSessions
+        .where((item) => item.id == _selectedSessionId)
+        .firstOrNull;
+    final selectedSessionProjectId =
+        selectedSession?.providerId == selectedToolId
+        ? selectedSession?.projectId
+        : null;
+    final hasUngroupedSessions = toolSessions.any(
+      (session) => (session.projectId ?? '').isEmpty,
+    );
     final selectedProjectId =
         toolProjects
             .where((item) => item.id == _selectedProjectId)
             .firstOrNull
             ?.id ??
+        selectedSessionProjectId ??
         activeProjectId ??
+        (hasUngroupedSessions ? '' : null) ??
         toolProjects.firstOrNull?.id ??
         '';
     final projectSessions = selectedProjectId.isEmpty
@@ -503,9 +572,7 @@ class _AiWorkbenchPageState extends State<AiWorkbenchPage> {
     final nextSession = _sessionById(sessionId);
     setState(() {
       _selectedSessionId = sessionId;
-      if (nextSession?.projectId != null) {
-        _selectedProjectId = nextSession!.projectId!;
-      }
+      _selectedProjectId = nextSession?.projectId ?? '';
     });
   }
 }
@@ -936,35 +1003,114 @@ class _ToolLayer extends StatelessWidget {
   const _ToolLayer({
     required this.snapshot,
     required this.selectedToolId,
+    required this.selectedProjectId,
+    required this.selectedSessionId,
     required this.onSelectTool,
+    required this.onSelectProject,
+    required this.onSelectSession,
+    required this.onOpenSessions,
   });
 
   final AiWorkbenchSnapshot snapshot;
   final String selectedToolId;
+  final String selectedProjectId;
+  final String selectedSessionId;
   final ValueChanged<String> onSelectTool;
+  final ValueChanged<String> onSelectProject;
+  final ValueChanged<String> onSelectSession;
+  final VoidCallback onOpenSessions;
 
   @override
   Widget build(BuildContext context) {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
-      itemCount: snapshot.providers.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final tool = snapshot.providers[index];
-        final projects = snapshot.projects
-            .where((project) => project.providerId == tool.id)
-            .toList(growable: false);
-        final sessions = snapshot.conversations
-            .where((session) => session.providerId == tool.id)
-            .toList(growable: false);
-        return WorkbenchToolCard(
-          tool: tool,
-          projects: projects,
-          sessions: sessions,
-          selected: tool.id == selectedToolId,
-          onTap: () => onSelectTool(tool.id),
-        );
-      },
+    final providers = snapshot.providers.toList(growable: false);
+    final selectedTool = providers
+        .where((item) => item.id == selectedToolId)
+        .firstOrNull;
+    if (providers.isEmpty) {
+      return const Center(
+        child: Text('暂无工具', style: TextStyle(color: AppTheme.textTertiary)),
+      );
+    }
+    final currentTool = selectedTool ?? providers.first;
+    final allProjects = snapshot.projects.toList(growable: false)
+      ..sort((a, b) {
+        final aSelected = a.id == selectedProjectId ? 1 : 0;
+        final bSelected = b.id == selectedProjectId ? 1 : 0;
+        if (aSelected != bSelected) {
+          return bSelected.compareTo(aSelected);
+        }
+        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+      });
+    final recentSessions = snapshot.conversations.toList(growable: false)
+      ..sort((a, b) {
+        final aSelected = a.id == selectedSessionId ? 1 : 0;
+        final bSelected = b.id == selectedSessionId ? 1 : 0;
+        if (aSelected != bSelected) {
+          return bSelected.compareTo(aSelected);
+        }
+        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+      });
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 20),
+      children: [
+        const _SectionLabel(label: '工具'),
+        const SizedBox(height: 12),
+        for (final provider in providers) ...[
+          WorkbenchToolCard(
+            tool: provider,
+            projects: snapshot.projects
+                .where((project) => project.providerId == provider.id)
+                .toList(growable: false),
+            sessions: snapshot.conversations
+                .where((session) => session.providerId == provider.id)
+                .toList(growable: false),
+            selected: provider.id == currentTool.id,
+            onTap: () => onSelectTool(provider.id),
+          ),
+          const SizedBox(height: 10),
+        ],
+        const SizedBox(height: 24),
+        const _SectionLabel(label: '项目'),
+        const SizedBox(height: 14),
+        if (allProjects.isEmpty)
+          const _EmptyHint(label: '暂无项目')
+        else
+          for (final project in allProjects) ...[
+            _CodexProjectRow(
+              project: project,
+              selected: project.id == selectedProjectId,
+              toolId: project.providerId,
+              onTap: () {
+                onSelectTool(project.providerId);
+                onSelectProject(project.id);
+                onOpenSessions();
+              },
+            ),
+            const SizedBox(height: 14),
+          ],
+        const SizedBox(height: 18),
+        const _SectionLabel(label: '最近'),
+        const SizedBox(height: 8),
+        if (recentSessions.isEmpty)
+          const _EmptyHint(label: '没有更多线程')
+        else
+          for (final session in recentSessions.take(8)) ...[
+            _CodexRecentRow(
+              session: session,
+              selected: session.id == selectedSessionId,
+              onTap: () {
+                onSelectTool(session.providerId);
+                if ((session.projectId ?? '').isNotEmpty) {
+                  onSelectProject(session.projectId!);
+                }
+                onSelectSession(session.id);
+                onOpenSessions();
+              },
+            ),
+            const SizedBox(height: 4),
+          ],
+      ],
     );
   }
 }
@@ -983,11 +1129,13 @@ class _SessionLayer extends StatelessWidget {
     required this.selectedEffort,
     required this.effectiveEffort,
     required this.onSwitchProjectBranch,
+    required this.onRefresh,
     required this.onSelectProject,
     required this.onSelectSession,
     required this.onSelectedModelChanged,
     required this.onSelectedServiceTierChanged,
     required this.onSelectedEffortChanged,
+    required this.onBackToTools,
   });
 
   final AiWorkbenchSnapshot snapshot;
@@ -1002,11 +1150,13 @@ class _SessionLayer extends StatelessWidget {
   final String? selectedEffort;
   final String effectiveEffort;
   final Future<void> Function(String branch) onSwitchProjectBranch;
+  final Future<void> Function() onRefresh;
   final ValueChanged<String> onSelectProject;
   final ValueChanged<String> onSelectSession;
   final ValueChanged<String> onSelectedModelChanged;
   final ValueChanged<String> onSelectedServiceTierChanged;
   final ValueChanged<String> onSelectedEffortChanged;
+  final VoidCallback onBackToTools;
 
   @override
   Widget build(BuildContext context) {
@@ -1040,6 +1190,7 @@ class _SessionLayer extends StatelessWidget {
             selectedEffort: selectedEffort,
             effectiveEffort: effectiveEffort,
             onSwitchProjectBranch: onSwitchProjectBranch,
+            onRefresh: onRefresh,
             lastStatus: tool!.id == 'codex' ? syncProvider.lastStatus : null,
             isSendingCodex:
                 sessionId.isNotEmpty &&
@@ -1092,6 +1243,7 @@ class _SessionLayer extends StatelessWidget {
                   .read<AiWorkbenchSyncProvider>()
                   .archiveCodexConversation(conversationId: session!.id);
             },
+            onBack: onBackToTools,
             onShowSessionSheet: () => _showSessionSheet(context),
             onSelectedModelChanged: (model) {
               onSelectedModelChanged(model);
@@ -1112,6 +1264,26 @@ class _SessionLayer extends StatelessWidget {
               }
             },
             onSelectedEffortChanged: onSelectedEffortChanged,
+            onSelectedApprovalPolicyChanged: (policy) async {
+              if (tool?.id != 'codex') return;
+              await context.read<AiWorkbenchSyncProvider>().updateCodexConfig(
+                model: effectiveModel,
+                serviceTier: effectiveServiceTier,
+                approvalPolicy: policy,
+                sandboxMode:
+                    snapshot.configsByProviderId[tool!.id]?.sandboxMode,
+              );
+            },
+            onSelectedSandboxModeChanged: (mode) async {
+              if (tool?.id != 'codex') return;
+              await context.read<AiWorkbenchSyncProvider>().updateCodexConfig(
+                model: effectiveModel,
+                serviceTier: effectiveServiceTier,
+                approvalPolicy:
+                    snapshot.configsByProviderId[tool!.id]?.approvalPolicy,
+                sandboxMode: mode,
+              );
+            },
           ),
         ),
       ],
@@ -1147,7 +1319,7 @@ class _SessionLayer extends StatelessWidget {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: AppTheme.bgPrimary,
       isScrollControlled: true,
       builder: (context) {
         final expandedProjectIds = <String>{
@@ -1299,17 +1471,24 @@ class _SessionProjectHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(2, 2, 2, 8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(22),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
           decoration: BoxDecoration(
-            color: expanded ? AppTheme.bgTertiary : AppTheme.bgSecondary,
-            borderRadius: BorderRadius.circular(12),
+            color: AppTheme.bgSecondary,
+            borderRadius: BorderRadius.circular(22),
             border: Border.all(
               color: expanded
                   ? AppTheme.brand.withAlpha(80)
                   : AppTheme.borderColor,
             ),
+            boxShadow: const [
+              BoxShadow(
+                color: AppTheme.shadowColor,
+                blurRadius: 18,
+                offset: Offset(0, 8),
+              ),
+            ],
           ),
           child: Row(
             children: [
@@ -1346,6 +1525,346 @@ class _SessionProjectHeader extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RoundIconButton extends StatelessWidget {
+  const _RoundIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final background = AppTheme.bgSecondary;
+    final foreground = AppTheme.textPrimary;
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Tooltip(
+          message: tooltip,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppTheme.borderColor),
+            ),
+            child: Icon(icon, color: foreground, size: 21),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GhostPill extends StatelessWidget {
+  const _GhostPill({required this.label, this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.bgTertiary,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(999)),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkbenchNavBar extends StatelessWidget {
+  const _WorkbenchNavBar({required this.tab, required this.onSelected});
+
+  final _WorkbenchTab tab;
+  final ValueChanged<_WorkbenchTab> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.bgSecondary,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.borderColor),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _WorkbenchNavItem(
+              label: '工具',
+              icon: Icons.widgets_outlined,
+              selected: tab == _WorkbenchTab.tools,
+              onTap: () => onSelected(_WorkbenchTab.tools),
+            ),
+          ),
+          Expanded(
+            child: _WorkbenchNavItem(
+              label: '会话',
+              icon: Icons.chat_bubble_outline,
+              selected: tab == _WorkbenchTab.sessions,
+              onTap: () => onSelected(_WorkbenchTab.sessions),
+            ),
+          ),
+          Expanded(
+            child: _WorkbenchNavItem(
+              label: '我的',
+              icon: Icons.person_outline,
+              selected: tab == _WorkbenchTab.mine,
+              onTap: () => onSelected(_WorkbenchTab.mine),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkbenchNavItem extends StatelessWidget {
+  const _WorkbenchNavItem({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.brand : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: selected ? Colors.white : AppTheme.textPrimary,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : AppTheme.textPrimary,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceStrip extends StatelessWidget {
+  const _DeviceStrip({
+    required this.tool,
+    required this.project,
+    required this.session,
+  });
+
+  final AiWorkbenchProvider tool;
+  final AiWorkbenchProject? project;
+  final AiWorkbenchConversation? session;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = project?.name ?? tool.name;
+    final online = session?.status == 'running' || tool.id == 'codex';
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: online ? AppTheme.statusGreen : AppTheme.statusGray,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Icon(Icons.laptop_mac_outlined, size: 20, color: AppTheme.brand),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+        color: AppTheme.textPrimary,
+        fontSize: 18,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+  }
+}
+
+class _CodexProjectRow extends StatelessWidget {
+  const _CodexProjectRow({
+    required this.project,
+    required this.selected,
+    required this.toolId,
+    required this.onTap,
+  });
+
+  final AiWorkbenchProject project;
+  final bool selected;
+  final String toolId;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Row(
+        children: [
+          Icon(
+            selected ? Icons.chat_bubble_outline : Icons.folder_outlined,
+            size: 24,
+            color: AppTheme.brand,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              project.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _ToolChip(toolId: toolId),
+        ],
+      ),
+    );
+  }
+}
+
+class _CodexRecentRow extends StatelessWidget {
+  const _CodexRecentRow({
+    required this.session,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final AiWorkbenchConversation session;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                session.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? AppTheme.brand : AppTheme.textPrimary,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            _ToolChip(toolId: session.providerId, source: session.source),
+            const SizedBox(width: 8),
+            Text(
+              _relativeTimeLabel(session.updatedAt),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyHint extends StatelessWidget {
+  const _EmptyHint({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Text(
+        label,
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
       ),
     );
   }
@@ -1673,13 +2192,17 @@ class SessionDetailShell extends StatelessWidget {
     required this.selectedEffort,
     required this.effectiveEffort,
     required this.onSwitchProjectBranch,
+    required this.onRefresh,
     required this.onSendCodexMessage,
     required this.onRespondToCodexApproval,
     required this.onArchiveCodexConversation,
+    required this.onBack,
     required this.onShowSessionSheet,
     required this.onSelectedModelChanged,
     required this.onSelectedServiceTierChanged,
     required this.onSelectedEffortChanged,
+    required this.onSelectedApprovalPolicyChanged,
+    required this.onSelectedSandboxModeChanged,
     required this.lastStatus,
     required this.isSendingCodex,
   });
@@ -1697,13 +2220,17 @@ class SessionDetailShell extends StatelessWidget {
   final String? selectedEffort;
   final String effectiveEffort;
   final Future<void> Function(String branch) onSwitchProjectBranch;
+  final Future<void> Function() onRefresh;
   final Future<bool> Function(String text) onSendCodexMessage;
   final Future<bool> Function(bool approved) onRespondToCodexApproval;
   final Future<bool> Function() onArchiveCodexConversation;
+  final VoidCallback onBack;
   final VoidCallback onShowSessionSheet;
   final ValueChanged<String> onSelectedModelChanged;
   final ValueChanged<String> onSelectedServiceTierChanged;
   final ValueChanged<String> onSelectedEffortChanged;
+  final ValueChanged<String> onSelectedApprovalPolicyChanged;
+  final ValueChanged<String> onSelectedSandboxModeChanged;
   final String? lastStatus;
   final bool isSendingCodex;
 
@@ -1721,12 +2248,21 @@ class SessionDetailShell extends StatelessWidget {
           tool: tool,
           project: project,
           session: session!,
+          onBack: onBack,
+          onShowSessionSheet: onShowSessionSheet,
+          onRefresh: onRefresh,
           onArchiveCodexConversation: onArchiveCodexConversation,
         ),
         Expanded(
           child: tool.id == 'terminal'
               ? TerminalSessionBody(session: session!, messages: messages)
               : CodexSessionBody(messages: messages),
+        ),
+        SessionStatusStrip(
+          tool: tool,
+          session: session!,
+          statusOverride: lastStatus,
+          isSending: tool.id == 'codex' && isSendingCodex,
         ),
         if (tool.id == 'codex' && session!.pendingApproval != null)
           CodexApprovalBar(
@@ -1752,6 +2288,8 @@ class SessionDetailShell extends StatelessWidget {
           onSelectedModelChanged: onSelectedModelChanged,
           onSelectedServiceTierChanged: onSelectedServiceTierChanged,
           onSelectedEffortChanged: onSelectedEffortChanged,
+          onSelectedApprovalPolicyChanged: onSelectedApprovalPolicyChanged,
+          onSelectedSandboxModeChanged: onSelectedSandboxModeChanged,
           statusHint: tool.id == 'codex' ? lastStatus : null,
         ),
       ],
@@ -1765,110 +2303,153 @@ class SessionHeader extends StatelessWidget {
     required this.tool,
     required this.project,
     required this.session,
+    required this.onBack,
+    required this.onShowSessionSheet,
+    required this.onRefresh,
     required this.onArchiveCodexConversation,
   });
 
   final AiWorkbenchProvider tool;
   final AiWorkbenchProject? project;
   final AiWorkbenchConversation session;
+  final VoidCallback onBack;
+  final VoidCallback onShowSessionSheet;
+  final Future<void> Function() onRefresh;
   final Future<bool> Function() onArchiveCodexConversation;
 
   @override
   Widget build(BuildContext context) {
-    final branchOrPath =
-        session.gitInfo?.branch ?? project?.branches.firstOrNull;
-    final meta = <String>[
-      tool.name,
-      if (project?.name != null) project!.name,
-      _mobileStatus(session.status),
-    ];
+    final projectLabel = project?.name ?? tool.name;
+    final deviceLabel = tool.id == 'terminal' ? 'Terminal' : 'Lis-PC';
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-      decoration: const BoxDecoration(
-        color: AppTheme.bgSecondary,
-        border: Border(bottom: BorderSide(color: AppTheme.borderColor)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  session.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _RoundIconButton(
+              tooltip: '返回上一级',
+              icon: Icons.arrow_back,
+              onTap: onBack,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onShowSessionSheet,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgSecondary,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: AppTheme.borderColor),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            session.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w800,
+                              height: 1.1,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            '$projectLabel · $deviceLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              if (tool.id == 'codex')
-                PopupMenuButton<String>(
-                  tooltip: '会话操作',
-                  color: AppTheme.bgPrimary,
-                  onSelected: (value) async {
-                    if (value != 'archive') return;
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: AppTheme.bgPrimary,
-                        title: const Text('归档会话'),
-                        content: Text('归档后会从当前列表移除：${session.title}'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('取消'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('归档'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed != true || !context.mounted) return;
-                    final ok = await onArchiveCodexConversation();
+            ),
+            const SizedBox(width: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: AppTheme.bgSecondary,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: AppTheme.borderColor),
+              ),
+              child: PopupMenuButton<String>(
+                tooltip: '会话操作',
+                color: AppTheme.bgPrimary,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                onSelected: (value) async {
+                  if (value == 'refresh') {
+                    await onRefresh();
                     if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(ok ? '已请求归档会话' : '归档请求发送失败')),
-                    );
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem<String>(
-                      value: 'archive',
-                      child: Text('归档当前会话'),
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('已刷新会话状态')));
+                    return;
+                  }
+                  if (value != 'archive') return;
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      backgroundColor: AppTheme.bgPrimary,
+                      title: const Text('归档会话'),
+                      content: Text('归档后会从当前列表移除：${session.title}'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('取消'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: const Text('归档'),
+                        ),
+                      ],
                     ),
-                  ],
-                  child: const Padding(
-                    padding: EdgeInsets.fromLTRB(10, 6, 0, 6),
-                    child: Icon(
-                      Icons.more_horiz,
-                      size: 18,
-                      color: AppTheme.textSecondary,
-                    ),
+                  );
+                  if (confirmed != true || !context.mounted) return;
+                  final ok = await onArchiveCodexConversation();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(ok ? '已请求归档会话' : '归档请求发送失败')),
+                  );
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem<String>(value: 'refresh', child: Text('刷新')),
+                  PopupMenuItem<String>(
+                    value: 'archive',
+                    child: Text('归档当前会话'),
+                  ),
+                ],
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  child: Icon(
+                    Icons.more_vert,
+                    size: 19,
+                    color: AppTheme.textPrimary,
                   ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 6,
-            runSpacing: 4,
-            children: [
-              for (final item in meta) _MiniBadge(label: item),
-              if (branchOrPath != null && branchOrPath.isNotEmpty)
-                _MiniBadge(label: branchOrPath),
-            ],
-          ),
-          if (session.cwd != null && session.cwd!.isNotEmpty) ...[
-            const SizedBox(height: 3),
+              ),
+            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1888,11 +2469,12 @@ class TerminalSessionBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      color: const Color(0xFF111827),
-      child: ListView.separated(
-        padding: const EdgeInsets.all(12),
+      color: const Color(0xFF121212),
+      child: _AutoScrollMessageList(
+        sessionKey: session.id,
+        padding: const EdgeInsets.fromLTRB(14, 16, 14, 18),
         itemCount: messages.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        separatorHeight: 8,
         itemBuilder: (context, index) {
           final message = messages[index];
           return SelectableText(
@@ -1920,17 +2502,199 @@ class CodexSessionBody extends StatelessWidget {
     if (messages.isEmpty) {
       return const Center(
         child: Text(
-          '新对话尚未产生正文',
-          style: TextStyle(color: AppTheme.textTertiary),
+          '没有更多线程',
+          style: TextStyle(color: AppTheme.textSecondary, fontSize: 16),
         ),
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
-      itemCount: messages.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) => _MessageBlock(message: messages[index]),
+    return _AutoScrollMessageList(
+      sessionKey: messages.first.conversationId ?? 'codex',
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      itemCount: messages.length + 1,
+      separatorHeight: 14,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Text(
+            '前 ${messages.length} 条消息 ›',
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          );
+        }
+        return _MessageBlock(message: messages[index - 1]);
+      },
+    );
+  }
+}
+
+class _AutoScrollMessageList extends StatefulWidget {
+  const _AutoScrollMessageList({
+    required this.sessionKey,
+    required this.padding,
+    required this.itemCount,
+    required this.itemBuilder,
+    this.separatorHeight = 0,
+  });
+
+  final String sessionKey;
+  final EdgeInsets padding;
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
+  final double separatorHeight;
+
+  @override
+  State<_AutoScrollMessageList> createState() => _AutoScrollMessageListState();
+}
+
+class _AutoScrollMessageListState extends State<_AutoScrollMessageList> {
+  late final ScrollController _controller;
+  bool _stickToBottom = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ScrollController()..addListener(_handleScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+  }
+
+  @override
+  void didUpdateWidget(covariant _AutoScrollMessageList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final sessionChanged = oldWidget.sessionKey != widget.sessionKey;
+    final grew = widget.itemCount > oldWidget.itemCount;
+    if (sessionChanged || (grew && _stickToBottom)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller
+      ..removeListener(_handleScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handleScroll() {
+    if (!_controller.hasClients) return;
+    final position = _controller.position;
+    final nextStick = position.maxScrollExtent - position.pixels <= 96;
+    if (nextStick != _stickToBottom && mounted) {
+      setState(() {
+        _stickToBottom = nextStick;
+      });
+    }
+  }
+
+  void _jumpToBottom({bool animated = false}) {
+    if (!_controller.hasClients) return;
+    final target = _controller.position.maxScrollExtent;
+    if (animated) {
+      _controller.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+    _controller.jumpTo(target);
+  }
+
+  void _jumpToTop() {
+    if (!_controller.hasClients) return;
+    _controller.animateTo(
+      0,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        ListView.separated(
+          controller: _controller,
+          padding: widget.padding,
+          itemCount: widget.itemCount,
+          separatorBuilder: (_, _) => SizedBox(height: widget.separatorHeight),
+          itemBuilder: widget.itemBuilder,
+        ),
+        Positioned(
+          right: 10,
+          bottom: 10,
+          child: Column(
+            children: [
+              _ScrollJumpButton(
+                icon: Icons.vertical_align_top,
+                tooltip: '到顶部',
+                onTap: _jumpToTop,
+              ),
+              const SizedBox(height: 8),
+              _ScrollJumpButton(
+                icon: Icons.vertical_align_bottom,
+                tooltip: '到底部',
+                onTap: () => _jumpToBottom(animated: true),
+                highlighted: !_stickToBottom,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScrollJumpButton extends StatelessWidget {
+  const _ScrollJumpButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.highlighted = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: highlighted ? AppTheme.brand.withAlpha(230) : AppTheme.bgPrimary,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Tooltip(
+          message: tooltip,
+          child: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: highlighted ? AppTheme.brand : AppTheme.borderColor,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x140F172A),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Icon(
+              icon,
+              size: 16,
+              color: highlighted ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1964,16 +2728,22 @@ class SessionStatusStrip extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: const BoxDecoration(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
         color: AppTheme.bgSecondary,
-        border: Border(top: BorderSide(color: AppTheme.borderColor)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.borderColor),
       ),
       child: Text(
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+        style: const TextStyle(
+          color: AppTheme.textSecondary,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }
@@ -2110,6 +2880,8 @@ class SessionComposer extends StatefulWidget {
     required this.onSelectedModelChanged,
     required this.onSelectedServiceTierChanged,
     required this.onSelectedEffortChanged,
+    required this.onSelectedApprovalPolicyChanged,
+    required this.onSelectedSandboxModeChanged,
     required this.isSending,
     this.statusHint,
   });
@@ -2131,6 +2903,8 @@ class SessionComposer extends StatefulWidget {
   final ValueChanged<String> onSelectedModelChanged;
   final ValueChanged<String> onSelectedServiceTierChanged;
   final ValueChanged<String> onSelectedEffortChanged;
+  final ValueChanged<String> onSelectedApprovalPolicyChanged;
+  final ValueChanged<String> onSelectedSandboxModeChanged;
   final bool isSending;
   final String? statusHint;
 
@@ -2181,8 +2955,7 @@ class _SessionComposerState extends State<SessionComposer> {
   @override
   Widget build(BuildContext context) {
     final terminal = widget.tool.id == 'terminal';
-    final placeholder = terminal ? '输入命令...' : '给 Codex 发送消息...';
-    final status = _mobileStatus(widget.session.status);
+    final placeholder = terminal ? '输入命令...' : '向 Codex 提问';
     final branch =
         widget.project?.branches.firstOrNull ??
         widget.session.gitInfo?.branch ??
@@ -2204,6 +2977,14 @@ class _SessionComposerState extends State<SessionComposer> {
     final currentEffort = widget.selectedEffort?.trim().isNotEmpty == true
         ? widget.selectedEffort!.trim()
         : widget.effectiveEffort;
+    final currentApprovalPolicy =
+        widget.config?.approvalPolicy?.trim().isNotEmpty == true
+        ? widget.config!.approvalPolicy!.trim()
+        : 'on-request';
+    final currentSandboxMode =
+        widget.config?.sandboxMode?.trim().isNotEmpty == true
+        ? widget.config!.sandboxMode!.trim()
+        : 'workspace-write';
     final effortOptions = widget.models
         .firstWhere(
           (item) => item.id == currentModel,
@@ -2219,42 +3000,81 @@ class _SessionComposerState extends State<SessionComposer> {
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-        decoration: const BoxDecoration(color: AppTheme.bgSecondary),
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+        decoration: const BoxDecoration(color: AppTheme.bgPrimary),
         child: Column(
           children: [
-            if (widget.statusHint != null &&
-                widget.statusHint!.trim().isNotEmpty) ...[
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    widget.statusHint!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 10,
+            if (!terminal)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    _GhostPill(
+                      label: _modelChipLabel(currentModel),
+                      onTap: () => _showSimplePicker(
+                        title: '模型',
+                        currentValue: currentModel,
+                        options: widget.models
+                            .map((item) => item.id)
+                            .toList(growable: false),
+                        labelBuilder: _modelMenuLabel,
+                        onSelected: widget.onSelectedModelChanged,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    _GhostPill(
+                      label: _effortChipLabel(currentEffort),
+                      onTap: () => _showSimplePicker(
+                        title: '智能',
+                        currentValue: currentEffort,
+                        options: visibleEfforts,
+                        labelBuilder: _effortMenuLabel,
+                        onSelected: widget.onSelectedEffortChanged,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _GhostPill(
+                      label: _permissionChipLabel(
+                        currentApprovalPolicy,
+                        currentSandboxMode,
+                      ),
+                      onTap: () => _showPermissionPicker(
+                        currentApprovalPolicy: currentApprovalPolicy,
+                        currentSandboxMode: currentSandboxMode,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 40),
-                    decoration: BoxDecoration(
-                      color: AppTheme.bgPrimary,
-                      borderRadius: BorderRadius.circular(3),
-                      border: Border.all(color: AppTheme.borderColor),
+            Container(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              decoration: BoxDecoration(
+                color: AppTheme.bgSecondary,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: AppTheme.borderColor),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _RoundIconButton(
+                    tooltip: '更多能力',
+                    icon: Icons.add,
+                    onTap: () => _openComposerMenu(
+                      context,
+                      branch: branch,
+                      currentModel: currentModel,
+                      currentServiceTier: currentServiceTier,
+                      currentEffort: currentEffort,
+                      visibleEfforts: visibleEfforts,
                     ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
                     child: TextField(
                       controller: _controller,
                       minLines: 1,
-                      maxLines: 4,
+                      maxLines: 5,
                       textInputAction: terminal
                           ? TextInputAction.done
                           : TextInputAction.send,
@@ -2268,181 +3088,452 @@ class _SessionComposerState extends State<SessionComposer> {
                           fontSize: 13,
                         ),
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
+                          horizontal: 4,
+                          vertical: 12,
                         ),
                       ),
                       style: const TextStyle(
                         color: AppTheme.textPrimary,
-                        fontSize: 13,
+                        fontSize: 14,
                         height: 1.35,
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(3),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: widget.isSending ? null : _submit,
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        widget.isSending
+                            ? Icons.hourglass_top
+                            : terminal
+                            ? Icons.keyboard_return
+                            : Icons.mic_none_rounded,
+                        size: 24,
+                        color: widget.isSending
+                            ? AppTheme.textTertiary
+                            : AppTheme.textSecondary,
                       ),
                     ),
-                    onPressed: widget.isSending ? null : () => _submit(),
-                    child: Icon(
-                      widget.isSending
-                          ? Icons.hourglass_top
-                          : terminal
-                          ? Icons.keyboard_return
-                          : Icons.send,
-                      size: 18,
-                    ),
                   ),
+                ],
+              ),
+            ),
+            if (_showDetails) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  color: AppTheme.bgTertiary,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: AppTheme.borderColor),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _DetailLine(
+                      label: '路径',
+                      value:
+                          widget.session.cwd ??
+                          widget.project?.path ??
+                          widget.config?.cwd ??
+                          '-',
+                    ),
+                    const SizedBox(height: 4),
+                    _DetailLine(
+                      label: '沙箱',
+                      value: widget.config?.sandboxMode ?? 'workspace-write',
+                    ),
+                    const SizedBox(height: 4),
+                    _DetailLine(label: '会话', value: '${widget.sessionCount} 个'),
+                    const SizedBox(height: 4),
+                    _DetailLine(
+                      label: '确认',
+                      value: widget.config?.approvalPolicy ?? 'on-request',
+                    ),
+                    const SizedBox(height: 4),
+                    _DetailLine(
+                      label: '状态',
+                      value: _mobileStatus(widget.session.status),
+                    ),
+                    if (widget.statusHint != null &&
+                        widget.statusHint!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      _DetailLine(label: '同步', value: widget.statusHint!),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _modelChipLabel(String value) {
+    final simplified = value.toUpperCase().replaceAll('-LATEST', '');
+    if (simplified.startsWith('GPT-5.4')) {
+      return 'GPT-5.4';
+    }
+    return simplified;
+  }
+
+  String _modelMenuLabel(String value) {
+    final label = widget.models
+        .where((item) => item.id == value)
+        .firstOrNull
+        ?.label
+        .trim();
+    return label != null && label.isNotEmpty ? label : value;
+  }
+
+  String _effortChipLabel(String value) {
+    return switch (value) {
+      'minimal' => '智能 低',
+      'low' => '智能 低',
+      'medium' => '智能 中',
+      'high' => '智能 高',
+      'xhigh' => '智能 极高',
+      _ => '智能 $value',
+    };
+  }
+
+  String _permissionChipLabel(String approvalPolicy, String sandboxMode) {
+    return switch (sandboxMode) {
+      'danger-full-access' => '完全访问权限',
+      'read-only' => '只读权限',
+      'workspace-write' => approvalPolicy == 'never' ? '默认权限' : '工作区写入',
+      _ => sandboxMode,
+    };
+  }
+
+  Future<void> _openComposerMenu(
+    BuildContext context, {
+    required String branch,
+    required String currentModel,
+    required String currentServiceTier,
+    required String currentEffort,
+    required List<String> visibleEfforts,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AppTheme.bgPrimary,
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 8, 22, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ComposerMenuItem(
+                  icon: Icons.image_outlined,
+                  title: '上传图片',
+                  subtitle: '暂未接入，保留 Codex 风格入口',
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (this.context.mounted) {
+                      ScaffoldMessenger.of(
+                        this.context,
+                      ).showSnackBar(const SnackBar(content: Text('图片上传即将推出')));
+                    }
+                  },
+                ),
+                _ComposerMenuItem(
+                  icon: Icons.checklist_rounded,
+                  title: '计划模式',
+                  subtitle: '切换到项目 / 会话 / 参数设置',
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => _showDetails = true);
+                    widget.onShowSessionSheet();
+                  },
+                ),
+                const SizedBox(height: 10),
+                const Divider(height: 1, color: AppTheme.borderColor),
+                const SizedBox(height: 12),
+                _ComposerSelectorLine(
+                  label: '模型',
+                  value: currentModel,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _showSimplePicker(
+                      title: '模型',
+                      currentValue: currentModel,
+                      options: widget.models
+                          .map((item) => item.id)
+                          .toList(growable: false),
+                      labelBuilder: _modelMenuLabel,
+                      onSelected: widget.onSelectedModelChanged,
+                    );
+                  },
+                ),
+                _ComposerSelectorLine(
+                  label: '速度',
+                  value: currentServiceTier,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _showSimplePicker(
+                      title: '速度',
+                      currentValue: currentServiceTier,
+                      options: _serviceTierOptions,
+                      onSelected: widget.onSelectedServiceTierChanged,
+                    );
+                  },
+                ),
+                _ComposerSelectorLine(
+                  label: '智能',
+                  value: _effortMenuLabel(currentEffort),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _showSimplePicker(
+                      title: '智能',
+                      currentValue: currentEffort,
+                      options: visibleEfforts,
+                      labelBuilder: _effortMenuLabel,
+                      onSelected: widget.onSelectedEffortChanged,
+                    );
+                  },
+                ),
+                if ((widget.project?.branches.length ?? 0) > 0)
+                  _ComposerSelectorLine(
+                    label: '分支',
+                    value: branch,
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _showSimplePicker(
+                        title: '分支',
+                        currentValue: branch,
+                        options: widget.project?.branches ?? const [],
+                        onSelected: (value) {
+                          if (value == branch) return;
+                          unawaited(widget.onSwitchProjectBranch(value));
+                        },
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _effortMenuLabel(String value) {
+    return switch (value) {
+      'minimal' => '低',
+      'low' => '低',
+      'medium' => '中',
+      'high' => '高',
+      'xhigh' => '极高',
+      _ => value,
+    };
+  }
+
+  String _sandboxModeMenuLabel(String value) {
+    return switch (value) {
+      'workspace-write' => '工作区写入',
+      'read-only' => '只读',
+      'danger-full-access' => '完全访问权限',
+      _ => value,
+    };
+  }
+
+  String _approvalPolicyMenuLabel(String value) {
+    return switch (value) {
+      'on-request' => '请求时确认',
+      'untrusted' => '不可信时确认',
+      'on-failure' => '失败时确认',
+      'never' => '从不确认',
+      _ => value,
+    };
+  }
+
+  Future<void> _showPermissionPicker({
+    required String currentApprovalPolicy,
+    required String currentSandboxMode,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AppTheme.bgPrimary,
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 10, 22, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '权限',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                ),
+                const SizedBox(height: 10),
+                _ComposerSelectorLine(
+                  label: '访问范围',
+                  value: _sandboxModeMenuLabel(currentSandboxMode),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _showSimplePicker(
+                      title: '访问范围',
+                      currentValue: currentSandboxMode,
+                      options: _sandboxModeOptions,
+                      labelBuilder: _sandboxModeMenuLabel,
+                      onSelected: widget.onSelectedSandboxModeChanged,
+                    );
+                  },
+                ),
+                _ComposerSelectorLine(
+                  label: '确认策略',
+                  value: _approvalPolicyMenuLabel(currentApprovalPolicy),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _showSimplePicker(
+                      title: '确认策略',
+                      currentValue: currentApprovalPolicy,
+                      options: _approvalPolicyOptions,
+                      labelBuilder: _approvalPolicyMenuLabel,
+                      onSelected: widget.onSelectedApprovalPolicyChanged,
+                    );
+                  },
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Container(
-              decoration: BoxDecoration(
-                color: AppTheme.bgPrimary,
-                border: Border.all(color: AppTheme.borderColor),
-              ),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _ControlStripField(
-                            label: '项目',
-                            value: widget.project?.name ?? '未绑定项目',
-                            hint: branch,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        if ((widget.project?.branches.length ?? 0) > 0)
-                          SizedBox(
-                            width: 124,
-                            child: _OptionMenuButton(
-                              icon: Icons.account_tree_outlined,
-                              value: branch,
-                              options: widget.project?.branches ?? const [],
-                              onSelected: (value) {
-                                if (value == branch) return;
-                                unawaited(widget.onSwitchProjectBranch(value));
-                              },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showSimplePicker({
+    required String title,
+    required String currentValue,
+    required List<String> options,
+    required ValueChanged<String> onSelected,
+    String Function(String value)? labelBuilder,
+  }) async {
+    if (options.isEmpty) {
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AppTheme.bgPrimary,
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 10, 22, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                for (final option in options)
+                  InkWell(
+                    onTap: () {
+                      onSelected(option);
+                      Navigator.pop(context);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              labelBuilder?.call(option) ?? option,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
-                        Container(
-                          width: 1,
-                          height: 32,
-                          margin: const EdgeInsets.symmetric(horizontal: 10),
-                          color: AppTheme.borderColor,
-                        ),
-                        Expanded(
-                          child: _ControlStripField(
-                            label: '会话',
-                            value: widget.session.title,
-                            hint: status,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _HardEdgeButton(
-                          label: '切换',
-                          icon: Icons.swap_horiz,
-                          onPressed: widget.onShowSessionSheet,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(height: 1, color: AppTheme.borderColor),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _ModelSelectorButton(
-                            value: currentModel,
-                            models: widget.models,
-                            onSelected: widget.onSelectedModelChanged,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _OptionMenuButton(
-                            icon: Icons.speed,
-                            value: currentServiceTier,
-                            options: _serviceTierOptions,
-                            onSelected: widget.onSelectedServiceTierChanged,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: _OptionMenuButton(
-                            icon: Icons.psychology_alt_outlined,
-                            value: currentEffort,
-                            options: visibleEfforts,
-                            onSelected: widget.onSelectedEffortChanged,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        _HardEdgeButton(
-                          label: _showDetails ? '收起' : '详情',
-                          icon: _showDetails
-                              ? Icons.keyboard_arrow_up
-                              : Icons.keyboard_arrow_down,
-                          onPressed: () {
-                            setState(() {
-                              _showDetails = !_showDetails;
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_showDetails) ...[
-                    Container(height: 1, color: AppTheme.borderColor),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _DetailLine(
-                            label: '路径',
-                            value:
-                                widget.session.cwd ??
-                                widget.project?.path ??
-                                widget.config?.cwd ??
-                                '-',
-                          ),
-                          const SizedBox(height: 4),
-                          _DetailLine(
-                            label: '沙箱',
-                            value:
-                                widget.config?.sandboxMode ?? 'workspace-write',
-                          ),
-                          const SizedBox(height: 4),
-                          _DetailLine(
-                            label: '会话',
-                            value: '${widget.sessionCount} 个',
-                          ),
-                          const SizedBox(height: 4),
-                          _DetailLine(
-                            label: '确认',
-                            value:
-                                widget.config?.approvalPolicy ?? 'on-request',
-                          ),
-                          const SizedBox(height: 4),
-                          _DetailLine(label: '状态', value: status),
+                          if (option == currentValue)
+                            const Icon(
+                              Icons.check,
+                              size: 22,
+                              color: AppTheme.brand,
+                            ),
                         ],
                       ),
                     ),
-                  ],
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ComposerMenuItem extends StatelessWidget {
+  const _ComposerMenuItem({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 24, color: AppTheme.brand),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -2453,143 +3544,53 @@ class _SessionComposerState extends State<SessionComposer> {
   }
 }
 
-class _ControlStripField extends StatelessWidget {
-  const _ControlStripField({
+class _ComposerSelectorLine extends StatelessWidget {
+  const _ComposerSelectorLine({
     required this.label,
     required this.value,
-    required this.hint,
+    required this.onTap,
   });
 
   final String label;
   final String value;
-  final String hint;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppTheme.textTertiary,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.2,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            height: 1.15,
-          ),
-        ),
-        const SizedBox(height: 1),
-        Text(
-          hint,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
-        ),
-      ],
-    );
-  }
-}
-
-class _HardEdgeButton extends StatelessWidget {
-  const _HardEdgeButton({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 32,
-      child: OutlinedButton.icon(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          side: const BorderSide(color: AppTheme.borderColor),
-          shape: const RoundedRectangleBorder(),
-        ),
-        icon: Icon(icon, size: 15, color: AppTheme.brand),
-        label: Text(
-          label,
-          style: const TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 11.5,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _OptionMenuButton extends StatelessWidget {
-  const _OptionMenuButton({
-    required this.icon,
-    required this.value,
-    required this.options,
-    required this.onSelected,
-  });
-
-  final IconData icon;
-  final String value;
-  final List<String> options;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
-      tooltip: value,
-      color: AppTheme.bgPrimary,
-      onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final option in options)
-          PopupMenuItem<String>(value: option, child: Text(option)),
-      ],
-      child: Container(
-        height: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppTheme.borderColor),
-        ),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
         child: Row(
           children: [
-            Icon(icon, size: 15, color: AppTheme.brand),
-            const SizedBox(width: 6),
             Expanded(
-              child: Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 4),
             const Icon(
-              Icons.expand_more,
-              size: 16,
-              color: AppTheme.textSecondary,
+              Icons.chevron_right_rounded,
+              size: 24,
+              color: AppTheme.textPrimary,
             ),
           ],
         ),
@@ -2633,90 +3634,6 @@ class _DetailLine extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ModelSelectorButton extends StatelessWidget {
-  const _ModelSelectorButton({
-    required this.value,
-    required this.models,
-    required this.onSelected,
-  });
-
-  final String value;
-  final List<AiWorkbenchModel> models;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    if (models.isEmpty) {
-      return Container(
-        height: 32,
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppTheme.borderColor),
-        ),
-        child: Text(
-          '模型 $value',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 11.5,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      );
-    }
-
-    return PopupMenuButton<String>(
-      tooltip: '选择模型',
-      color: AppTheme.bgPrimary,
-      onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final model in models)
-          PopupMenuItem<String>(
-            value: model.id,
-            child: Text(
-              model.label.isNotEmpty ? model.label : model.id,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-      ],
-      child: Container(
-        height: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppTheme.borderColor),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.tune, size: 15, color: AppTheme.brand),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            const Icon(
-              Icons.expand_more,
-              size: 16,
-              color: AppTheme.textSecondary,
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -2864,83 +3781,122 @@ class _MessageBlockState extends State<_MessageBlock> {
     final displayText = _expanded || !hasExpandablePreview
         ? message.text
         : previewText;
+    final imageUrls = message.imageUrls;
     final truncated = message.isTruncated == true;
     final hiddenCharCount = truncated && message.fullTextCharCount != null
         ? message.fullTextCharCount! - message.text.runes.length
         : 0;
+    final hasDisplayText = displayText.trim().isNotEmpty;
+
+    final roleLabel = pending
+        ? '发送中'
+        : queued
+        ? '已发送'
+        : failed
+        ? '发送失败'
+        : technical
+        ? '技术事件'
+        : user
+        ? '你'
+        : message.title;
+    final containerColor = user
+        ? const Color(0xFFF5F5F5)
+        : technical
+        ? const Color(0xFFFFFBEB)
+        : Colors.transparent;
+    final borderColor = failed
+        ? AppTheme.statusRed.withAlpha(90)
+        : pending || queued
+        ? AppTheme.borderColor
+        : technical
+        ? AppTheme.statusYellow.withAlpha(80)
+        : user
+        ? AppTheme.borderColor
+        : Colors.transparent;
 
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        constraints: BoxConstraints(
+          maxWidth: user ? maxWidth : double.infinity,
+        ),
+        padding: user
+            ? const EdgeInsets.fromLTRB(18, 14, 18, 14)
+            : const EdgeInsets.fromLTRB(0, 2, 0, 2),
         decoration: BoxDecoration(
-          color: user
-              ? AppTheme.brand.withAlpha(pending || queued ? 8 : 14)
-              : AppTheme.bgSecondary,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: failed
-                ? AppTheme.statusRed.withAlpha(90)
-                : pending || queued
-                ? AppTheme.brand.withAlpha(90)
-                : technical
-                ? AppTheme.statusYellow.withAlpha(90)
-                : AppTheme.borderColor,
-          ),
+          color: containerColor,
+          borderRadius: BorderRadius.circular(user || technical ? 28 : 0),
+          border: Border.all(color: borderColor),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    pending
-                        ? '发送中'
-                        : queued
-                        ? '已发送，等待同步'
-                        : failed
-                        ? '发送失败'
-                        : technical
-                        ? '技术事件'
-                        : message.title,
-                    style: TextStyle(
-                      color: failed
-                          ? AppTheme.statusRed
-                          : pending || queued
-                          ? AppTheme.brandDark
-                          : technical
-                          ? const Color(0xFF9A6700)
-                          : AppTheme.textSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+            if (!user || technical || pending || queued || failed)
+              Padding(
+                padding: EdgeInsets.only(
+                  left: user ? 0 : 2,
+                  right: 0,
+                  bottom: hasDisplayText || imageUrls.isNotEmpty ? 8 : 0,
                 ),
-                if (pending) ...[
-                  const SizedBox(width: 6),
-                  SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.8,
-                      color: AppTheme.brand,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        roleLabel,
+                        style: TextStyle(
+                          color: failed
+                              ? AppTheme.statusRed
+                              : user
+                              ? AppTheme.textSecondary
+                              : technical
+                              ? const Color(0xFF9A6700)
+                              : const Color(0xFF22C55E),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 6),
-            SelectableText(
-              displayText,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 14,
-                height: 1.5,
+                    if (pending) ...[
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: AppTheme.brand,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
-            ),
+            if (imageUrls.isNotEmpty) ...[
+              for (final imageUrl in imageUrls) ...[
+                _InlineMessageImage(imageUrl: imageUrl),
+                if (imageUrl != imageUrls.last) const SizedBox(height: 8),
+              ],
+              if (hasDisplayText) const SizedBox(height: 8),
+            ],
+            if (hasDisplayText)
+              SelectableText(
+                displayText,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: user ? 15 : 15.5,
+                  height: user ? 1.55 : 1.68,
+                  fontWeight: user ? FontWeight.w500 : FontWeight.w400,
+                ),
+              ),
+            if (!hasDisplayText && imageUrls.isEmpty)
+              const Text(
+                '(empty)',
+                style: TextStyle(
+                  color: AppTheme.textTertiary,
+                  fontSize: 13,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
             if (hasExpandablePreview || truncated) ...[
               const SizedBox(height: 8),
               Wrap(
@@ -2960,7 +3916,7 @@ class _MessageBlockState extends State<_MessageBlock> {
                         child: Text(
                           _expanded ? '收起' : '展开全文',
                           style: const TextStyle(
-                            color: AppTheme.brandDark,
+                            color: AppTheme.textSecondary,
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
                           ),
@@ -2986,6 +3942,87 @@ class _MessageBlockState extends State<_MessageBlock> {
       ),
     );
   }
+}
+
+class _InlineMessageImage extends StatelessWidget {
+  const _InlineMessageImage({required this.imageUrl});
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = _imageProviderFor(imageUrl);
+    if (provider == null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppTheme.bgPrimary,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.borderColor),
+        ),
+        child: SelectableText(
+          imageUrl,
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 12,
+            height: 1.4,
+          ),
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        constraints: const BoxConstraints(maxHeight: 280),
+        decoration: BoxDecoration(
+          color: AppTheme.bgPrimary,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.borderColor),
+        ),
+        child: Image(
+          image: provider,
+          fit: BoxFit.cover,
+          errorBuilder: (_, error, stackTrace) => Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            color: AppTheme.bgPrimary,
+            child: const Text(
+              '图片加载失败',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+ImageProvider<Object>? _imageProviderFor(String imageUrl) {
+  final trimmed = imageUrl.trim();
+  if (trimmed.isEmpty) {
+    return null;
+  }
+  if (trimmed.startsWith('data:image/')) {
+    try {
+      final data = UriData.parse(trimmed);
+      return MemoryImage(data.contentAsBytes());
+    } catch (_) {
+      final marker = trimmed.indexOf('base64,');
+      if (marker <= 0) return null;
+      try {
+        return MemoryImage(base64Decode(trimmed.substring(marker + 7)));
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || (!uri.hasScheme)) {
+    return null;
+  }
+  return NetworkImage(trimmed);
 }
 
 class _MineLayer extends StatelessWidget {
@@ -3087,10 +4124,31 @@ class _ToolIcon extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppTheme.borderColor),
       ),
+      child: Icon(_toolGlyph(toolId, null), color: AppTheme.brand, size: 20),
+    );
+  }
+}
+
+class _ToolChip extends StatelessWidget {
+  const _ToolChip({required this.toolId, this.source});
+
+  final String toolId;
+  final String? source;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: AppTheme.bgSecondary,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.borderColor),
+      ),
       child: Icon(
-        toolId == 'terminal' ? Icons.terminal : Icons.smart_toy_outlined,
-        color: AppTheme.brand,
-        size: 20,
+        _toolGlyph(toolId, source),
+        color: AppTheme.textSecondary,
+        size: 17,
       ),
     );
   }
@@ -3163,4 +4221,83 @@ String _mobileStatus(String status) {
     'idle' => '空闲',
     _ => '空闲',
   };
+}
+
+IconData _toolGlyph(String toolId, String? source) {
+  // Keep this mapper aligned with docs/tool-icon-registry.md.
+  // We intentionally prefer neutral glyphs over "close enough" fake brand logos
+  // until an approved official asset is imported into the app bundle.
+  final normalized = '${toolId.toLowerCase()} ${source?.toLowerCase() ?? ''}';
+  if (normalized.contains('terminal') ||
+      normalized.contains('powershell') ||
+      normalized.contains('bash') ||
+      normalized.contains('zsh') ||
+      normalized.contains('cmd')) {
+    return Icons.terminal;
+  }
+  if (normalized.contains('claude')) {
+    return Icons.psychology_outlined;
+  }
+  if (normalized.contains('gemini')) {
+    return Icons.auto_awesome_outlined;
+  }
+  if (normalized.contains('aider')) {
+    return Icons.assistant_outlined;
+  }
+  if (normalized.contains('cursor')) {
+    return Icons.change_history_outlined;
+  }
+  if (normalized.contains('vscode') || normalized.contains('visual studio')) {
+    return Icons.code;
+  }
+  if (normalized.contains('windsurf')) {
+    return Icons.air_rounded;
+  }
+  if (normalized.contains('zed')) {
+    return Icons.bolt_outlined;
+  }
+  if (normalized.contains('jetbrains') ||
+      normalized.contains('idea') ||
+      normalized.contains('android studio')) {
+    return Icons.developer_mode_outlined;
+  }
+  if (normalized.contains('xcode')) {
+    return Icons.phone_iphone_outlined;
+  }
+  if (normalized.contains('codex')) {
+    return Icons.smart_toy_outlined;
+  }
+  return Icons.extension_outlined;
+}
+
+String _relativeTimeLabel(int? timestamp) {
+  if (timestamp == null || timestamp <= 0) {
+    return '刚刚';
+  }
+  final normalizedTimestamp = timestamp < 1000000000000
+      ? timestamp * 1000
+      : timestamp;
+  final time = DateTime.fromMillisecondsSinceEpoch(normalizedTimestamp);
+  final now = DateTime.now();
+  if (time.isAfter(now)) {
+    return '刚刚';
+  }
+  final diff = now.difference(time);
+  if (diff.inMinutes < 1) {
+    return '刚刚';
+  }
+  if (diff.inHours < 1) {
+    return '${diff.inMinutes}分';
+  }
+  if (diff.inDays < 1) {
+    return '${diff.inHours}小时';
+  }
+  if (diff.inDays < 30) {
+    return '${diff.inDays}天';
+  }
+  final months = (diff.inDays / 30).floor();
+  if (months < 12) {
+    return '${months}月';
+  }
+  return '${(diff.inDays / 365).floor()}年';
 }
