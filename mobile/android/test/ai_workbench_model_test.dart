@@ -105,4 +105,61 @@ void main() {
     expect(message.isTruncated, isTrue);
     expect(message.fullTextCharCount, 20001);
   });
+
+  test(
+    'AI workbench conversation preserves session summary and cancel metadata',
+    () {
+      final snapshot = AiWorkbenchSnapshot.fromJson({
+        'schemaVersion': 1,
+        'generatedAt': '2026-07-16T00:00:00.000Z',
+        'providers': [
+          {
+            'id': 'codex',
+            'name': 'Codex',
+            'transport': 'app-server',
+            'capabilities': ['conversation-read', 'turn-cancel'],
+          },
+        ],
+        'projects': const <Object>[],
+        'conversations': [
+          {
+            'id': 'thread-1',
+            'providerId': 'codex',
+            'title': 'Remote handoff',
+            'status': 'waitingApproval',
+            'activeTurnId': 'turn-42',
+            'sessionSummary': {
+              'statusLabel': '等待移动端确认',
+              'lastOutputAt': 1784160000,
+              'waitingForInput': true,
+              'hasError': false,
+              'unreadCount': 2,
+              'runningForSeconds': 91,
+            },
+            'pendingApproval': {
+              'requestId': 'req-1',
+              'approvalId': 'approval-1',
+              'kind': 'exec-approval',
+              'title': '命令执行待确认',
+              'summary': 'cargo check -p tauri-app',
+              'canTerminate': true,
+              'requiresDestructiveConfirm': true,
+            },
+          },
+        ],
+        'messagesByConversationId': const <String, Object>{},
+        'modelsByProviderId': const <String, Object>{'codex': <Object>[]},
+        'configsByProviderId': const <String, Object>{},
+        'errors': const <Object>[],
+      });
+
+      final conversation = snapshot.conversations.single;
+      expect(conversation.activeTurnId, 'turn-42');
+      expect(conversation.sessionSummary?.statusLabel, '等待移动端确认');
+      expect(conversation.sessionSummary?.waitingForInput, isTrue);
+      expect(conversation.sessionSummary?.unreadCount, 2);
+      expect(conversation.pendingApproval?.canTerminate, isTrue);
+      expect(conversation.pendingApproval?.requiresDestructiveConfirm, isTrue);
+    },
+  );
 }

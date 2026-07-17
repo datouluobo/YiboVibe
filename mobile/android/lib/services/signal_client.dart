@@ -400,6 +400,14 @@ class SignalClient {
     });
   }
 
+  bool sendCodexTurnCancel({required String conversationId, String? turnId}) {
+    return _send({
+      'type': 'codex:turn:cancel',
+      'conversation_id': conversationId,
+      if (turnId != null && turnId.isNotEmpty) 'turn_id': turnId,
+    });
+  }
+
   bool sendCodexArchiveConversation({required String conversationId}) {
     return _send({
       'type': 'codex:thread:archive',

@@ -50,6 +50,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   final Map<String, List<AiWorkbenchMessage>> _pendingMessagesByConversationId =
       <String, List<AiWorkbenchMessage>>{};
   final Set<String> _sendingConversationIds = <String>{};
+  final Map<String, String> _activeTurnIdByConversationId = <String, String>{};
   final Map<String, int> _announcedThreadCountBySender = <String, int>{};
   final Map<String, DateTime> _lastWorkbenchSignalAtBySender =
       <String, DateTime>{};
@@ -61,6 +62,8 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   String? _preferredWorkbenchSenderDevice;
   final List<String> _statusTrail = <String>[];
   final List<String> _debugTrail = <String>[];
+  AiWorkbenchHostVitals? _hostVitals;
+  final List<AiWorkbenchHostAlert> _hostAlerts = <AiWorkbenchHostAlert>[];
 
   AiWorkbenchSnapshot? get snapshot => _snapshot;
   bool get isConnected => _isConnected;
@@ -69,10 +72,18 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   DateTime? get lastStatusAt => _lastStatusAt;
   List<String> get statusTrail => List.unmodifiable(_statusTrail);
   List<String> get debugTrail => List.unmodifiable(_debugTrail);
+  AiWorkbenchHostVitals? get hostVitals => _hostVitals;
+  List<AiWorkbenchHostAlert> get hostAlerts => List.unmodifiable(_hostAlerts);
   Map<String, List<AiWorkbenchMessage>> get pendingMessagesByConversationId =>
       Map.unmodifiable(_pendingMessagesByConversationId);
   bool isConversationSending(String conversationId) =>
       _sendingConversationIds.contains(conversationId);
+  String? activeTurnIdForConversation(String conversationId) =>
+      _activeTurnIdByConversationId[conversationId] ??
+      _snapshot?.conversations
+          .where((item) => item.id == conversationId)
+          .firstOrNull
+          ?.activeTurnId;
   String debugStateForConversation(String conversationId) {
     final pending =
         _pendingMessagesByConversationId[conversationId] ?? const [];
@@ -90,6 +101,14 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     _setStatus('mobile requested fresh workbench snapshot');
     _signal.requestWorkbenchSnapshot();
     _ensureSnapshotTimeout();
+    notifyListeners();
+  }
+
+  void retrySyncConnection() {
+    _error = null;
+    _setStatus('mobile retrying sync channel');
+    _signal.disconnect();
+    syncWithAuth();
     notifyListeners();
   }
 
@@ -208,6 +227,46 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     );
     _debugLog(
       'approval response dispatched | conversation=$conversationId request=$requestId approval=$approvalId approved=$approved kind=$kind',
+    );
+    _signal.requestWorkbenchSnapshot();
+    _ensureSnapshotTimeout();
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> cancelCodexTurn({
+    required String conversationId,
+    String? turnId,
+  }) async {
+    if (conversationId.isEmpty) {
+      return false;
+    }
+    if (!_signal.isConnected) {
+      _error = '移动端同步通道未连接';
+      _setStatus('mobile cancel blocked because sync channel is offline');
+      syncWithAuth();
+      notifyListeners();
+      return false;
+    }
+
+    final activeTurnId = turnId?.trim().isNotEmpty == true
+        ? turnId!.trim()
+        : activeTurnIdForConversation(conversationId)?.trim();
+    final sent = _signal.sendCodexTurnCancel(
+      conversationId: conversationId,
+      turnId: activeTurnId,
+    );
+    if (!sent) {
+      _error = '终止请求发送失败';
+      _setStatus('mobile cancel failed before websocket dispatch');
+      notifyListeners();
+      return false;
+    }
+
+    _error = null;
+    _setStatus('mobile requested codex turn cancel');
+    _debugLog(
+      'turn cancel dispatched | conversation=$conversationId turnId=${activeTurnId ?? ''}',
     );
     _signal.requestWorkbenchSnapshot();
     _ensureSnapshotTimeout();
@@ -410,6 +469,21 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       return;
     }
 
+    if (event.wireType == 'host:heartbeat') {
+      _applyHostHeartbeat(event);
+      return;
+    }
+
+    if (event.wireType == 'host:vitals') {
+      _applyHostVitals(event);
+      return;
+    }
+
+    if (event.wireType == 'host:alert') {
+      _applyHostAlert(event);
+      return;
+    }
+
     if (event.wireType == 'workbench:snapshot:status') {
       _debugLog('received status event');
       _applySnapshotStatus(event.text, senderDevice: event.senderDevice);
@@ -555,6 +629,7 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     );
     _pendingMessagesByConversationId.remove(conversationId);
     _sendingConversationIds.remove(conversationId);
+    _activeTurnIdByConversationId.remove(conversationId);
     _debugLog('optimistically removed archived conversation=$conversationId');
   }
 
@@ -645,7 +720,9 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
               originUrl: info?.originUrl,
               sha: info?.sha,
             ),
+            sessionSummary: conversation.sessionSummary,
             pendingApproval: conversation.pendingApproval,
+            activeTurnId: conversation.activeTurnId,
             createdAt: conversation.createdAt,
             updatedAt: conversation.updatedAt,
           );
@@ -666,6 +743,26 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
   }
 
   void _markPendingMessagesQueued() {
+    _transitionPendingMessages(
+      fromStatuses: const {'pending'},
+      toStatus: 'queued',
+      debugPrefix: 'pending marked queued',
+    );
+  }
+
+  void _markPendingMessagesRunning() {
+    _transitionPendingMessages(
+      fromStatuses: const {'pending', 'queued'},
+      toStatus: 'running',
+      debugPrefix: 'pending marked running',
+    );
+  }
+
+  void _transitionPendingMessages({
+    required Set<String> fromStatuses,
+    required String toStatus,
+    required String debugPrefix,
+  }) {
     final conversationIds = _pendingMessagesByConversationId.keys.toList();
     for (final conversationId in conversationIds) {
       final pending = _pendingMessagesByConversationId[conversationId];
@@ -673,7 +770,9 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
         _sendingConversationIds.remove(conversationId);
         continue;
       }
-      final hadPending = pending.any((message) => message.status == 'pending');
+      final hadTransition = pending.any(
+        (message) => fromStatuses.contains(message.status ?? 'pending'),
+      );
       _pendingMessagesByConversationId[conversationId] = pending
           .map(
             (message) => AiWorkbenchMessage(
@@ -683,16 +782,24 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
               role: message.role,
               title: message.title,
               text: message.text,
-              status: message.status == 'pending' ? 'queued' : message.status,
+              imageUrls: message.imageUrls,
+              previewText: message.previewText,
+              isTruncated: message.isTruncated,
+              fullTextCharCount: message.fullTextCharCount,
+              status: fromStatuses.contains(message.status ?? 'pending')
+                  ? toStatus
+                  : message.status,
               createdAt: message.createdAt,
               rawType: message.rawType,
             ),
           )
           .toList(growable: true);
-      _sendingConversationIds.remove(conversationId);
-      if (hadPending) {
+      if (toStatus != 'pending') {
+        _sendingConversationIds.remove(conversationId);
+      }
+      if (hadTransition) {
         _debugLog(
-          'pending marked queued | ${debugStateForConversation(conversationId)}',
+          '$debugPrefix | ${debugStateForConversation(conversationId)}',
         );
       }
     }
@@ -715,6 +822,10 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
               role: message.role,
               title: message.title,
               text: message.text,
+              imageUrls: message.imageUrls,
+              previewText: message.previewText,
+              isTruncated: message.isTruncated,
+              fullTextCharCount: message.fullTextCharCount,
               status: 'failed',
               createdAt: message.createdAt,
               rawType: message.rawType,
@@ -727,6 +838,52 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       );
     }
     _error = errorText;
+  }
+
+  void _markPendingMessagesCompleted(String conversationId) {
+    final pending = _pendingMessagesByConversationId[conversationId];
+    if (pending == null || pending.isEmpty) {
+      _pendingMessagesByConversationId.remove(conversationId);
+      _sendingConversationIds.remove(conversationId);
+      return;
+    }
+    _pendingMessagesByConversationId[conversationId] = pending
+        .map(
+          (message) => AiWorkbenchMessage(
+            id: message.id,
+            providerId: message.providerId,
+            conversationId: message.conversationId,
+            role: message.role,
+            title: message.title,
+            text: message.text,
+            imageUrls: message.imageUrls,
+            previewText: message.previewText,
+            isTruncated: message.isTruncated,
+            fullTextCharCount: message.fullTextCharCount,
+            status: 'completed',
+            createdAt: message.createdAt,
+            rawType: message.rawType,
+          ),
+        )
+        .toList(growable: true);
+    _sendingConversationIds.remove(conversationId);
+    _debugLog(
+      'pending marked completed | ${debugStateForConversation(conversationId)}',
+    );
+    Future<void>.delayed(const Duration(seconds: 3), () {
+      final current = _pendingMessagesByConversationId[conversationId];
+      if (current == null || current.isEmpty) {
+        return;
+      }
+      final hasOnlyCompleted = current.every(
+        (message) => message.status == 'completed',
+      );
+      if (!hasOnlyCompleted) {
+        return;
+      }
+      _pendingMessagesByConversationId.remove(conversationId);
+      notifyListeners();
+    });
   }
 
   void _expirePendingConversationIfStalled(String conversationId) {
@@ -753,6 +910,10 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
             role: message.role,
             title: message.title,
             text: message.text,
+            imageUrls: message.imageUrls,
+            previewText: message.previewText,
+            isTruncated: message.isTruncated,
+            fullTextCharCount: message.fullTextCharCount,
             status: 'failed',
             createdAt: message.createdAt,
             rawType: message.rawType,
@@ -790,11 +951,8 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       );
 
       if (unresolved.isEmpty) {
-        _pendingMessagesByConversationId.remove(conversationId);
-        _sendingConversationIds.remove(conversationId);
-        _debugLog(
-          'pending cleared | ${debugStateForConversation(conversationId)}',
-        );
+        _markPendingMessagesCompleted(conversationId);
+        _activeTurnIdByConversationId.remove(conversationId);
       } else {
         _pendingMessagesByConversationId[conversationId] = unresolved;
         _debugLog(
@@ -814,6 +972,9 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       final threadCount = detail is Map
           ? (detail['threadCount'] as num?)?.toInt()
           : null;
+      final detailTurnId = detail is Map
+          ? _displayText(detail['turnId'])
+          : null;
       if (stage == 'build-ok' ||
           stage == 'snapshot-ready' ||
           stage == 'snapshot-sent' ||
@@ -829,11 +990,31 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
         _markPendingMessagesQueued();
       } else if (stage == 'codexTurnStartAccepted' ||
           stage == 'codexDesktopIpcTurnStartAccepted') {
-        _markPendingMessagesQueued();
+        _markPendingMessagesRunning();
+        final threadId = detail is Map
+            ? _displayText(detail['threadId'])
+            : null;
+        if (threadId != null &&
+            threadId.isNotEmpty &&
+            detailTurnId != null &&
+            detailTurnId.isNotEmpty) {
+          _activeTurnIdByConversationId[threadId] = detailTurnId;
+        }
         _debugLog('desktop accepted turn/start for current message');
       } else if (stage == 'codexTurnStartFailed' || stage == 'codexTurnStart') {
         final error = (detail is Map ? detail['error'] : null)?.toString();
         _markPendingMessagesFailed(error ?? 'Codex 消息发送失败');
+      } else if (stage == 'codexTurnCancelAccepted') {
+        final threadId = detail is Map
+            ? _displayText(detail['threadId'])
+            : null;
+        if (threadId != null && threadId.isNotEmpty) {
+          _activeTurnIdByConversationId.remove(threadId);
+        }
+        _debugLog('desktop accepted turn cancel');
+      } else if (stage == 'codexTurnCancelFailed') {
+        final error = (detail is Map ? detail['error'] : null)?.toString();
+        _error = error ?? '终止动作发送失败';
       } else if (stage == 'codexDesktopIpcTurnStartFailed') {
         _debugLog(
           'desktop ipc turn/start failed; waiting for app-server fallback',
@@ -924,6 +1105,67 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
     }
   }
 
+  void _applyHostHeartbeat(EventMessage event) {
+    final payload = _decodeObject(event.text);
+    final previous = _hostVitals;
+    _hostVitals = AiWorkbenchHostVitals(
+      status: _displayText(payload?['status']) ?? previous?.status ?? 'online',
+      lastHeartbeatAt: _epochSecondsFromDateTime(event.ts),
+      lastOutputAt:
+          _intFromPayload(payload, 'lastOutputAt') ?? previous?.lastOutputAt,
+      heartbeatTimedOut: false,
+      runningForSeconds:
+          _intFromPayload(payload, 'runningForSeconds') ??
+          previous?.runningForSeconds,
+      cpuPercent:
+          _doubleFromPayload(payload, 'cpuPercent') ?? previous?.cpuPercent,
+      memoryBytes:
+          _intFromPayload(payload, 'memoryBytes') ?? previous?.memoryBytes,
+      sessionId:
+          _displayText(payload?['sessionId']) ??
+          previous?.sessionId ??
+          event.sessionId,
+    );
+    _setStatus('desktop heartbeat ok');
+    notifyListeners();
+  }
+
+  void _applyHostVitals(EventMessage event) {
+    final payload = _decodeObject(event.text) ?? const <String, dynamic>{};
+    final parsed = AiWorkbenchHostVitals.fromJson(payload);
+    _hostVitals = AiWorkbenchHostVitals(
+      status: parsed.status ?? _hostVitals?.status,
+      lastHeartbeatAt:
+          parsed.lastHeartbeatAt ??
+          _hostVitals?.lastHeartbeatAt ??
+          _epochSecondsFromDateTime(event.ts),
+      lastOutputAt: parsed.lastOutputAt ?? _hostVitals?.lastOutputAt,
+      heartbeatTimedOut: parsed.heartbeatTimedOut,
+      runningForSeconds:
+          parsed.runningForSeconds ?? _hostVitals?.runningForSeconds,
+      cpuPercent: parsed.cpuPercent ?? _hostVitals?.cpuPercent,
+      memoryBytes: parsed.memoryBytes ?? _hostVitals?.memoryBytes,
+      sessionId:
+          parsed.sessionId ??
+          _hostVitals?.sessionId ??
+          (event.sessionId.isEmpty ? null : event.sessionId),
+    );
+    _setStatus('desktop vitals updated');
+    notifyListeners();
+  }
+
+  void _applyHostAlert(EventMessage event) {
+    final payload = _decodeObject(event.text) ?? const <String, dynamic>{};
+    final alert = AiWorkbenchHostAlert.fromJson(payload);
+    _hostAlerts.removeWhere((item) => item.id == alert.id);
+    _hostAlerts.insert(0, alert);
+    if (_hostAlerts.length > 12) {
+      _hostAlerts.removeRange(12, _hostAlerts.length);
+    }
+    _setStatus('desktop alert: ${alert.message}');
+    notifyListeners();
+  }
+
   Future<void> _restoreCachedSnapshot() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1005,6 +1247,17 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
               'cwd': item.cwd,
               'source': item.source,
               'cliVersion': item.cliVersion,
+              'sessionSummary': item.sessionSummary == null
+                  ? null
+                  : {
+                      'statusLabel': item.sessionSummary!.statusLabel,
+                      'lastOutputAt': item.sessionSummary!.lastOutputAt,
+                      'waitingForInput': item.sessionSummary!.waitingForInput,
+                      'hasError': item.sessionSummary!.hasError,
+                      'unreadCount': item.sessionSummary!.unreadCount,
+                      'runningForSeconds':
+                          item.sessionSummary!.runningForSeconds,
+                    },
               'pendingApproval': item.pendingApproval == null
                   ? null
                   : {
@@ -1013,7 +1266,11 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
                       'kind': item.pendingApproval!.kind,
                       'title': item.pendingApproval!.title,
                       'summary': item.pendingApproval!.summary,
+                      'canTerminate': item.pendingApproval!.canTerminate,
+                      'requiresDestructiveConfirm':
+                          item.pendingApproval!.requiresDestructiveConfirm,
                     },
+              'activeTurnId': item.activeTurnId,
               'gitInfo': item.gitInfo == null
                   ? null
                   : {
@@ -1091,6 +1348,82 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
           )
           .toList(growable: false),
     };
+  }
+
+  String? _displayText(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
+  }
+
+  Map<String, dynamic>? _decodeObject(String rawText) {
+    try {
+      final decoded = jsonDecode(rawText);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  int _epochSecondsFromDateTime(DateTime value) {
+    return value.millisecondsSinceEpoch ~/ 1000;
+  }
+
+  int? _intFromPayload(Map<String, dynamic>? payload, String key) {
+    if (payload == null) return null;
+    final aliases = <String>[
+      key,
+      _snakeCase(key),
+      if (key == 'runningForSeconds') 'uptimeSeconds',
+      if (key == 'memoryBytes') 'memory',
+      if (key == 'cpuPercent') 'cpu',
+    ];
+    for (final alias in aliases) {
+      final value = payload[alias];
+      if (value is num) {
+        return value.toInt();
+      }
+      final parsed = int.tryParse(value?.toString() ?? '');
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  double? _doubleFromPayload(Map<String, dynamic>? payload, String key) {
+    if (payload == null) return null;
+    final aliases = <String>[key, _snakeCase(key)];
+    for (final alias in aliases) {
+      final value = payload[alias];
+      if (value is num) {
+        return value.toDouble();
+      }
+      final parsed = double.tryParse(value?.toString() ?? '');
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  String _snakeCase(String value) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < value.length; i++) {
+      final char = value[i];
+      final isUpper = char.toUpperCase() == char && char.toLowerCase() != char;
+      if (isUpper && i > 0) {
+        buffer.write('_');
+      }
+      buffer.write(char.toLowerCase());
+    }
+    return buffer.toString();
   }
 
   void _debugLog(String value) {
@@ -1205,6 +1538,12 @@ class AiWorkbenchSyncProvider extends ChangeNotifier {
       _debugLog('preferred snapshot sender pinned to $normalized');
     }
   }
+
+  @visibleForTesting
+  Future<void> debugRestoreCachedSnapshot() => _restoreCachedSnapshot();
+
+  @visibleForTesting
+  void debugHandleEvent(EventMessage event) => _onEvent(event);
 
   @override
   void dispose() {

@@ -123,7 +123,9 @@ class AiWorkbenchConversation {
     this.source,
     this.cliVersion,
     this.gitInfo,
+    this.sessionSummary,
     this.pendingApproval,
+    this.activeTurnId,
     this.createdAt,
     this.updatedAt,
   });
@@ -138,7 +140,9 @@ class AiWorkbenchConversation {
   final String? source;
   final String? cliVersion;
   final AiWorkbenchGitInfo? gitInfo;
+  final AiWorkbenchSessionSummary? sessionSummary;
   final AiWorkbenchPendingApproval? pendingApproval;
+  final String? activeTurnId;
   final int? createdAt;
   final int? updatedAt;
 
@@ -156,13 +160,48 @@ class AiWorkbenchConversation {
       gitInfo: json['gitInfo'] is Map<String, dynamic>
           ? AiWorkbenchGitInfo.fromJson(json['gitInfo'] as Map<String, dynamic>)
           : null,
+      sessionSummary: json['sessionSummary'] is Map<String, dynamic>
+          ? AiWorkbenchSessionSummary.fromJson(
+              json['sessionSummary'] as Map<String, dynamic>,
+            )
+          : null,
       pendingApproval: json['pendingApproval'] is Map<String, dynamic>
           ? AiWorkbenchPendingApproval.fromJson(
               json['pendingApproval'] as Map<String, dynamic>,
             )
           : null,
+      activeTurnId: _displayString(json['activeTurnId']),
       createdAt: json['createdAt'] as int?,
       updatedAt: json['updatedAt'] as int?,
+    );
+  }
+}
+
+class AiWorkbenchSessionSummary {
+  const AiWorkbenchSessionSummary({
+    this.statusLabel,
+    this.lastOutputAt,
+    this.waitingForInput = false,
+    this.hasError = false,
+    this.unreadCount = 0,
+    this.runningForSeconds,
+  });
+
+  final String? statusLabel;
+  final int? lastOutputAt;
+  final bool waitingForInput;
+  final bool hasError;
+  final int unreadCount;
+  final int? runningForSeconds;
+
+  factory AiWorkbenchSessionSummary.fromJson(Map<String, dynamic> json) {
+    return AiWorkbenchSessionSummary(
+      statusLabel: _displayString(json['statusLabel']),
+      lastOutputAt: (json['lastOutputAt'] as num?)?.toInt(),
+      waitingForInput: json['waitingForInput'] as bool? ?? false,
+      hasError: json['hasError'] as bool? ?? false,
+      unreadCount: (json['unreadCount'] as num?)?.toInt() ?? 0,
+      runningForSeconds: (json['runningForSeconds'] as num?)?.toInt(),
     );
   }
 }
@@ -174,6 +213,8 @@ class AiWorkbenchPendingApproval {
     required this.kind,
     required this.title,
     this.summary,
+    this.canTerminate = false,
+    this.requiresDestructiveConfirm = false,
   });
 
   final String requestId;
@@ -181,6 +222,8 @@ class AiWorkbenchPendingApproval {
   final String kind;
   final String title;
   final String? summary;
+  final bool canTerminate;
+  final bool requiresDestructiveConfirm;
 
   factory AiWorkbenchPendingApproval.fromJson(Map<String, dynamic> json) {
     return AiWorkbenchPendingApproval(
@@ -189,6 +232,9 @@ class AiWorkbenchPendingApproval {
       kind: json['kind'] as String? ?? 'exec-approval',
       title: json['title'] as String? ?? '待确认操作',
       summary: _displayString(json['summary']),
+      canTerminate: json['canTerminate'] as bool? ?? false,
+      requiresDestructiveConfirm:
+          json['requiresDestructiveConfirm'] as bool? ?? false,
     );
   }
 }
@@ -346,6 +392,105 @@ class AiWorkbenchError {
   }
 }
 
+class AiWorkbenchHostVitals {
+  const AiWorkbenchHostVitals({
+    this.status,
+    this.lastHeartbeatAt,
+    this.lastOutputAt,
+    this.heartbeatTimedOut = false,
+    this.runningForSeconds,
+    this.cpuPercent,
+    this.memoryBytes,
+    this.sessionId,
+  });
+
+  final String? status;
+  final int? lastHeartbeatAt;
+  final int? lastOutputAt;
+  final bool heartbeatTimedOut;
+  final int? runningForSeconds;
+  final double? cpuPercent;
+  final int? memoryBytes;
+  final String? sessionId;
+
+  factory AiWorkbenchHostVitals.fromJson(Map<String, dynamic> json) {
+    return AiWorkbenchHostVitals(
+      status: _displayString(
+        json['status'] ?? json['state'] ?? json['hostStatus'],
+      ),
+      lastHeartbeatAt: _intFromAny(
+        json['lastHeartbeatAt'] ?? json['heartbeatAt'] ?? json['ts'],
+      ),
+      lastOutputAt: _intFromAny(
+        json['lastOutputAt'] ?? json['lastOutputTs'] ?? json['last_output_at'],
+      ),
+      heartbeatTimedOut:
+          json['heartbeatTimedOut'] as bool? ??
+          json['timedOut'] as bool? ??
+          json['heartbeat_timeout'] as bool? ??
+          false,
+      runningForSeconds: _intFromAny(
+        json['runningForSeconds'] ?? json['uptimeSeconds'] ?? json['runtime_s'],
+      ),
+      cpuPercent: _doubleFromAny(
+        json['cpuPercent'] ?? json['cpu'] ?? json['cpu_percent'],
+      ),
+      memoryBytes: _intFromAny(
+        json['memoryBytes'] ?? json['memory'] ?? json['memory_bytes'],
+      ),
+      sessionId: _displayString(
+        json['sessionId'] ?? json['session_id'] ?? json['relatedSessionId'],
+      ),
+    );
+  }
+}
+
+class AiWorkbenchHostAlert {
+  const AiWorkbenchHostAlert({
+    required this.id,
+    required this.message,
+    this.severity,
+    this.source,
+    this.sessionId,
+    this.recommendedAction,
+    this.createdAt,
+  });
+
+  final String id;
+  final String message;
+  final String? severity;
+  final String? source;
+  final String? sessionId;
+  final String? recommendedAction;
+  final int? createdAt;
+
+  factory AiWorkbenchHostAlert.fromJson(Map<String, dynamic> json) {
+    final createdAt = _intFromAny(
+      json['createdAt'] ?? json['ts'] ?? json['timestamp'],
+    );
+    return AiWorkbenchHostAlert(
+      id:
+          _displayString(json['id']) ??
+          _displayString(json['alertId']) ??
+          'alert:${createdAt ?? 0}:${_displayString(json['message']) ?? 'unknown'}',
+      message:
+          _displayString(json['message']) ??
+          _displayString(json['summary']) ??
+          _displayString(json['title']) ??
+          '宿主告警',
+      severity: _displayString(json['severity'] ?? json['level']),
+      source: _displayString(json['source'] ?? json['origin']),
+      sessionId: _displayString(
+        json['sessionId'] ?? json['session_id'] ?? json['relatedSessionId'],
+      ),
+      recommendedAction: _displayString(
+        json['recommendedAction'] ?? json['action'] ?? json['suggestedAction'],
+      ),
+      createdAt: createdAt,
+    );
+  }
+}
+
 List<T> _listOf<T>(Object? value, T Function(Map<String, dynamic>) mapper) {
   if (value is! List) return const [];
   return value
@@ -386,4 +531,18 @@ String? _displayString(Object? value) {
     return value.trim().isEmpty ? null : value;
   }
   return value.toString();
+}
+
+int? _intFromAny(Object? value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value.toString());
+}
+
+double? _doubleFromAny(Object? value) {
+  if (value == null) return null;
+  if (value is double) return value;
+  if (value is num) return value.toDouble();
+  return double.tryParse(value.toString());
 }

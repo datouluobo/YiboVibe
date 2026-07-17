@@ -35,6 +35,9 @@ func validateCodexMessage(msg *Message) bool {
 			validateRequiredBool(payload, "approved", msg.Type) &&
 			validateRequiredString(payload, "kind", msg.Type)
 
+	case "codex:turn:cancel":
+		return validateRequiredString(payload, "conversation_id", msg.Type)
+
 	case "codex:thread:archive":
 		return validateRequiredString(payload, "conversation_id", msg.Type)
 

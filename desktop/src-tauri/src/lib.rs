@@ -977,6 +977,8 @@ fn codex_pending_approval_from_thread(thread: &serde_json::Value) -> Option<serd
             "kind": kind,
             "title": title,
             "summary": summary,
+            "canTerminate": true,
+            "requiresDestructiveConfirm": true,
         }));
     }
 
@@ -1461,6 +1463,12 @@ async fn build_codex_workbench_snapshot(
             .or_else(|| codex_pending_approval_from_thread(thread))
             .or_else(|| codex_pending_approval_from_thread(&read_thread))
             .unwrap_or(serde_json::Value::Null);
+        let active_turn_id = read_thread
+            .get("threadRuntimeStatus")
+            .and_then(|value| value.get("turnId").or_else(|| value.get("currentTurnId")))
+            .or_else(|| read_thread.get("turnId"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let merged_status = codex_thread_status(thread);
         let read_status = codex_thread_status(&read_thread);
         let conversation_status = if pending_approval.is_null() {
@@ -1485,6 +1493,21 @@ async fn build_codex_workbench_snapshot(
             "source": codex_source_label(&read_thread).or_else(|| codex_source_label(thread)),
             "cliVersion": read_thread.get("cliVersion").cloned().unwrap_or_else(|| thread.get("cliVersion").cloned().unwrap_or(serde_json::Value::Null)),
             "pendingApproval": pending_approval,
+            "activeTurnId": active_turn_id,
+            "sessionSummary": {
+                "statusLabel": match conversation_status {
+                    "running" => "桌面执行中",
+                    "waitingApproval" => "等待移动端确认",
+                    "error" => "桌面执行失败",
+                    "offline" => "桌面未在线",
+                    _ => "等待下一步",
+                },
+                "lastOutputAt": read_thread.get("updatedAt").cloned().unwrap_or_else(|| thread.get("updatedAt").cloned().unwrap_or(serde_json::Value::Null)),
+                "waitingForInput": conversation_status == "waitingApproval",
+                "hasError": conversation_status == "error",
+                "unreadCount": 0,
+                "runningForSeconds": serde_json::Value::Null,
+            },
             "status": conversation_status,
             "gitInfo": merge_git_info_branch(read_thread.get("gitInfo").or_else(|| thread.get("gitInfo")), live_branch.as_deref()),
             "createdAt": read_thread.get("createdAt").cloned().unwrap_or_else(|| thread.get("createdAt").cloned().unwrap_or(serde_json::Value::Null)),
@@ -2463,6 +2486,82 @@ pub(crate) fn spawn_ws_broker(
                                         "threadId": conversation_id,
                                         "requestId": request_id,
                                         "approvalId": approval_id,
+                                        "error": err,
+                                    }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                "codex:turn:cancel" => {
+                    let conversation_id = msg.payload["conversation_id"]
+                        .as_str()
+                        .or_else(|| msg.payload["thread_id"].as_str())
+                        .unwrap_or("");
+                    if !conversation_id.is_empty() {
+                        let target_devices = if msg.sender_device_id > 0 {
+                            vec![msg.sender_device_id]
+                        } else {
+                            vec![]
+                        };
+                        let turn_id = msg.payload["turn_id"].as_str().unwrap_or("").trim();
+                        let _ = push_workbench_snapshot_status(
+                            &sync_tx,
+                            &target_devices,
+                            "codexTurnCancelStart",
+                            "desktop forwarding mobile turn cancel",
+                            serde_json::json!({
+                                "threadId": conversation_id,
+                                "turnId": if turn_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(turn_id.to_string()) },
+                            }),
+                        )
+                        .await;
+                        match codex_app_server::persistent_request(
+                            app.clone(),
+                            codex_app_server::CodexAppServerRpcRequest {
+                                method: "turn/cancel".to_string(),
+                                params: serde_json::json!({
+                                    "threadId": conversation_id,
+                                    "conversationId": conversation_id,
+                                    "turnId": if turn_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(turn_id.to_string()) },
+                                }),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexTurnCancelAccepted",
+                                    "desktop codex turn cancel accepted",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "turnId": if turn_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(turn_id.to_string()) },
+                                    }),
+                                )
+                                .await;
+                                let _ = push_cached_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices.clone(),
+                                )
+                                .await;
+                                push_codex_workbench_snapshot_to_server_handle(
+                                    &app,
+                                    target_devices,
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                let _ = push_workbench_snapshot_status(
+                                    &sync_tx,
+                                    &target_devices,
+                                    "codexTurnCancelFailed",
+                                    "mobile codex turn cancel failed",
+                                    serde_json::json!({
+                                        "threadId": conversation_id,
+                                        "turnId": if turn_id.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(turn_id.to_string()) },
                                         "error": err,
                                     }),
                                 )
